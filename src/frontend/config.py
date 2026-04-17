@@ -1,18 +1,16 @@
-from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
     BACKEND_URL: str = "http://localhost:8000"
-    ADMIN_IDS: list[int] = []
+    ADMIN_IDS: str = ""
 
-    @field_validator("ADMIN_IDS", mode="before")
-    @classmethod
-    def parse_admin_ids(cls, v):
-        if isinstance(v, str):
-            return [int(x.strip()) for x in v.split(",") if x.strip()]
-        return v
+    def is_admin(self, user_id: int) -> bool:
+        return user_id in self._admin_ids_list()
+
+    def _admin_ids_list(self) -> list[int]:
+        return [int(x.strip()) for x in self.ADMIN_IDS.split(",") if x.strip()]
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

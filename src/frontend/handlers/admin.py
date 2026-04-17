@@ -10,7 +10,7 @@ router = Router()
 
 @router.message(Command("export"))
 async def cmd_export(message: Message) -> None:
-    if message.from_user.id not in settings.ADMIN_IDS:
+    if not settings.is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа.")
         return
 

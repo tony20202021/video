@@ -22,4 +22,5 @@ echo ""
 exec python -m watchfiles \
     "python scripts/run_bot.py" \
     src/frontend \
-    scripts/run_bot.py
+    scripts/run_bot.py \
+    .env

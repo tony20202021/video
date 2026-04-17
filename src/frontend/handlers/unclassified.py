@@ -17,7 +17,7 @@ class AssignState(StatesGroup):
 
 @router.message(Command("unclassified"))
 async def cmd_unclassified(message: Message) -> None:
-    if message.from_user.id not in settings.ADMIN_IDS:
+    if not settings.is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа.")
         return
     await _show_unclassified_page(message, page=0, edit=False)
@@ -25,7 +25,7 @@ async def cmd_unclassified(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("unclassified:page:"))
 async def cb_unclassified_page(call: CallbackQuery) -> None:
-    if call.from_user.id not in settings.ADMIN_IDS:
+    if not settings.is_admin(call.from_user.id):
         await call.answer("⛔ Нет доступа.", show_alert=True)
         return
     page = int(call.data.split(":")[2])
@@ -35,7 +35,7 @@ async def cb_unclassified_page(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("unclassified:assign:"))
 async def cb_assign_start(call: CallbackQuery, state: FSMContext) -> None:
-    if call.from_user.id not in settings.ADMIN_IDS:
+    if not settings.is_admin(call.from_user.id):
         await call.answer("⛔ Нет доступа.", show_alert=True)
         return
     record_id = call.data.split(":")[2]
