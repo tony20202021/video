@@ -1,0 +1,22 @@
+# Web / API
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+httpx==0.28.1
+python-multipart==0.0.20
+
+# Telegram bot
+aiogram==3.20.0
+
+# Database
+motor==3.7.0
+pymongo==4.12.1
+
+# ML / Vision
+onnxruntime==1.21.0
+opencv-python==4.11.0.86
+numpy==2.2.5
+Pillow==11.2.1
+
+# Config / Env
+pyyaml==6.0.2
+python-dotenv==1.1.0
