@@ -1,27 +1,34 @@
 # Показывает текущий адрес и порт прокси Psiphon
 
-$logPath = "$env:APPDATA\Psiphon3\psiphon3.log"
+$proc = Get-Process "psiphon-tunnel-core" -ErrorAction SilentlyContinue
 
-if (-not (Test-Path $logPath)) {
-    Write-Host "Лог Psiphon не найден: $logPath" -ForegroundColor Red
+if (-not $proc) {
+    Write-Host "Psiphon не запущен" -ForegroundColor Red
     exit 1
 }
 
-$content = Get-Content $logPath -Encoding UTF8
+$ports = Get-NetTCPConnection -State Listen |
+    Where-Object { $_.OwningProcess -eq $proc.Id } |
+    Select-Object -ExpandProperty LocalPort |
+    Sort-Object
 
-$http  = $content | Select-String "HTTP proxy is running on localhost port (\d+)"  | Select-Object -Last 1
-$socks = $content | Select-String "SOCKS proxy is running on localhost port (\d+)" | Select-Object -Last 1
-
-if ($http) {
-    $httpPort = $http.Matches[0].Groups[1].Value
-    Write-Host "HTTP:  http://127.0.0.1:$httpPort" -ForegroundColor Green
-} else {
-    Write-Host "HTTP:  не найден" -ForegroundColor Yellow
+if (-not $ports) {
+    Write-Host "Psiphon запущен, но порты не найдены" -ForegroundColor Yellow
+    exit 1
 }
 
-if ($socks) {
-    $socksPort = $socks.Matches[0].Groups[1].Value
-    Write-Host "SOCKS: socks5://127.0.0.1:$socksPort" -ForegroundColor Green
-} else {
-    Write-Host "SOCKS: не найден" -ForegroundColor Yellow
-}
+# Меньший порт — SOCKS, больший — HTTP (Psiphon всегда открывает оба)
+$sorted = $ports | Sort-Object
+$socks = $sorted[0]
+$http  = $sorted[1]
+
+Write-Host ""
+Write-Host "Psiphon proxy ports:" -ForegroundColor Cyan
+Write-Host "  HTTP:  http://127.0.0.1:$http" -ForegroundColor Green
+Write-Host "  SOCKS: socks5://127.0.0.1:$socks" -ForegroundColor Green
+Write-Host ""
+Write-Host "Для Claude Code (PowerShell):" -ForegroundColor Cyan
+Write-Host "  `$env:HTTPS_PROXY = `"http://127.0.0.1:$http`"" -ForegroundColor White
+Write-Host ""
+Write-Host "Для Cursor (Settings → Http: Proxy):" -ForegroundColor Cyan
+Write-Host "  http://127.0.0.1:$http" -ForegroundColor White
