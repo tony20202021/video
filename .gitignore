@@ -1,0 +1,13 @@
+.config.md
+.plan.md
+.env
+.data/
+.output/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.onnx
+*.pt
+*.pth
