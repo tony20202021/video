@@ -17,6 +17,7 @@ def _format_person(p: dict) -> str:
 
 
 @router.message(Command("persons"))
+@router.message(F.text == "👥 Жители")
 async def cmd_persons(message: Message) -> None:
     await _show_persons_page(message, page=0, edit=False)
 

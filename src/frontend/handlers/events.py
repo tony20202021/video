@@ -1,6 +1,6 @@
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message, ReplyKeyboardRemove
 
 from ..api_client import client
 from ..keyboards.navigation import event_detail, pager
@@ -27,6 +27,7 @@ def _format_event(e: dict) -> str:
 
 
 @router.message(Command("events"))
+@router.message(F.text == "📋 События")
 async def cmd_events(message: Message) -> None:
     await _show_events_page(message, page=0, edit=False)
 

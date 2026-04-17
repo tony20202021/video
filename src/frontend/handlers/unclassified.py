@@ -16,6 +16,7 @@ class AssignState(StatesGroup):
 
 
 @router.message(Command("unclassified"))
+@router.message(F.text == "❓ Нераспознанные")
 async def cmd_unclassified(message: Message) -> None:
     if not settings.is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа.")

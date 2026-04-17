@@ -1,4 +1,4 @@
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, Message
 
@@ -9,6 +9,7 @@ router = Router()
 
 
 @router.message(Command("export"))
+@router.message(F.text == "📦 Экспорт")
 async def cmd_export(message: Message) -> None:
     if not settings.is_admin(message.from_user.id):
         await message.answer("⛔ Нет доступа.")

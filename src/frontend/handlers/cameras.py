@@ -1,4 +1,4 @@
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -10,6 +10,7 @@ STATUS_ICON = {True: "🟢", False: "🔴"}
 
 
 @router.message(Command("cameras"))
+@router.message(F.text == "📷 Камеры")
 async def cmd_cameras(message: Message) -> None:
     result = await client.get_cameras()
     if not result["ok"]:

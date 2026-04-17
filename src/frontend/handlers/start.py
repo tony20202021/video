@@ -1,22 +1,27 @@
 from aiogram import Router
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from ..config import settings
 
 router = Router()
 
 
+def main_menu(is_admin: bool) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="📋 События"), KeyboardButton(text="👥 Жители")],
+        [KeyboardButton(text="📷 Камеры")],
+    ]
+    if is_admin:
+        rows.append([KeyboardButton(text="❓ Нераспознанные"), KeyboardButton(text="📦 Экспорт")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     is_admin = settings.is_admin(message.from_user.id)
-    admin_block = "\n\n<b>Команды администратора:</b>\n/unclassified — разметка нераспознанных\n/export — экспорт обучающей выборки" if is_admin else ""
     await message.answer(
-        "👁 <b>Система видеонаблюдения</b>\n\n"
-        "<b>Команды:</b>\n"
-        "/events — последние события\n"
-        "/persons — список жителей\n"
-        "/cameras — статус камер"
-        + admin_block,
+        "👁 <b>Система видеонаблюдения</b>",
         parse_mode="HTML",
+        reply_markup=main_menu(is_admin),
     )
