@@ -59,7 +59,7 @@ CAM_01_9_U_URL=rtsp://<IP>:554/user=...&password=...&channel=0&stream=1.sdp?real
 CAM_01_9_D_URL=rtsp://<IP>:554/user=...&password=...&channel=0&stream=1.sdp?real_stream
 ```
 
-**Один RTSP, картинка склеена из двух линз:** используйте один URL и обрезку в `scripts/cameras/motion_watch.py`: **`MOTION_CROP_REL`** или **`CAM_01_CROP_REL`** (доли **x,y,w,h**), см. раздел про `motion_watch` ниже.
+**Один RTSP, картинка склеена из двух линз:** устройство A31 (проверено на `<ip>`) возвращает **один склеенный кадр 2304×2592 на всех channel=0..3** — две камеры расположены вертикально. HTTP snapshot (`/webcapture.jpg`, `/snapshot.jpg` и пр.) возвращает HTTP 400. Используйте один URL (`channel=0&stream=1`) и обрезку: **`MOTION_CROP_REL`** или **`CAM_<stem>_CROP_REL`** (доли **x,y,w,h**) — см. раздел про `motion_watch` ниже.
 
 Если второй канал не открывается — перебрать **`channel=0`**, **`channel=1`**, **`channel=2`** (разные партии прошивок нумеруют по-разному). Два потока с одной камеры иногда стабильнее открывать **последовательно** (второй `VideoCapture` после закрытия первого или в отдельном процессе), если прошивка не любит два одновременных клиента. Справочник по вариантам путей: [iSpy — icsee](https://ispyconnect.com/camera/icsee); про HTTP-снимок с номером канала у линеек XM см. [ansice — XM RTSP / snapshot](https://www.ansice.net/en-ch/blogs/installation-wiring-and-setting/the-xm-series-and-ts-series-rtsp-url-and-image-capture-url-and-the-network-ports).
 
@@ -101,6 +101,21 @@ CAM_03_URL=rtsp://<external_ip>:5542/user=admin&password=XXXX&channel=1&stream=1
 CAM_04_URL=rtsp://<external_ip>:5543/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 ```
 
+### Перебор каналов/стримов (`probe_channels.py`)
+
+Скрипт `scripts/cameras/probe_channels.py` перебирает все комбинации `channel × stream` по RTSP (3 формата URL на комбинацию) и несколько HTTP-snapshot URL для XM-чипов. Credentials автоматически берутся из первой `CAM_<stem>_URL` в `.env`.
+
+```bash
+python scripts/cameras/probe_channels.py
+python scripts/cameras/probe_channels.py --ip <ip> --user <user> --password <password>
+python scripts/cameras/probe_channels.py --channels 0 1 2 3 --streams 0 1
+python scripts/cameras/probe_channels.py --http-only
+```
+
+Результаты — `.output/probe_channels/probe_<UTC>/`: кадры `rtsp_ch0_st0.jpg` и `report.json`.
+
+---
+
 ### Проверка подключения (`verify_cameras.py`)
 
 Скрипт `scripts/cameras/verify_cameras.py` загружает `.env`, для каждой переменной **`CAM_<stem>_URL`** (напр. `CAM_01_URL`, `CAM_01_9_U_URL`, `CAM_01_10_D_URL`) с реальным `rtsp://` открывает поток, читает **один кадр** и собирает **свойства потока** (разрешение, fps, backend OpenCV и т.д.). Обрезка: **`MOTION_CROP_REL`**, **`CAM_<stem>_CROP_REL`**, **`--crop-rel`** — как в `motion_watch.py`; в JPEG и `report.json` — кадр **после** обрезки, плюс `crop_rel` / `frame_shape_before_crop`. Плейсхолдеры вроде `<external_ip>` пропускаются. Результаты — `.output/cam_verify/cam_verify_<метка>/`: `report.json` и `cam_01_9_u_frame.jpg` и т.д. (имя файла из stem).
@@ -127,6 +142,25 @@ python scripts/cameras/motion_watch.py --tcp --threshold 12
 python scripts/cameras/motion_watch.py --heartbeat-sec 300
 python scripts/cameras/motion_watch.py --crop-rel 0,0,1,0.5
 ```
+
+### Детекция людей (`motion_people.py`)
+
+Скрипт `scripts/cameras/motion_people.py` использует тот же motion-цикл, но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person). Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
+
+Перед первым запуском скачать модель (~6 MB):
+
+```bash
+mkdir -p models
+wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx
+```
+
+```bash
+python scripts/cameras/motion_people.py
+python scripts/cameras/motion_people.py --conf 0.4 --threshold 12
+python scripts/cameras/motion_people.py --model models/yolov8n.onnx --tcp
+```
+
+Общие утилиты motion-цикла (фильтрация URL, frame diff, проверка кадра HEVC, открытие потока) вынесены в `src/common/utils/motion_utils.py`.
 
 ---
 

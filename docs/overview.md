@@ -78,22 +78,33 @@
 video/
   src/
     common/
+      utils/
+        cam_urls.py       — сбор CAM_<stem>_URL из окружения
+        cam_crop.py       — обрезка кадра по долям x,y,w,h
+        motion_utils.py   — общие утилиты motion-цикла
     db/
-    backend/          — FastAPI, RTSP, ML orchestration
-    frontend/         — Telegram Bot (aiogram 3.0)
+    backend/              — FastAPI, RTSP, ML orchestration
+    frontend/             — Telegram Bot (aiogram 3.0)
+  models/
+    yolov8n.onnx          — детекция людей (~6 MB, скачивается отдельно)
   tests/
   scripts/
-    cameras/          — verify_cameras, motion_watch, scan_cameras
-    bot/              — run_bot (Telegram)
-  sh/                 — shell скрипты
+    cameras/
+      scan_cameras.py     — поиск камер в сети по портам
+      verify_cameras.py   — проверка RTSP + сохранение кадра
+      probe_channels.py   — перебор channel×stream (XM/iCSee)
+      motion_watch.py     — непрерывный frame diff, сохранение при движении
+      motion_people.py    — motion diff → YOLOv8n → сохранение кадров с людьми
+    bot/                  — run_bot (Telegram)
+  sh/                     — shell скрипты
   docs/
-    overview.md       — этот файл
-    setup.md          — Python, conda, окружение, requirements.txt
-    cameras.md        — камеры и сетевой доступ
-    ml.md             — ML пайплайн и логика обработки видео
-    database.md       — схема MongoDB
-    services.md       — API сервисов, конфиг, экспорт
+    overview.md           — этот файл
+    setup.md              — Python, conda, окружение, requirements.txt
+    cameras.md            — камеры, сетевой доступ, скрипты
+    ml.md                 — ML пайплайн и логика обработки видео
+    database.md           — схема MongoDB
+    services.md           — API сервисов, конфиг, экспорт
   docker-compose.yml
   config.yaml
-  .env                — RTSP URL и секреты (в .gitignore)
+  .env                    — RTSP URL и секреты (в .gitignore)
 ```
