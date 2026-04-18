@@ -6,17 +6,17 @@
 
 Плейсхолдеры вроде <external_ip> в URL пропускаются.
 
-Обрезка склеенного кадра: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL** (как в motion_watch), опционально **--crop-rel**.
+Обрезка склеенного кадра: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL** (как в 4_motion_watch), опционально **--crop-rel**.
 В отчёт и JPEG попадает кадр **после обрезки**; в JSON — crop_rel и размер до/после.
 
 Примечание: при недоступном RTSP часть сборок OpenCV ждёт открытия потока
 до ~30 с — это ограничение backend, не скрипта.
 
 Usage:
-    python scripts/cameras/verify_cameras.py
-    python scripts/cameras/verify_cameras.py --env /path/to/.env
-    python scripts/cameras/verify_cameras.py --tcp
-    python scripts/cameras/verify_cameras.py --crop-rel 0,0,1,0.5
+    python scripts/cameras/3_verify_cameras.py
+    python scripts/cameras/3_verify_cameras.py --env /path/to/.env
+    python scripts/cameras/3_verify_cameras.py --tcp
+    python scripts/cameras/3_verify_cameras.py --crop-rel 0,0,1,0.5
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Репозиторий: video/scripts/cameras/verify_cameras.py -> video/
+# Репозиторий: video/scripts/cameras/3_verify_cameras.py -> video/
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:

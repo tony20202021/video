@@ -7,19 +7,19 @@ HTTP-snapshot URL характерных для чипов XM. Сохраняе�
 
 Usage:
     # Из .env берёт IP/логин/пароль первой CAM_XX_URL:
-    python scripts/cameras/probe_channels.py
+    python scripts/cameras/2_probe_channels.py
 
     # Явные параметры:
-    python scripts/cameras/probe_channels.py --ip <ip> --user <user> --password <password>
+    python scripts/cameras/2_probe_channels.py --ip <ip> --user <user> --password <password>
 
     # Расширить диапазон:
-    python scripts/cameras/probe_channels.py --channels 0 1 2 3 --streams 0 1
+    python scripts/cameras/2_probe_channels.py --channels 0 1 2 3 --streams 0 1
 
     # Только HTTP-snapshot (без RTSP):
-    python scripts/cameras/probe_channels.py --http-only
+    python scripts/cameras/2_probe_channels.py --http-only
 
     # RTSP через TCP:
-    python scripts/cameras/probe_channels.py --tcp
+    python scripts/cameras/2_probe_channels.py --tcp
 """
 
 from __future__ import annotations
@@ -203,7 +203,7 @@ def main() -> int:
             file=sys.stderr,
         )
         print("Пример запуска:", file=sys.stderr)
-        print("  python scripts/cameras/probe_channels.py --ip <ip> --user admin --password ''", file=sys.stderr)
+        print("  python scripts/cameras/2_probe_channels.py --ip <ip> --user <user> --password <password>", file=sys.stderr)
         return 1
 
     if not args.http_only:

@@ -9,9 +9,9 @@
   wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx
 
 Usage:
-    python scripts/cameras/motion_people.py
-    python scripts/cameras/motion_people.py --model models/yolov8n.onnx --conf 0.4
-    python scripts/cameras/motion_people.py --tcp --threshold 12
+    python scripts/cameras/5_motion_people.py
+    python scripts/cameras/5_motion_people.py --model models/yolov8n.onnx --conf 0.4
+    python scripts/cameras/5_motion_people.py --tcp --threshold 12
 """
 
 from __future__ import annotations

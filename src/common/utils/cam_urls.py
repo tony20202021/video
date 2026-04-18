@@ -3,6 +3,9 @@
 
 Примеры stem: 01, 02, 01_0, 01_9_U, 01_10_D (IP / канал / метка половины склейки).
 Парная обрезка: CAM_<stem>_CROP_REL (замена суффикса _URL → _CROP_REL).
+
+Переменные **CAM_*_HI_URL** (главный RTSP для `4_motion_watch`) сюда **не входят** — иначе regex
+``CAM_(.+)_URL`` принимал бы их за отдельные камеры.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ def collect_cam_urls() -> list[tuple[str, str]]:
     """Пары (имя переменной, url), порядок — по stem (естественная сортировка по числам)."""
     found: list[tuple[str, str, str]] = []
     for key, val in os.environ.items():
+        if key.endswith("_HI_URL"):
+            continue
         m = CAM_URL_RE.match(key)
         if not m:
             continue

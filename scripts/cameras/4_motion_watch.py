@@ -15,9 +15,9 @@ HEVC: проверка кадра (Laplacian + std); доп. read() при со�
 Обрезка: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL**, **--crop-rel** — одинаково для низкого и высокого кадра (доли 0…1).
 
 Usage:
-    python scripts/cameras/motion_watch.py
-    python scripts/cameras/motion_watch.py --threshold 15 --tcp
-    python scripts/cameras/motion_watch.py --output .output/motion_watch/my_run
+    python scripts/cameras/4_motion_watch.py
+    python scripts/cameras/4_motion_watch.py --threshold 15 --tcp
+    python scripts/cameras/4_motion_watch.py --output .output/motion_watch/my_run
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# Репозиторий: video/scripts/cameras/motion_watch.py -> video/
+# Репозиторий: video/scripts/cameras/4_motion_watch.py -> video/
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:

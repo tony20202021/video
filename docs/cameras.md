@@ -51,7 +51,7 @@ rtsp://<IP>:554/user=<USER>&password=<PASSWORD>&channel=1&stream=0.sdp?real_stre
 - `stream=0` — основной поток (макс. разрешение канала, до ~25 fps) — для полноразмерных кадров (архив, ML)
 - `stream=1` — субпоток (уменьшенное разрешение того же канала) — для лёгкого анализа (меньше нагрузка на CPU)
 
-В **`motion_watch.py`** по умолчанию: **`CAM_<stem>_URL`** — субпоток (часто `stream=1`), детекция движения; **`CAM_<stem>_HI_URL`** — основной поток (часто `stream=0`), сохранение baseline / событий / heartbeat. Если `HI_URL` не задан, высокий и низкий совпадают.
+В **`4_motion_watch.py`** по умолчанию: **`CAM_<stem>_URL`** — субпоток (часто `stream=1`), детекция движения; **`CAM_<stem>_HI_URL`** — основной поток (часто `stream=0`), сохранение baseline / событий / heartbeat. Если `HI_URL` не задан, высокий и низкий совпадают.
 
 **Два объектива → два URL в `.env`:** один и тот же `rtsp://<IP>:554/...`, отличается только **`channel`** (и при необходимости параллельно подобрать `stream`). Имена переменных — **`CAM_<stem>_URL`**, где `stem` — любой непустой идентификатор (цифры, хвост вроде `_9_U` / `_10_D` для IP и половины склейки). Пример с парой низкий/высокий поток для одной склейки (один `channel`, разный `stream`):
 
@@ -63,7 +63,9 @@ CAM_01_9_D_HI_URL=rtsp://<IP>:554/user=...&password=...&channel=0&stream=0.sdp?r
 CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_stream
 ```
 
-**Один RTSP, картинка склеена из двух линз:** устройство A31 (проверено на `<ip>`) возвращает **один склеенный кадр 2304×2592 на всех channel=0..3** — две камеры расположены вертикально. HTTP snapshot (`/webcapture.jpg`, `/snapshot.jpg` и пр.) возвращает HTTP 400. Используйте один URL (`channel=0&stream=1`) и обрезку: **`MOTION_CROP_REL`** или **`CAM_<stem>_CROP_REL`** (доли **x,y,w,h**) — см. раздел про `motion_watch` ниже.
+**Один RTSP, картинка склеена из двух линз:** устройство A31 (проверено на `<ip>`) возвращает **один склеенный кадр 2304×2592 на всех channel=0..3** — две камеры расположены вертикально. HTTP snapshot (`/webcapture.jpg`, `/snapshot.jpg` и пр.) возвращает HTTP 400. Используйте один URL (`channel=0&stream=1`) и обрезку: **`MOTION_CROP_REL`** или **`CAM_<stem>_CROP_REL`** (доли **x,y,w,h**) — см. раздел про `4_motion_watch.py` ниже.
+
+**Важно:** переменные **`CAM_*_HI_URL`** не являются отдельными «камерами» в `.env` (в список для скриптов не попадают — только **`CAM_*_URL`**). Пара задаётся так: **`CAM_<stem>_URL`** (субпоток) + **`CAM_<stem>_HI_URL`** (main).
 
 Если второй канал не открывается — перебрать **`channel=0`**, **`channel=1`**, **`channel=2`** (разные партии прошивок нумеруют по-разному). Два потока с одной камеры иногда стабильнее открывать **последовательно** (второй `VideoCapture` после закрытия первого или в отдельном процессе), если прошивка не любит два одновременных клиента. Справочник по вариантам путей: [iSpy — icsee](https://ispyconnect.com/camera/icsee); про HTTP-снимок с номером канала у линеек XM см. [ansice — XM RTSP / snapshot](https://www.ansice.net/en-ch/blogs/installation-wiring-and-setting/the-xm-series-and-ts-series-rtsp-url-and-image-capture-url-and-the-network-ports).
 
@@ -105,38 +107,38 @@ CAM_03_URL=rtsp://<external_ip>:5542/user=admin&password=XXXX&channel=1&stream=1
 CAM_04_URL=rtsp://<external_ip>:5543/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 ```
 
-### Перебор каналов/стримов (`probe_channels.py`)
+### Перебор каналов/стримов (`2_probe_channels.py`)
 
-Скрипт `scripts/cameras/probe_channels.py` перебирает все комбинации `channel × stream` по RTSP (3 формата URL на комбинацию) и несколько HTTP-snapshot URL для XM-чипов. Credentials автоматически берутся из первой `CAM_<stem>_URL` в `.env`.
+Скрипт `scripts/cameras/2_probe_channels.py` перебирает все комбинации `channel × stream` по RTSP (3 формата URL на комбинацию) и несколько HTTP-snapshot URL для XM-чипов. Credentials автоматически берутся из первой `CAM_<stem>_URL` в `.env`.
 
 ```bash
-python scripts/cameras/probe_channels.py
-python scripts/cameras/probe_channels.py --ip <ip> --user <user> --password <password>
-python scripts/cameras/probe_channels.py --channels 0 1 2 3 --streams 0 1
-python scripts/cameras/probe_channels.py --http-only
+python scripts/cameras/2_probe_channels.py
+python scripts/cameras/2_probe_channels.py --ip <ip> --user <user> --password <password>
+python scripts/cameras/2_probe_channels.py --channels 0 1 2 3 --streams 0 1
+python scripts/cameras/2_probe_channels.py --http-only
 ```
 
 Результаты — `.output/probe_channels/probe_<UTC>/`: кадры `rtsp_ch0_st0.jpg` и `report.json`.
 
 ---
 
-### Проверка подключения (`verify_cameras.py`)
+### Проверка подключения (`3_verify_cameras.py`)
 
-Скрипт `scripts/cameras/verify_cameras.py` загружает `.env`, для каждой переменной **`CAM_<stem>_URL`** (напр. `CAM_01_URL`, `CAM_01_9_U_URL`, `CAM_01_10_D_URL`) с реальным `rtsp://` открывает поток, читает **один кадр** и собирает **свойства потока** (разрешение, fps, backend OpenCV и т.д.). Переменные **`CAM_*_HI_URL`** скрипт **не** опрашивает — при необходимости проверьте главный поток отдельно (временно подставив URL в тест или второй вызов). Обрезка: **`MOTION_CROP_REL`**, **`CAM_<stem>_CROP_REL`**, **`--crop-rel`** — как в `motion_watch.py`; в JPEG и `report.json` — кадр **после** обрезки, плюс `crop_rel` / `frame_shape_before_crop`. Плейсхолдеры вроде `<external_ip>` пропускаются. Результаты — `.output/cam_verify/cam_verify_<метка>/`: `report.json` и `cam_01_9_u_frame.jpg` и т.д. (имя файла из stem).
+Скрипт `scripts/cameras/3_verify_cameras.py` загружает `.env`, для каждой переменной **`CAM_<stem>_URL`** (напр. `CAM_01_URL`, `CAM_01_9_U_URL`, `CAM_01_10_D_URL`) с реальным `rtsp://` открывает поток, читает **один кадр** и собирает **свойства потока** (разрешение, fps, backend OpenCV и т.д.). Переменные **`CAM_*_HI_URL`** скрипт **не** опрашивает — при необходимости проверьте главный поток отдельно (временно подставив URL в тест или второй вызов). Обрезка: **`MOTION_CROP_REL`**, **`CAM_<stem>_CROP_REL`**, **`--crop-rel`** — как в `4_motion_watch.py`; в JPEG и `report.json` — кадр **после** обрезки, плюс `crop_rel` / `frame_shape_before_crop`. Плейсхолдеры вроде `<external_ip>` пропускаются. Результаты — `.output/cam_verify/cam_verify_<метка>/`: `report.json` и `cam_01_9_u_frame.jpg` и т.д. (имя файла из stem).
 
 Из корня репозитория:
 
 ```bash
-python scripts/cameras/verify_cameras.py
-python scripts/cameras/verify_cameras.py --tcp
-python scripts/cameras/verify_cameras.py --crop-rel 0,0,1,0.5
+python scripts/cameras/3_verify_cameras.py
+python scripts/cameras/3_verify_cameras.py --tcp
+python scripts/cameras/3_verify_cameras.py --crop-rel 0,0,1,0.5
 ```
 
-Флаг `--tcp` включает RTSP поверх TCP — полезно через NAT или нестабильный Wi‑Fi. Поиск камер в локальной сети по портам — отдельно `scripts/cameras/scan_cameras.py`.
+Флаг `--tcp` включает RTSP поверх TCP — полезно через NAT или нестабильный Wi‑Fi. Поиск камер в локальной сети по портам — отдельно `scripts/cameras/1_scan_cameras.py`.
 
-### Наблюдение изменений кадра (`motion_watch.py`)
+### Наблюдение изменений кадра (`4_motion_watch.py`)
 
-Скрипт `scripts/cameras/motion_watch.py`:
+Скрипт `scripts/cameras/4_motion_watch.py`:
 
 - **`CAM_<stem>_URL`** — **низкое разрешение** (субпоток, обычно `stream=1`): по нему идёт сравнение кадров (после обрезки, уменьшение до **`compare-width`**, grayscale).
 - **`CAM_<stem>_HI_URL`** — **высокое разрешение** (главный поток, обычно `stream=0`): с него пишутся **baseline**, кадры при движении и **`…_heartbeat.jpg`**. Если переменная не задана, для сохранения используется тот же URL, что и у **`CAM_*_URL`**.
@@ -148,15 +150,15 @@ python scripts/cameras/verify_cameras.py --crop-rel 0,0,1,0.5
 **Склеенный кадр (две линзы в одном изображении):** в `.env` задаётся обрезка в долях **x,y,w,h** от 0 до 1. Глобально **`MOTION_CROP_REL`**, для одной переменной — **`CAM_<stem>_CROP_REL`**. Те же доли применяются и к LOW, и к HI. Вертикальная черта: слева **`0,0,0.5,1`**, справа **`0.5,0,0.5,1`**. Горизонтальная: сверху **`0,0,1,0.5`**, снизу **`0,0.5,1,0.5`**.
 
 ```bash
-python scripts/cameras/motion_watch.py
-python scripts/cameras/motion_watch.py --tcp --threshold 12
-python scripts/cameras/motion_watch.py --heartbeat-sec 300
-python scripts/cameras/motion_watch.py --crop-rel 0,0,1,0.5
+python scripts/cameras/4_motion_watch.py
+python scripts/cameras/4_motion_watch.py --tcp --threshold 12
+python scripts/cameras/4_motion_watch.py --heartbeat-sec 300
+python scripts/cameras/4_motion_watch.py --crop-rel 0,0,1,0.5
 ```
 
-### Детекция людей (`motion_people.py`)
+### Детекция людей (`5_motion_people.py`)
 
-Скрипт `scripts/cameras/motion_people.py` использует тот же motion-цикл, но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person). Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
+Скрипт `scripts/cameras/5_motion_people.py` использует тот же motion-цикл, но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person). Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
 
 Перед первым запуском скачать модель (~6 MB):
 
@@ -166,9 +168,9 @@ wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/y
 ```
 
 ```bash
-python scripts/cameras/motion_people.py
-python scripts/cameras/motion_people.py --conf 0.4 --threshold 12
-python scripts/cameras/motion_people.py --model models/yolov8n.onnx --tcp
+python scripts/cameras/5_motion_people.py
+python scripts/cameras/5_motion_people.py --conf 0.4 --threshold 12
+python scripts/cameras/5_motion_people.py --model models/yolov8n.onnx --tcp
 ```
 
 Общие утилиты motion-цикла (фильтрация URL, frame diff, проверка кадра HEVC, открытие потока) вынесены в `src/common/utils/motion_utils.py`.

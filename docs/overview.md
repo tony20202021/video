@@ -90,11 +90,11 @@ video/
   tests/
   scripts/
     cameras/
-      scan_cameras.py     — поиск камер в сети по портам
-      verify_cameras.py   — проверка RTSP + сохранение кадра
-      probe_channels.py   — перебор channel×stream (XM/iCSee)
-      motion_watch.py     — непрерывный frame diff, сохранение при движении
-      motion_people.py    — motion diff → YOLOv8n → сохранение кадров с людьми
+      1_scan_cameras.py   — поиск камер в сети по портам
+      2_probe_channels.py — перебор channel×stream (XM/iCSee)
+      3_verify_cameras.py — проверка RTSP + сохранение кадра
+      4_motion_watch.py   — frame diff по субпотоку, сохранение с HI
+      5_motion_people.py  — motion diff → YOLOv8n → кадры с людьми
     bot/                  — run_bot (Telegram)
   sh/                     — shell скрипты
   docs/
