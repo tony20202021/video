@@ -86,6 +86,7 @@ video/
   sh/                 — shell скрипты
   docs/
     overview.md       — этот файл
+    setup.md          — Python, conda, окружение, requirements.txt
     cameras.md        — камеры и сетевой доступ
     ml.md             — ML пайплайн и логика обработки видео
     database.md       — схема MongoDB
