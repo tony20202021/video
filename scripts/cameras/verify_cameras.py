@@ -1,18 +1,22 @@
 """
-Проверка RTSP-камер из .env (CAM_01_URL … CAM_04_URL).
+Проверка RTSP-камер из .env: переменные вида **CAM_<идентификатор>_URL** (напр. CAM_01_URL, CAM_01_9_U_URL, CAM_01_10_D_URL).
 
 Читает URL, пытается открыть поток, читает один кадр, собирает свойства OpenCV
-(разрешение, fps, backend, fourcc), сохраняет кадры и JSON-отчёт в .output/.
+(разрешение, fps, backend, fourcc), сохраняет кадры и JSON-отчёт в `.output/cam_verify/`.
 
 Плейсхолдеры вроде <external_ip> в URL пропускаются.
+
+Обрезка склеенного кадра: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL** (как в motion_watch), опционально **--crop-rel**.
+В отчёт и JPEG попадает кадр **после обрезки**; в JSON — crop_rel и размер до/после.
 
 Примечание: при недоступном RTSP часть сборок OpenCV ждёт открытия потока
 до ~30 с — это ограничение backend, не скрипта.
 
 Usage:
-    python scripts/verify_cameras.py
-    python scripts/verify_cameras.py --env /path/to/.env
-    python scripts/verify_cameras.py --tcp
+    python scripts/cameras/verify_cameras.py
+    python scripts/cameras/verify_cameras.py --env /path/to/.env
+    python scripts/cameras/verify_cameras.py --tcp
+    python scripts/cameras/verify_cameras.py --crop-rel 0,0,1,0.5
 """
 
 from __future__ import annotations
@@ -25,12 +29,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Репозиторий: video/scripts/verify_cameras.py -> video/
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT = REPO_ROOT / ".output"
+# Репозиторий: video/scripts/cameras/verify_cameras.py -> video/
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC = REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
+from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 
-CAM_URL_RE = re.compile(r"^CAM_(\d+)_URL$")
+DEFAULT_ENV = REPO_ROOT / ".env"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "cam_verify"
 
 
 def _skip_url(url: str) -> bool:
@@ -48,18 +56,6 @@ def _skip_url(url: str) -> bool:
 
 def _redact_url(url: str) -> str:
     return re.sub(r"(password=)[^&]*", r"\1***", url, flags=re.IGNORECASE)
-
-
-def _collect_cam_urls() -> list[tuple[str, str]]:
-    """Пары (имя_переменной, url), отсортированы по номеру камеры."""
-    found: list[tuple[int, str, str]] = []
-    for key, val in os.environ.items():
-        m = CAM_URL_RE.match(key)
-        if not m:
-            continue
-        found.append((int(m.group(1)), key, val))
-    found.sort(key=lambda x: x[0])
-    return [(k, v) for _, k, v in found]
 
 
 def _ffmpeg_capture_options(*, use_tcp: bool, stimeout_us: int) -> str:
@@ -135,13 +131,15 @@ def probe_stream(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверка RTSP из .env (CAM_XX_URL)")
+    parser = argparse.ArgumentParser(
+        description="Проверка RTSP из .env (CAM_<stem>_URL, напр. CAM_01_9_U_URL)"
+    )
     parser.add_argument("--env", type=Path, default=DEFAULT_ENV, help="Путь к .env")
     parser.add_argument(
         "--output",
         type=Path,
         default=DEFAULT_OUTPUT,
-        help="Каталог для отчётов (создаётся run_<timestamp>/)",
+        help="Родительский каталог (по умолчанию .output/cam_verify); внутри создаётся cam_verify_<UTC>/",
     )
     parser.add_argument(
         "--tcp",
@@ -165,6 +163,13 @@ def main() -> int:
         type=int,
         default=8_000_000,
         help="FFmpeg socket I/O timeout (мкс), опция stimeout (default: 8 с)",
+    )
+    parser.add_argument(
+        "--crop-rel",
+        type=str,
+        default=None,
+        metavar="X,Y,W,H",
+        help="Глобальная обрезка x,y,w,h (доли 0…1), перебивает MOTION_CROP_REL из .env",
     )
     args = parser.parse_args()
 
@@ -193,8 +198,21 @@ def main() -> int:
 
     cameras = _collect_cam_urls()
     if not cameras:
-        print("В .env нет переменных CAM_XX_URL (например CAM_01_URL).", file=sys.stderr)
+        print(
+            "В .env нет переменных CAM_<stem>_URL (например CAM_01_URL, CAM_01_9_U_URL).",
+            file=sys.stderr,
+        )
         return 1
+
+    active_for_crop = [(k, v) for k, v in cameras if not _skip_url(v)]
+    crop_cli = (args.crop_rel or "").strip() or None
+    global_crop, global_crop_from = resolve_global_crop(
+        crop_rel_arg=crop_cli,
+        motion_crop_env=os.environ.get("MOTION_CROP_REL"),
+    )
+    if crop_cli and global_crop is None:
+        return 1
+    crop_by_cam = crop_map_for_cameras(active_for_crop, global_crop=global_crop)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_dir = args.output / f"cam_verify_{run_id}"
@@ -207,6 +225,8 @@ def main() -> int:
         "opencv_version": cv2.__version__,
         "rtsp_tcp": bool(args.tcp),
         "ffmpeg_capture_options": os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS", ""),
+        "crop_global": list(global_crop) if global_crop else None,
+        "crop_global_from": global_crop_from,
         "cameras": [],
     }
 
@@ -246,11 +266,23 @@ def main() -> int:
         frame = probe.pop("_frame_bgr", None)
         stem = var_name.replace("_URL", "").lower()
         if frame is not None:
+            crop = crop_by_cam.get(var_name)
+            if crop is not None:
+                src_shape = list(frame.shape)
+                frame = apply_crop_optional(frame, crop)
+                probe["crop_rel"] = list(crop)
+                probe["frame_shape_before_crop"] = src_shape
+                probe["frame_shape"] = list(frame.shape)
+            else:
+                probe["crop_rel"] = None
             jpg_path = run_dir / f"{stem}_frame.jpg"
             cv2.imwrite(str(jpg_path), frame)
             probe["frame_saved"] = str(jpg_path.name)
         else:
             probe["frame_saved"] = None
+            probe["crop_rel"] = crop_by_cam.get(var_name)
+            if probe["crop_rel"] is not None:
+                probe["crop_rel"] = list(probe["crop_rel"])
 
         report["cameras"].append(probe)
 
@@ -262,6 +294,8 @@ def main() -> int:
                 f"      размер {p.get('frame_width')}×{p.get('frame_height')}, "
                 f"fps {p.get('fps')}, backend {p.get('backend', '—')}"
             )
+        if probe.get("crop_rel") is not None:
+            print(f"      обрезка x,y,w,h={probe['crop_rel']} → кадр {probe.get('frame_shape')}")
 
     report_path = run_dir / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

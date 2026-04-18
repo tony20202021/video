@@ -1,8 +1,8 @@
 """Запуск Telegram-бота.
 
 Использование:
-    python scripts/run_bot.py
-    python scripts/run_bot.py --log-level DEBUG
+    python scripts/bot/run_bot.py
+    python scripts/bot/run_bot.py --log-level DEBUG
 
 Переменные окружения (из .env):
     BOT_TOKEN      — токен Telegram-бота (обязательно)
@@ -18,7 +18,7 @@ import logging
 import sys
 from pathlib import Path
 
-_root = Path(__file__).parent.parent
+_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_root / "src"))
 
 from dotenv import load_dotenv

@@ -82,7 +82,9 @@ video/
     backend/          — FastAPI, RTSP, ML orchestration
     frontend/         — Telegram Bot (aiogram 3.0)
   tests/
-  scripts/            — Python скрипты для шагов пайплайна
+  scripts/
+    cameras/          — verify_cameras, motion_watch, scan_cameras
+    bot/              — run_bot (Telegram)
   sh/                 — shell скрипты
   docs/
     overview.md       — этот файл

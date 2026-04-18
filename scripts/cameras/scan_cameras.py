@@ -3,9 +3,9 @@ Scan local subnet for iCSee cameras.
 Checks ports: 554 (RTSP), 8899 (ONVIF), 34567 (DVRIP).
 
 Usage:
-    python scripts/scan_cameras.py
-    python scripts/scan_cameras.py --subnet 192.168.0.0/24
-    python scripts/scan_cameras.py --subnet 192.168.1.0/24 --timeout 0.5
+    python scripts/cameras/scan_cameras.py
+    python scripts/cameras/scan_cameras.py --subnet 192.168.0.0/24
+    python scripts/cameras/scan_cameras.py --subnet 192.168.1.0/24 --timeout 0.5
 """
 
 import argparse

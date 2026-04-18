@@ -20,7 +20,7 @@ echo "Ctrl+C для остановки."
 echo ""
 
 exec python -m watchfiles \
-    "python scripts/run_bot.py" \
+    "python scripts/bot/run_bot.py" \
     src/frontend \
-    scripts/run_bot.py \
+    scripts/bot/run_bot.py \
     .env
