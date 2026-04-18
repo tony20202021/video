@@ -35,7 +35,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO_ROOT / "src"))
+_SRC = REPO_ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from common.utils.cam_urls import collect_cam_urls, stem_sort_key  # noqa: E402
 
 DEFAULT_ENV = REPO_ROOT / ".env"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "probe_channels"
@@ -118,32 +122,44 @@ def probe_http(url: str, *, timeout_sec: int) -> dict:
 
 # ─── Credentials from .env ────────────────────────────────────────────────────
 
+def _parse_rtsp_creds(url: str) -> tuple[str, str, str] | None:
+    """Извлекает (ip, user, password) из RTSP-URL."""
+    url = (url or "").strip()
+    if not url.lower().startswith("rtsp://") or "<" in url:
+        return None
+    m = re.search(r"user=([^&]+)&password=([^&]*)", url, re.IGNORECASE)
+    if m:
+        user, password = m.group(1), m.group(2)
+    else:
+        m2 = re.match(r"rtsp://([^:@]+):([^@]*)@", url)
+        user, password = (m2.group(1), m2.group(2)) if m2 else ("", "")
+    m_ip = re.search(r"rtsp://(?:[^@]*@)?([^/:]+)", url)
+    ip = m_ip.group(1) if m_ip else ""
+    return (ip, user, password) if ip else None
+
+
 def _extract_from_first_cam_url(env_path: Path) -> tuple[str, str, str] | None:
-    """Парсит первый CAM_XX_URL из .env: возвращает (ip, user, password)."""
+    """Берёт первую CAM_<stem>_URL через collect_cam_urls(), парсит credentials."""
     try:
         from dotenv import dotenv_values
+        import os
         vals = dotenv_values(env_path)
+        old = {k: os.environ.get(k) for k in vals}
+        os.environ.update({k: v for k, v in vals.items() if v is not None})
+        cameras = collect_cam_urls()
+        # восстанавливаем переменные окружения
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     except ImportError:
         return None
 
-    cam_re = re.compile(r"^CAM_(.+)_URL$")
-    for key, val in sorted(vals.items()):
-        if not cam_re.match(key):
-            continue
-        val = (val or "").strip()
-        if not val.lower().startswith("rtsp://") or "<" in val:
-            continue
-        # rtsp://IP:PORT/user=U&password=P&...  или rtsp://U:P@IP:PORT/...
-        m = re.search(r"user=([^&]+)&password=([^&]*)", val, re.IGNORECASE)
-        if m:
-            user, password = m.group(1), m.group(2)
-        else:
-            m2 = re.match(r"rtsp://([^:@]+):([^@]*)@", val)
-            user, password = (m2.group(1), m2.group(2)) if m2 else ("", "")
-        m_ip = re.search(r"rtsp://(?:[^@]*@)?([^/:]+)", val)
-        ip = m_ip.group(1) if m_ip else ""
-        if ip:
-            return ip, user, password
+    for _, url in cameras:
+        creds = _parse_rtsp_creds(url)
+        if creds:
+            return creds
     return None
 
 
@@ -172,15 +188,22 @@ def main() -> int:
         try:
             from dotenv import load_dotenv
             load_dotenv(args.env, override=False)
+            creds = _extract_from_first_cam_url(args.env)
+            if creds:
+                args.ip, args.user, args.password = creds
+                print(f"Credentials из .env: IP={args.ip} user={args.user}")
+            else:
+                print(f"Не удалось извлечь IP из {args.env}", file=sys.stderr)
         except ImportError:
-            pass
-        creds = _extract_from_first_cam_url(args.env)
-        if creds:
-            args.ip, args.user, args.password = creds
-            print(f"Credentials из .env: IP={args.ip} user={args.user}")
+            print("python-dotenv не установлен: pip install python-dotenv", file=sys.stderr)
 
     if not args.ip:
-        print("Укажите --ip (или задайте CAM_01_URL в .env)", file=sys.stderr)
+        print(
+            "Укажите --ip, или добавьте в .env переменную вида CAM_01_URL=rtsp://IP:554/...",
+            file=sys.stderr,
+        )
+        print("Пример запуска:", file=sys.stderr)
+        print("  python scripts/cameras/probe_channels.py --ip <ip> --user admin --password ''", file=sys.stderr)
         return 1
 
     if not args.http_only:
