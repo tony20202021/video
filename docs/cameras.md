@@ -78,6 +78,19 @@ CAM_03_URL=rtsp://<external_ip>:5542/user=admin&password=XXXX&channel=1&stream=1
 CAM_04_URL=rtsp://<external_ip>:5543/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 ```
 
+### Проверка подключения (`verify_cameras.py`)
+
+Скрипт `scripts/verify_cameras.py` загружает `.env`, для каждой переменной `CAM_XX_URL` с реальным `rtsp://` URL открывает поток, читает **один кадр** и собирает **свойства потока** (разрешение, fps, backend OpenCV и т.д.). Строки с плейсхолдером вроде `<external_ip>` пропускаются. Результаты пишутся в каталог `.output/cam_verify_<метка_времени>/`: `report.json` (в отчёте пароль в URL замаскирован) и при успехе — JPEG кадра.
+
+Из корня репозитория:
+
+```bash
+python scripts/verify_cameras.py
+python scripts/verify_cameras.py --tcp
+```
+
+Флаг `--tcp` включает RTSP поверх TCP — полезно через NAT или нестабильный Wi‑Fi. Поиск камер в локальной сети по портам — отдельно `scripts/scan_cameras.py`.
+
 ---
 
 ## Доступ к камерам 2–4
