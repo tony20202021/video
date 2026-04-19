@@ -16,6 +16,8 @@ onnxruntime==1.21.0
 opencv-python==4.11.0.86
 numpy==2.2.5
 Pillow==11.2.1
+# ultralytics нужен только для скачивания модели: python scripts/setup_models.py
+# установить отдельно: pip install ultralytics --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Config / Env
 pyyaml==6.0.2

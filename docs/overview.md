@@ -95,6 +95,7 @@ video/
       3_verify_cameras.py — проверка RTSP + сохранение кадра
       4_motion_watch.py   — frame diff по субпотоку, сохранение с HI
       5_motion_people.py  — motion diff → YOLOv8n → кадры с людьми
+    setup_models.py       — скачать и конвертировать ONNX-модели
     bot/                  — run_bot (Telegram)
   sh/                     — shell скрипты
   docs/

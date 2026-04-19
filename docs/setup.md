@@ -100,6 +100,45 @@ python -c "import fastapi; print('OK')"
 
 ---
 
+## Скачивание ML-моделей
+
+После установки зависимостей нужно подготовить ONNX-модели (папка `models/`).
+
+Скрипт `scripts/setup_models.py` проверяет наличие файла и, если его нет, скачивает `.pt` через `ultralytics` и экспортирует в ONNX. Если модель уже есть — ничего не делает.
+
+### Linux
+
+```bash
+python scripts/setup_models.py
+```
+
+При необходимости другая модель (по умолчанию `yolov8n`):
+
+```bash
+python scripts/setup_models.py --model yolov8s
+```
+
+### Windows
+
+```powershell
+python scripts/setup_models.py
+```
+
+Если `ultralytics` при скачивании `.pt` блокируется (GitHub недоступен без VPN):
+
+```powershell
+# Включите Psiphon, узнайте порт:
+.\sh\psiphon_proxy.ps1
+
+# Задайте прокси для Python и запустите:
+$env:HTTPS_PROXY = "http://127.0.0.1:<PORT>"
+python scripts/setup_models.py
+```
+
+> Модели нужны только для `scripts/cameras/motion_people.py`. Остальные скрипты (`verify_cameras.py`, `motion_watch.py`) работают без моделей.
+
+---
+
 ## Частые замечания
 
 - **Версия Python:** если пакет из `requirements.txt` не ставится на выбранную версию, создайте окружение с другой минорной версией Python (`python=3.12` и т.д.) и повторите `pip install -r requirements.txt`.
