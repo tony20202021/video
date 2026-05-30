@@ -41,6 +41,7 @@ if str(_SRC) not in sys.path:
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.cam_urls import resolve_hi_rtsp_url
+from common.utils.motion_utils import redact_url
 
 DEFAULT_ENV = REPO_ROOT / ".env"
 DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "motion_watch"
@@ -352,7 +353,7 @@ def main() -> int:
             read_timeout_ms=args.read_timeout_ms,
         )
         if not cap.isOpened():
-            print(f"  [!] не удалось открыть поток: {url[:80]}…", file=sys.stderr)
+            print(f"  [!] не удалось открыть поток: {redact_url(url)[:80]}…", file=sys.stderr)
             cap.release()
             continue
         caps_by_url[url] = cap

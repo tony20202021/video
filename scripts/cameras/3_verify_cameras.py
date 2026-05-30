@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +35,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
+from common.utils.motion_utils import redact_url as _redact_url
 
 DEFAULT_ENV = REPO_ROOT / ".env"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "cam_verify"
@@ -52,10 +52,6 @@ def _skip_url(url: str) -> bool:
     if not u.lower().startswith("rtsp://"):
         return True
     return False
-
-
-def _redact_url(url: str) -> str:
-    return re.sub(r"(password=)[^&]*", r"\1***", url, flags=re.IGNORECASE)
 
 
 def _ffmpeg_capture_options(*, use_tcp: bool, stimeout_us: int) -> str:

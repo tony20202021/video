@@ -40,6 +40,15 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.cam_urls import collect_cam_urls, stem_sort_key  # noqa: E402
+from common.utils.motion_utils import redact_url  # noqa: E402
+
+
+def _scrub(text: str, password: str) -> str:
+    """Маскирует пароль в строке: обе формы URL + буквальное значение (на случай мангленых ошибок urllib)."""
+    text = redact_url(text)
+    if password:
+        text = text.replace(password, "***")
+    return text
 
 DEFAULT_ENV = REPO_ROOT / ".env"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "probe_channels"
@@ -229,7 +238,7 @@ def main() -> int:
             for st in args.streams:
                 urls = rtsp_urls(args.ip, args.user, args.password, ch, st)
                 for url in urls:
-                    redacted = re.sub(r"(password=)[^&/]*", r"\1***", url)
+                    redacted = redact_url(url)
                     print(f"  ch={ch} stream={st}  {redacted} … ", end="", flush=True)
                     r = probe_rtsp(url, use_tcp=args.tcp, timeout_ms=args.timeout_ms)
                     entry = {
@@ -239,6 +248,8 @@ def main() -> int:
                         "url_redacted": redacted,
                         **{k: v for k, v in r.items() if k != "frame"},
                     }
+                    if "error" in entry:
+                        entry["error"] = _scrub(entry["error"], args.password)
                     if r["ok"]:
                         fname = f"rtsp_ch{ch}_st{st}.jpg"
                         cv2.imwrite(str(run_dir / fname), r["frame"])
@@ -248,7 +259,7 @@ def main() -> int:
                         results.append(entry)
                         break  # нашли рабочий URL для этой комбинации ch/st
                     else:
-                        print(r["error"])
+                        print(_scrub(r["error"], args.password))
                         results.append(entry)
 
     # ── HTTP snapshot ──────────────────────────────────────────────────────────
@@ -258,7 +269,7 @@ def main() -> int:
         for ch in args.channels:
             urls = http_snapshot_urls(args.ip, args.user, args.password, ch)
             for url in urls:
-                redacted = re.sub(r"(://)[^:@/]+:[^@/]+@", r"\1***:***@", url)
+                redacted = redact_url(url)
                 print(f"  ch={ch}  {redacted} … ", end="", flush=True)
                 r = probe_http(url, timeout_sec=args.timeout_http)
                 entry = {
@@ -267,6 +278,8 @@ def main() -> int:
                     "url_redacted": redacted,
                     **{k: v for k, v in r.items() if k != "data"},
                 }
+                if "error" in entry:
+                    entry["error"] = _scrub(entry["error"], args.password)
                 if r["ok"]:
                     fname = f"http_ch{ch}.jpg"
                     (run_dir / fname).write_bytes(r["data"])
@@ -276,7 +289,7 @@ def main() -> int:
                     results.append(entry)
                     break  # нашли рабочий URL для этого канала
                 else:
-                    print(r["error"])
+                    print(_scrub(r["error"], args.password))
                     results.append(entry)
 
     # ── Отчёт ─────────────────────────────────────────────────────────────────

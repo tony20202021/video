@@ -3,9 +3,23 @@
 from __future__ import annotations
 
 import os
+import re
 
 import cv2
 import numpy as np
+
+# Обе формы передачи учётных данных в URL: query (?...&password=...) и basic-auth (user:pass@host)
+_RE_PASSWORD_QUERY = re.compile(r"(?i)(password=)[^&/\s'\"]*")
+_RE_USERINFO = re.compile(r"(://)[^:@/\s]+:[^@/\s]+@")
+
+
+def redact_url(text: str) -> str:
+    """Маскирует пароль в строке (URL или сообщение об ошибке): и password=…, и user:pass@host."""
+    if not text:
+        return text
+    text = _RE_PASSWORD_QUERY.sub(r"\1***", text)
+    text = _RE_USERINFO.sub(r"\1***:***@", text)
+    return text
 
 
 def skip_url(url: str) -> bool:
