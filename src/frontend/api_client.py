@@ -47,7 +47,7 @@ class BackendClient:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get(f"{self._base}{path}", **kwargs)
                 r.raise_for_status()
-                return {"ok": True, "data": r.json()}
+                return r.json()
         except httpx.ConnectError:
             return {"ok": False, "error": "Backend недоступен"}
         except httpx.HTTPStatusError as e:
@@ -60,7 +60,7 @@ class BackendClient:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.patch(f"{self._base}{path}", **kwargs)
                 r.raise_for_status()
-                return {"ok": True, "data": r.json()}
+                return r.json()
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -69,7 +69,7 @@ class BackendClient:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.post(f"{self._base}{path}", **kwargs)
                 r.raise_for_status()
-                return {"ok": True, "data": r.json()}
+                return r.json()
         except Exception as e:
             return {"ok": False, "error": str(e)}
 

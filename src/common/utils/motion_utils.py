@@ -62,7 +62,37 @@ def frame_decode_plausible(
     g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     if float(cv2.Laplacian(g, cv2.CV_64F).var()) < min_laplacian_var:
         return False
-    return float(g.std()) >= min_gray_std
+    if float(g.std()) < min_gray_std:
+        return False
+
+    h, w = g.shape[:2]
+
+    # Горизонтальные полосы: ловим верхние/нижние серые бэнды
+    if h >= 16:
+        strip_h = max(1, h // 4)
+        for i in range(4):
+            strip = g[i * strip_h: min(h, (i + 1) * strip_h), :]
+            if strip.size > 0 and float(strip.std()) < min_gray_std:
+                return False
+
+    # HEVC-специфичный артефакт: недекодированные блоки заполняются
+    # RGB(128,128,128) — нейтральным серым. Если >35% пикселей кадра
+    # близки к этому значению (|R-G|<12, |G-B|<12, Y∈[108,148]),
+    # кадр частично не декодирован (ловит левую/правую/любую зону).
+    if bgr.ndim == 3:
+        b_ch = bgr[:, :, 0].astype(np.int16)
+        g_ch = bgr[:, :, 1].astype(np.int16)
+        r_ch = bgr[:, :, 2].astype(np.int16)
+        neutral = (
+            (np.abs(r_ch - g_ch) < 12) &
+            (np.abs(g_ch - b_ch) < 12) &
+            (g_ch > 108) &
+            (g_ch < 148)
+        )
+        if float(neutral.mean()) > 0.35:
+            return False
+
+    return True
 
 
 def read_first_plausible_frame(
@@ -100,15 +130,26 @@ def pick_frame_to_save(
     return None
 
 
-def drain_cap_buffer(cap: cv2.VideoCapture, max_drain: int = 32) -> None:
+def drain_cap_buffer(cap: cv2.VideoCapture, max_drain: int = 512, stale_ms: float = 40.0) -> None:
     """Дренирует накопившиеся кадры FFMPEG-буфера RTSP (FIFO).
 
-    При длительном простое HI-потока буфер накапливает устаревшие кадры.
-    Без дренажа cap.read() вернёт кадр из прошлого вместо свежего.
+    Сливает кадры пока grab() быстрый (< stale_ms) — это означает что кадры
+    уже в буфере. Когда grab() начинает блокироваться (ждёт сеть) — буфер пуст,
+    останавливаемся. Следующий cap.read() в read_hi_save_frame повторит попытку
+    с паузой если буфер оказался полностью опустошён.
+
+    Прежнее max_drain=8 (~0.67с на 12fps) было недостаточным: после долгого
+    простоя HI-потока буфер накапливал 2-3+ секунды кадров и первый кадр после
+    drain был всё равно устаревшим (задача 18b).
     """
+    import time as _t
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     for _ in range(max_drain):
+        t0 = _t.monotonic()
         if not cap.grab():
+            break
+        if (_t.monotonic() - t0) * 1000 > stale_ms:
+            # grab заблокировался — буфер исчерпан, дальше ждём сеть
             break
 
 
@@ -119,9 +160,19 @@ def read_hi_save_frame(
     min_laplacian_var: float,
     min_gray_std: float,
 ) -> np.ndarray | None:
-    """Дренирует буфер HI-потока и возвращает свежий годный кадр."""
+    """Дренирует буфер HI-потока и возвращает свежий годный кадр.
+
+    После drain буфер может оказаться пустым (кадр ещё не пришёл от камеры
+    на 12fps). Делаем до 3 попыток с паузой ~100мс между ними.
+    """
+    import time as _time
     drain_cap_buffer(cap)
-    ok, f = cap.read()
+    ok, f = None, None
+    for _ in range(3):
+        ok, f = cap.read()
+        if ok and f is not None and f.size > 0:
+            break
+        _time.sleep(0.1)  # ждём следующий кадр (12fps ≈ 83мс)
     if not ok or f is None or f.size == 0:
         return None
     return pick_frame_to_save(

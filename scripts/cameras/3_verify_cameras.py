@@ -237,17 +237,19 @@ def main() -> int:
         )
         return 1
 
-    # Добавляем HI-потоки если не передан --no-hi
+    # Добавляем HI-потоки если не передан --no-hi.
+    # Сохраняем маппинг hi_key → low_var_name чтобы передать правильную обрезку:
+    # HI-поток снимает тот же склеенный кадр что и LOW, обрезка одинакова.
+    hi_to_low_var: dict[str, str] = {}
     if not args.no_hi:
         from common.utils.cam_urls import companion_hi_url_env_key
         hi_entries: list[tuple[str, str]] = []
-        seen_hi_urls: set[str] = set()
         for var_name, low_url in cameras:
             hi_key = companion_hi_url_env_key(var_name)
             hi_url = (os.environ.get(hi_key) or "").strip()
-            if hi_url and not _skip_url(hi_url) and hi_url not in seen_hi_urls:
+            if hi_url and not _skip_url(hi_url):
                 hi_entries.append((hi_key, hi_url))
-                seen_hi_urls.add(hi_url)
+                hi_to_low_var[hi_key] = var_name  # HI наследует crop от LOW
         cameras = cameras + hi_entries
 
     active_for_crop = [(k, v) for k, v in cameras if not _skip_url(v)]
@@ -326,7 +328,9 @@ def main() -> int:
         frame = probe.pop("_frame_bgr", None)
         stem = var_name.replace("_URL", "").lower()
         if frame is not None:
-            crop = crop_by_cam.get(var_name)
+            # HI-поток: обрезка берётся от соответствующего LOW (та же физическая камера)
+            crop_key = hi_to_low_var.get(var_name, var_name)
+            crop = crop_by_cam.get(crop_key)
             if crop is not None:
                 src_shape = list(frame.shape)
                 frame = apply_crop_optional(frame, crop)
@@ -340,7 +344,8 @@ def main() -> int:
             probe["frame_saved"] = str(jpg_path.name)
         else:
             probe["frame_saved"] = None
-            probe["crop_rel"] = crop_by_cam.get(var_name)
+            crop_key = hi_to_low_var.get(var_name, var_name)
+            probe["crop_rel"] = crop_by_cam.get(crop_key)
             if probe["crop_rel"] is not None:
                 probe["crop_rel"] = list(probe["crop_rel"])
 

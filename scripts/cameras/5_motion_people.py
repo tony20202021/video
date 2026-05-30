@@ -1,9 +1,10 @@
 """
 Детекция людей на потоках RTSP: motion detection → YOLOv8n ONNX → сохранение с bounding box.
 
-При обнаружении движения запускает минимальную модель (YOLOv8n ONNX).
-Сохраняет кадры только если обнаружен хотя бы один человек (класс 0 COCO).
-На сохраняемый кадр накладываются прямоугольники с confidence.
+Два раздельных потока (как в 4_motion_watch):
+  LOW (CAM_*_URL)    — субпоток: frame diff для детекции движения
+  HI  (CAM_*_HI_URL) — главный поток: захват кадра и YOLO (4x лучшее разрешение)
+Если CAM_*_HI_URL не задан — используется тот же LOW-поток.
 
 Модель: models/yolov8n.onnx (скачать: https://github.com/ultralytics/assets/releases)
   wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx
@@ -20,6 +21,7 @@ import argparse
 import os
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,16 +34,16 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
-from common.utils.cam_urls import collect_cam_urls
+from common.utils.cam_urls import collect_cam_urls, resolve_hi_rtsp_url
 from common.utils.motion_utils import (
-    drain_cap_buffer,
     ffmpeg_capture_options,
     frame_decode_plausible,
     mean_abs_diff,
     open_cap,
-    pick_frame_to_save,
     prepare_gray,
     read_first_plausible_frame,
+    read_hi_save_frame,
+    redact_url,
     skip_url,
     stem_from_var,
 )
@@ -180,12 +182,14 @@ def draw_boxes(bgr: np.ndarray, detections: list[tuple[int, int, int, int, float
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Motion detection + YOLOv8n: сохранение кадров с людьми"
+        description="Motion detection (LOW) + YOLOv8n на HI-потоке: сохранение кадров с людьми"
     )
     parser.add_argument("--env", type=Path, default=DEFAULT_ENV)
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL, help="Путь к yolov8n.onnx")
     parser.add_argument("--conf", type=float, default=0.35, help="Порог confidence (default: 0.35)")
     parser.add_argument("--nms", type=float, default=0.45, help="Порог NMS IoU (default: 0.45)")
+    parser.add_argument("--crop-pad", type=float, default=0.10,
+                        help="Отступ вокруг bbox при вырезке кропа (доля от bbox, default: 0.10)")
     parser.add_argument(
         "--threshold", type=float, default=None,
         help="Порог mean abs diff движения; иначе MOTION_DIFF_THRESHOLD из .env или 10",
@@ -203,7 +207,7 @@ def main() -> int:
     parser.add_argument("--baseline-attempts", type=int, default=16)
     parser.add_argument(
         "--heartbeat-sec", type=float, default=None,
-        help="Раз в N сек сохранять кадр независимо от детекции; 0 = выкл; "
+        help="Раз в N сек сохранять кадр с HI независимо от детекции; 0 = выкл; "
              "иначе MOTION_HEARTBEAT_SEC из .env или 600",
     )
     args = parser.parse_args()
@@ -261,25 +265,41 @@ def main() -> int:
         return 1
     crop_by_cam = crop_map_for_cameras(active, global_crop=global_crop)
 
-    print(f"Модель:    {args.model}")
-    print(f"Conf:      {args.conf}  NMS: {args.nms}")
-    print(f"Threshold: {threshold}  TCP: {args.tcp}")
-    print(f"Вывод:     {out_dir}")
-    print(f"Камеры:    {', '.join(k for k, _ in active)}")
-    print(f"Обрезка:   {global_crop!r}  [{global_crop_from}]")
-    print("Останов: Ctrl+C\n")
+    # Разрешаем HI-URL для каждой камеры
+    var_low_url: dict[str, str] = {vn: url for vn, url in active}
+    var_hi_url: dict[str, str] = {
+        vn: resolve_hi_rtsp_url(vn, low_url=url, skip_url=skip_url)
+        for vn, url in active
+    }
 
-    caps: dict[str, cv2.VideoCapture] = {}
-    for var_name, url in active:
+    # Открываем по одному VideoCapture на уникальный URL
+    unique_urls = set(var_low_url.values()) | set(var_hi_url.values())
+    caps_by_url: dict[str, cv2.VideoCapture] = {}
+    for url in sorted(unique_urls):
         cap = open_cap(url, open_timeout_ms=args.open_timeout_ms, read_timeout_ms=args.read_timeout_ms)
         if cap is None:
-            print(f"  [!] {var_name}: не удалось открыть", file=sys.stderr)
+            print(f"  [!] не удалось открыть: {redact_url(url)[:80]}…", file=sys.stderr)
             continue
-        caps[var_name] = cap
+        caps_by_url[url] = cap
 
-    if not caps:
+    opened_vars: list[tuple[str, str]] = [
+        (vn, lu)
+        for vn, lu in active
+        if lu in caps_by_url and var_hi_url[vn] in caps_by_url
+    ]
+    if not opened_vars:
         print("Ни одна камера не открылась.", file=sys.stderr)
+        for c in caps_by_url.values():
+            c.release()
         return 1
+
+    # Группируем по LOW URL (один read() на такт для склеенных камер U/D)
+    vars_by_low: dict[str, list[str]] = defaultdict(list)
+    for vn, lu in opened_vars:
+        vars_by_low[lu].append(vn)
+
+    prev_gray: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
+    last_heartbeat: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
 
     import json as _json
     from common.utils.time_msk import ts_iso as _ts_iso
@@ -292,108 +312,185 @@ def main() -> int:
         "model": str(args.model),
         "tcp": args.tcp,
         "compare_width": args.compare_width,
-        "cameras": list(caps.keys()),
+        "cameras": [vn for vn, _ in opened_vars],
         "crop_global": list(global_crop) if global_crop else None,
         "heartbeat_sec": heartbeat_sec,
         "output": str(out_dir),
+        "dual_stream": True,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    prev_gray: dict[str, np.ndarray | None] = {k: None for k in caps}
-    last_heartbeat: dict[str, float] = {k: time.monotonic() for k in caps}
+    print(f"Модель:    {args.model}")
+    print(f"Conf:      {args.conf}  NMS: {args.nms}")
+    print(f"Threshold: {threshold}  TCP: {args.tcp}")
+    print(f"Вывод:     {out_dir}")
+    print(f"Камеры ({len(opened_vars)}): {', '.join(vn for vn, _ in opened_vars)}")
+    print(f"Обрезка:   {global_crop!r}  [{global_crop_from}]")
+    print(f"Потоки:    LOW = CAM_*_URL (детекция), HI = CAM_*_HI_URL (YOLO + кропы)")
+    for vn, _ in opened_vars:
+        lu, hu = var_low_url[vn], var_hi_url[vn]
+        hi_note = "отдельный HI" if hu != lu else "как LOW"
+        print(f"  └ {vn}: HI {hi_note}")
+    print("Останов: Ctrl+C\n")
 
-    print("Базовый кадр…")
-    for var_name, cap in caps.items():
-        frame0 = read_first_plausible_frame(
-            cap,
+    # Базовые кадры: LOW → инициализация prev_gray, HI → файлы
+    print("Базовый кадр (LOW → детектор, HI → файл)…")
+    for low_u, var_list in vars_by_low.items():
+        cap_l = caps_by_url[low_u]
+        frame_l = read_first_plausible_frame(
+            cap_l,
             max_attempts=args.baseline_attempts,
             min_laplacian_var=args.min_laplacian_var,
             min_gray_std=args.min_gray_std,
         )
-        if frame0 is None:
-            print(f"  [!] {var_name}: нет годного кадра для baseline", file=sys.stderr)
+        if frame_l is None:
+            for vn in var_list:
+                print(f"  [!] {vn}: нет годного LOW для baseline", file=sys.stderr)
             continue
-        crop = crop_by_cam[var_name]
-        frame0c = apply_crop_optional(frame0, crop)
-        stem = stem_from_var(var_name)
-        ts = ts_for_file()
-        cv2.imwrite(str(out_dir / f"{stem}_{ts}_baseline.jpg"), frame0c)
-        prev_gray[var_name] = prepare_gray(frame0c, args.compare_width)
-        print(f"  baseline: {stem}")
+        for vn in var_list:
+            fl = apply_crop_optional(frame_l, crop_by_cam[vn])
+            prev_gray[vn] = prepare_gray(fl, args.compare_width)
+
+    by_hi_baseline: dict[str, list[str]] = defaultdict(list)
+    for vn, _ in opened_vars:
+        by_hi_baseline[var_hi_url[vn]].append(vn)
+    for hi_u, vlist in by_hi_baseline.items():
+        cap_h = caps_by_url[hi_u]
+        fh = read_first_plausible_frame(
+            cap_h,
+            max_attempts=args.baseline_attempts,
+            min_laplacian_var=args.min_laplacian_var,
+            min_gray_std=args.min_gray_std,
+        )
+        if fh is None:
+            for vn in vlist:
+                print(f"  [!] {vn}: нет годного HI для baseline", file=sys.stderr)
+            continue
+        for vn in vlist:
+            im = apply_crop_optional(fh, crop_by_cam[vn])
+            stem = stem_from_var(vn)
+            ts0 = ts_for_file()
+            bname = f"{stem}_{ts0}_baseline.jpg"
+            cv2.imwrite(str(out_dir / bname), im)
+            print(f"  {bname}")
     print()
 
     try:
         while True:
-            for var_name, cap in list(caps.items()):
-                # Дренируем буфер чтобы не получить устаревший кадр после медленного YOLO
-                drain_cap_buffer(cap)
-                ok, frame = cap.read()
-                if not ok or frame is None or frame.size == 0:
+            for low_u, var_list in vars_by_low.items():
+                cap_l = caps_by_url[low_u]
+                ok_l, frame_l = cap_l.read()
+                if not ok_l or frame_l is None or frame_l.size == 0:
                     continue
-                crop = crop_by_cam[var_name]
-                frame_c = apply_crop_optional(frame, crop)
-                gray = prepare_gray(frame_c, args.compare_width)
-
-                # Heartbeat — периодический снимок независимо от детекции движения и людей
-                if heartbeat_sec > 0:
-                    now = time.monotonic()
-                    if now - last_heartbeat[var_name] >= heartbeat_sec:
-                        last_heartbeat[var_name] = now
-                        stem = stem_from_var(var_name)
-                        ts = ts_for_file()
-                        hb_name = f"{stem}_{ts}_heartbeat.jpg"
-                        cv2.imwrite(str(out_dir / hb_name), frame_c)
-                        print(f"  пульс {hb_name}")
-
-                prev = prev_gray[var_name]
-                if prev is None:
-                    prev_gray[var_name] = gray
-                    continue
-
-                diff = mean_abs_diff(prev, gray)
-                prev_gray[var_name] = gray
-                if diff <= threshold:
-                    continue
-
-                # Движение — проверяем кадр и запускаем детектор
-                to_check = pick_frame_to_save(
-                    cap, frame,
-                    max_extra_reads=args.save_extra_reads,
+                if not frame_decode_plausible(
+                    frame_l,
                     min_laplacian_var=args.min_laplacian_var,
                     min_gray_std=args.min_gray_std,
-                )
-                if to_check is None:
+                ):
                     continue
 
-                to_c = apply_crop_optional(to_check, crop)
-                detections = detect_people(sess, to_c, conf_threshold=args.conf, nms_threshold=args.nms)
-                if not detections:
-                    continue
+                # Детекция движения по LOW
+                pending_motion: list[tuple[str, float, np.ndarray]] = []
+                for vn in var_list:
+                    crop = crop_by_cam[vn]
+                    frame_u = apply_crop_optional(frame_l, crop)
+                    gray = prepare_gray(frame_u, args.compare_width)
+                    prev = prev_gray[vn]
+                    if prev is None:
+                        prev_gray[vn] = gray
+                        continue
+                    diff = mean_abs_diff(prev, gray)
+                    if diff <= threshold:
+                        prev_gray[vn] = gray
+                    else:
+                        pending_motion.append((vn, diff, gray))
 
-                annotated = draw_boxes(to_c, detections)
-                stem = stem_from_var(var_name)
-                ts = ts_for_file()
-                fname = f"{stem}_{ts}_p{len(detections)}.jpg"
-                cv2.imwrite(str(out_dir / fname), annotated)
+                # YOLO на HI-кадре при обнаружении движения
+                if pending_motion:
+                    by_hi: dict[str, list[tuple[str, float, np.ndarray]]] = defaultdict(list)
+                    for vn, diff, gray_low in pending_motion:
+                        by_hi[var_hi_url[vn]].append((vn, diff, gray_low))
 
-                # Вырезаем каждого человека отдельно
-                h, w = to_c.shape[:2]
-                crops_dir = out_dir / "crops"
-                crops_dir.mkdir(exist_ok=True)
-                for idx, (x1, y1, x2, y2, conf) in enumerate(detections, 1):
-                    x1c, y1c = max(0, x1), max(0, y1)
-                    x2c, y2c = min(w, x2), min(h, y2)
-                    if x2c > x1c and y2c > y1c:
-                        crop_img = to_c[y1c:y2c, x1c:x2c]
-                        crop_name = f"{stem}_{ts}_p{idx}of{len(detections)}_conf{conf:.2f}.jpg"
-                        cv2.imwrite(str(crops_dir / crop_name), crop_img)
+                    for hi_u, entries in by_hi.items():
+                        cap_h = caps_by_url[hi_u]
+                        to_save = read_hi_save_frame(
+                            cap_h,
+                            max_extra_reads=args.save_extra_reads,
+                            min_laplacian_var=args.min_laplacian_var,
+                            min_gray_std=args.min_gray_std,
+                        )
+                        if to_save is None:
+                            for vn, diff, _ in entries:
+                                print(
+                                    f"  [~] {vn}: движение diff={diff:.2f}, нет годного HI — пропуск",
+                                    file=sys.stderr,
+                                )
+                            continue
 
-                print(f"  {fname}  diff={diff:.2f}  люди={len(detections)}")
+                        for vn, diff, gray_low in entries:
+                            prev_gray[vn] = gray_low
+                            to_c = apply_crop_optional(to_save, crop_by_cam[vn])
+
+                            detections = detect_people(
+                                sess, to_c, conf_threshold=args.conf, nms_threshold=args.nms
+                            )
+                            if not detections:
+                                continue
+
+                            annotated = draw_boxes(to_c, detections)
+                            stem = stem_from_var(vn)
+                            ts = ts_for_file()
+                            fname = f"{stem}_{ts}_p{len(detections)}.jpg"
+                            cv2.imwrite(str(out_dir / fname), annotated)
+
+                            h, w = to_c.shape[:2]
+                            crops_dir = out_dir / "crops"
+                            crops_dir.mkdir(exist_ok=True)
+                            for idx, (x1, y1, x2, y2, conf) in enumerate(detections, 1):
+                                bw, bh = x2 - x1, y2 - y1
+                                px = int(bw * args.crop_pad)
+                                py = int(bh * args.crop_pad)
+                                x1c = max(0, x1 - px)
+                                y1c = max(0, y1 - py)
+                                x2c = min(w, x2 + px)
+                                y2c = min(h, y2 + py)
+                                if x2c > x1c and y2c > y1c:
+                                    crop_img = to_c[y1c:y2c, x1c:x2c]
+                                    crop_name = f"{stem}_{ts}_p{idx}of{len(detections)}_conf{conf:.2f}.jpg"
+                                    cv2.imwrite(str(crops_dir / crop_name), crop_img)
+
+                            print(f"  {fname}  diff={diff:.2f}  люди={len(detections)}")
+
+                # Heartbeat с HI-потока (после обработки движения)
+                for vn in var_list:
+                    if heartbeat_sec <= 0:
+                        continue
+                    now = time.monotonic()
+                    if now - last_heartbeat[vn] < heartbeat_sec:
+                        continue
+                    last_heartbeat[vn] = now
+                    hi_u = var_hi_url[vn]
+                    cap_h = caps_by_url[hi_u]
+                    hb = read_hi_save_frame(
+                        cap_h,
+                        max_extra_reads=args.save_extra_reads,
+                        min_laplacian_var=args.min_laplacian_var,
+                        min_gray_std=args.min_gray_std,
+                    )
+                    if hb is not None:
+                        hb_u = apply_crop_optional(hb, crop_by_cam[vn])
+                        stem = stem_from_var(vn)
+                        ts = ts_for_file()
+                        hb_name = f"{stem}_{ts}_heartbeat.jpg"
+                        cv2.imwrite(str(out_dir / hb_name), hb_u)
+                        print(f"  пульс {hb_name}")
+                    else:
+                        print(f"  [~] {vn}: пульс — нет годного HI", file=sys.stderr)
 
             time.sleep(0.01)
     except KeyboardInterrupt:
         print("\nОстанов по Ctrl+C")
     finally:
-        for cap in caps.values():
+        for cap in caps_by_url.values():
             cap.release()
 
     return 0

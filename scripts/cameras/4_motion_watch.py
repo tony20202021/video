@@ -14,6 +14,10 @@ HEVC: проверка кадра (Laplacian + std); доп. read() при со�
 
 Обрезка: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL**, **--crop-rel** — одинаково для низкого и высокого кадра (доли 0…1).
 
+ВНИМАНИЕ: не запускайте скрипты 4 и 5 одновременно против одних и тех же камер.
+Оба скрипта читают разные кадры из одного RTSP-буфера → кадры не совпадают (см. задачу 18b).
+Для продакшена используйте scripts/agent/agent.py или только 5_motion_people.py.
+
 Usage:
     python scripts/cameras/4_motion_watch.py
     python scripts/cameras/4_motion_watch.py --threshold 15 --tcp
