@@ -56,6 +56,21 @@
 
 ---
 
+## Текущее состояние
+
+| Компонент | Статус | Примечание |
+|-----------|--------|------------|
+| Скрипты камер (1–5) | **Реализовано** | Поиск, зондирование, верификация, motion detection, YOLOv8n |
+| YOLOv8n ONNX | **Реализовано** | `models/yolov8n.onnx` (~13 MB) |
+| Telegram Bot | **Реализовано** | aiogram 3.0, обращается к backend API |
+| Backend REST API (FastAPI) | **Запланировано** | Эндпоинты описаны в `services.md`, код не написан |
+| ML классификация группы | **Запланировано** | MobileNetV3-Small, модель не обучена |
+| ML идентификация жителя | **Запланировано** | MobileFaceNet, модель не обучена |
+| MongoDB (схема) | **Запланировано** | Схема описана в `database.md`, код не написан |
+| Docker / config.yaml | **Запланировано** | Описаны в docs, файлы не созданы |
+
+---
+
 ## Нефункциональные требования
 
 | Параметр                | Значение                                      |
@@ -82,11 +97,15 @@ video/
         cam_urls.py       — сбор CAM_<stem>_URL из окружения
         cam_crop.py       — обрезка кадра по долям x,y,w,h
         motion_utils.py   — общие утилиты motion-цикла
-    db/
-    backend/              — FastAPI, RTSP, ML orchestration
+        person_detector.py — обёртка YOLOv8n ONNX
     frontend/             — Telegram Bot (aiogram 3.0)
+      bot.py              — диспетчер и роутер
+      config.py           — конфигурация из .env
+      api_client.py       — HTTP-клиент к backend API
+      handlers/           — /start, /events, /persons, /cameras, /unclassified, /admin
+      keyboards/          — inline-кнопки (пагинация, фильтры)
   models/
-    yolov8n.onnx          — детекция людей (~6 MB, скачивается отдельно)
+    yolov8n.onnx          — детекция людей (~13 MB, скачивается отдельно)
   tests/
   scripts/
     cameras/
@@ -96,8 +115,14 @@ video/
       4_motion_watch.py   — frame diff по субпотоку, сохранение с HI
       5_motion_people.py  — motion diff → YOLOv8n → кадры с людьми
     setup_models.py       — скачать и конвертировать ONNX-модели
-    bot/                  — run_bot (Telegram)
-  sh/                     — shell скрипты
+    bot/run_bot.py        — запуск Telegram Bot
+  sh/                     — shell скрипты (start_bot.sh, psiphon_proxy.ps1)
+  .output/                — результаты скриптов (в .gitignore)
+    1_scan_cameras/       — отчёты 1_scan_cameras.py
+    2_probe_channels/     — кадры и отчёты 2_probe_channels.py
+    3_cam_verify/         — кадры и отчёты 3_verify_cameras.py
+    4_motion_watch/       — baseline и кадры движения 4_motion_watch.py
+    5_motion_people/      — кадры с людьми (bbox) 5_motion_people.py
   docs/
     overview.md           — этот файл
     setup.md              — Python, conda, окружение, requirements.txt
@@ -105,7 +130,6 @@ video/
     ml.md                 — ML пайплайн и логика обработки видео
     database.md           — схема MongoDB
     services.md           — API сервисов, конфиг, экспорт
-  docker-compose.yml
-  config.yaml
   .env                    — RTSP URL и секреты (в .gitignore)
+  .config.md              — инфраструктура: серверы, камеры, сети
 ```

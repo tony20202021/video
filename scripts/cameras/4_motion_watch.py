@@ -42,9 +42,10 @@ from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, res
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.cam_urls import resolve_hi_rtsp_url
 from common.utils.motion_utils import redact_url
+from common.utils.time_msk import ts_for_dir, ts_for_file
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "motion_watch"
+DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "4_motion_watch"
 
 
 def _skip_url(url: str) -> bool:
@@ -304,7 +305,7 @@ def main() -> int:
 
     out_dir = args.output
     if out_dir is None:
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = ts_for_dir()
         out_dir = DEFAULT_OUTPUT_PARENT / f"motion_watch_{run_id}"
         output_from = f"авто .output/motion_watch/motion_watch_{run_id}/"
     else:
@@ -450,8 +451,8 @@ def main() -> int:
             crop = crop_by_cam[var_name]
             im = apply_crop_optional(fh, crop)
             stem = _stem_from_env_var(var_name)
-            ts0 = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-            bname = f"{stem}__{ts0}_baseline.jpg"
+            ts0 = ts_for_file()
+            bname = f"{stem}_{ts0}_baseline.jpg"
             cv2.imwrite(str(out_dir / bname), im)
             print(f"  {bname}")
     print()
@@ -509,7 +510,7 @@ def main() -> int:
                         to_u = apply_crop_optional(to_save, crop_by_cam[var_name])
                         prev_gray[var_name] = gray_low
                         stem = _stem_from_env_var(var_name)
-                        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+                        ts = ts_for_file()
                         fname = f"{stem}_{ts}.jpg"
                         cv2.imwrite(str(out_dir / fname), to_u)
                         print(f"  сохранено {fname}  (diff={diff:.2f}, HI)")
@@ -532,7 +533,7 @@ def main() -> int:
                     if hb is not None:
                         hb_u = apply_crop_optional(hb, crop_by_cam[var_name])
                         stem = _stem_from_env_var(var_name)
-                        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+                        ts = ts_for_file()
                         hb_name = f"{stem}_{ts}_heartbeat.jpg"
                         cv2.imwrite(str(out_dir / hb_name), hb_u)
                         print(f"  пульс {hb_name}")

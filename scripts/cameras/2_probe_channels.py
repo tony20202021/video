@@ -41,6 +41,7 @@ if str(_SRC) not in sys.path:
 
 from common.utils.cam_urls import collect_cam_urls, stem_sort_key  # noqa: E402
 from common.utils.motion_utils import redact_url  # noqa: E402
+from common.utils.time_msk import ts_for_dir, ts_iso  # noqa: E402
 
 
 def _scrub(text: str, password: str) -> str:
@@ -51,7 +52,7 @@ def _scrub(text: str, password: str) -> str:
     return text
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "probe_channels"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "2_probe_channels"
 
 DEFAULT_CHANNELS = [0, 1, 2, 3]
 DEFAULT_STREAMS   = [0, 1]
@@ -222,7 +223,7 @@ def main() -> int:
             print("Нужен opencv-python: pip install opencv-python", file=sys.stderr)
             return 1
 
-    run_id  = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id  = ts_for_dir()
     run_dir = args.output / f"probe_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -294,7 +295,7 @@ def main() -> int:
 
     # ── Отчёт ─────────────────────────────────────────────────────────────────
     report = {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_msk": ts_iso(),
         "ip": args.ip,
         "user": args.user,
         "channels_tested": args.channels,

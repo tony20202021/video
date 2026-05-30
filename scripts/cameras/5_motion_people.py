@@ -44,9 +44,10 @@ from common.utils.motion_utils import (
     skip_url,
     stem_from_var,
 )
+from common.utils.time_msk import ts_for_dir, ts_for_file
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "motion_people"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "5_motion_people"
 DEFAULT_MODEL = REPO_ROOT / "models" / "yolov8n.onnx"
 
 YOLO_INPUT_SIZE = 640
@@ -225,7 +226,7 @@ def main() -> int:
 
     out_dir = args.output
     if out_dir is None:
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = ts_for_dir()
         out_dir = DEFAULT_OUTPUT / f"run_{run_id}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -284,8 +285,8 @@ def main() -> int:
         crop = crop_by_cam[var_name]
         frame0c = apply_crop_optional(frame0, crop)
         stem = stem_from_var(var_name)
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-        cv2.imwrite(str(out_dir / f"{stem}__{ts}_baseline.jpg"), frame0c)
+        ts = ts_for_file()
+        cv2.imwrite(str(out_dir / f"{stem}_{ts}_baseline.jpg"), frame0c)
         prev_gray[var_name] = prepare_gray(frame0c, args.compare_width)
         print(f"  baseline: {stem}")
     print()
@@ -326,7 +327,7 @@ def main() -> int:
 
                 annotated = draw_boxes(to_c, detections)
                 stem = stem_from_var(var_name)
-                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+                ts = ts_for_file()
                 fname = f"{stem}_{ts}_p{len(detections)}.jpg"
                 cv2.imwrite(str(out_dir / fname), annotated)
                 print(f"  {fname}  diff={diff:.2f}  люди={len(detections)}")

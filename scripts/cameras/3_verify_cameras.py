@@ -36,9 +36,25 @@ if str(_SRC) not in sys.path:
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.motion_utils import redact_url as _redact_url
+from common.utils.time_msk import ts_for_dir, ts_iso
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "cam_verify"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "3_cam_verify"
+
+
+def _check_rtsp_port(host: str, port: int = 554, timeout: float = 2.0) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _extract_host(url: str) -> str | None:
+    import re
+    m = re.search(r"rtsp://(?:[^@]*@)?([^/:]+)", url)
+    return m.group(1) if m else None
 
 
 def _skip_url(url: str) -> bool:
@@ -93,7 +109,17 @@ def probe_stream(
 
         result["opened"] = cap.isOpened()
         if not result["opened"]:
+            host = _extract_host(url)
+            port_open = _check_rtsp_port(host) if host else None
+            if port_open is False:
+                cause = "порт 554 недоступен — камера offline или сеть недоступна"
+            elif port_open is True:
+                cause = "порт 554 открыт, RTSP не открылся — возможно камера занята другим клиентом или неверные credentials"
+            else:
+                cause = "не удалось определить хост"
             result["error"] = "VideoCapture.isOpened() == False"
+            result["possible_cause"] = cause
+            result["port_554_open"] = port_open
             return result
 
         props = {
@@ -210,12 +236,12 @@ def main() -> int:
         return 1
     crop_by_cam = crop_map_for_cameras(active_for_crop, global_crop=global_crop)
 
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = ts_for_dir()
     run_dir = args.output / f"cam_verify_{run_id}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     report: dict = {
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_msk": ts_iso(),
         "env_file": str(args.env.resolve()),
         "output_dir": str(run_dir.resolve()),
         "opencv_version": cv2.__version__,

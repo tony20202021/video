@@ -1,5 +1,24 @@
 # Камеры и сетевой доступ
 
+## Скрипты: сравнительная таблица
+
+| Скрипт | Что делает | Требует камеру | Выход | Когда запускать |
+|--------|-----------|:--------------:|-------|-----------------|
+| `1_scan_cameras.py` | Сканирует подсеть по портам 554/8899/34567, определяет дубли по MAC | Нет | `.output/1_scan_cameras/scan_<UTC>/report.json` | Первый раз при настройке, чтобы найти IP камер |
+| `2_probe_channels.py` | Перебирает все комбинации channel×stream по RTSP, сохраняет кадры | Да | `.output/2_probe_channels/probe_<UTC>/` — кадры + report.json | После нахождения IP, чтобы подобрать правильный channel/stream |
+| `3_verify_cameras.py` | Проверяет URL из `.env`, читает один кадр с обрезкой | Да | `.output/3_cam_verify/cam_verify_<UTC>/` — кадры + report.json | Проверить что `.env` настроен правильно |
+| `4_motion_watch.py` | Бесконечный цикл: детектирует движение (frame diff), сохраняет кадры движения и heartbeat | Да | `.output/4_motion_watch/motion_watch_<UTC>/` — baseline + motion + heartbeat | Запускать постоянно для наблюдения движения |
+| `5_motion_people.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/5_motion_people/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
+
+**Порядок первичной настройки:** `1` → `2` → `3` → `4` и/или `5`
+
+**Ключевые отличия 4 vs 5:**
+- `4_motion_watch` сохраняет любое движение без ML — легковесный, всегда работает
+- `5_motion_people` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `models/yolov8n.onnx`
+- Оба можно запускать одновременно, но они открывают одни и те же RTSP-потоки
+
+---
+
 ## Характеристики
 
 **Модель:** iCSee, уличная поворотная PTZ, 8MP (2048×1080 UWHD), H.264/H.264+/H.265/H.265+, IP66
@@ -77,6 +96,43 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
 | HTTP     | 80    |
 | ONVIF    | 8899  |
 | DVRIP    | 34567 |
+
+---
+
+## Результаты работы скриптов (`.output/`)
+
+Скрипты 2–5 сохраняют результаты в `.output/` (в `.gitignore`):
+
+```
+.output/
+  1_scan_cameras/
+    scan_<UTC>/
+      report.json        — найденные устройства, MAC, дубли, suggested URLs
+  2_probe_channels/
+    probe_<UTC>/
+      rtsp_ch0_st0.jpg   — кадр channel=0, stream=0 (основной поток)
+      rtsp_ch0_st1.jpg   — кадр channel=0, stream=1 (субпоток)
+      ...
+      report.json        — все результаты RTSP + HTTP
+  3_cam_verify/
+    cam_verify_<UTC>/
+      cam_01_9_u_frame.jpg   — кадр после обрезки (CAM_01_9_U_URL)
+      cam_01_9_d_frame.jpg
+      report.json
+  4_motion_watch/
+    motion_watch_<UTC>/
+      <cam>_<UTC>_baseline.jpg      — baseline при старте
+      <cam>_<UTC>_motion.jpg        — кадр при обнаружении движения (без ML)
+      <cam>_<UTC>_heartbeat.jpg     — периодический снимок (по таймеру, без проверки движения)
+  5_motion_people/
+    run_<UTC>/
+      <cam>_<UTC>_baseline.jpg      — baseline при старте
+      <cam>_<UTC>_p<N>.jpg          — кадр с N людьми (bbox нанесены)
+```
+
+**Формат `<UTC>` в именах файлов:** `YYYYMMDD_HHMMSS_ffffff`, где последние 6 цифр — микросекунды (`%f` в Python). Пример: `cam_01_9_d_20260418_111316_116613_baseline.jpg` → снято 2026-04-18 в 11:13:16.116613 UTC. Микросекунды нужны для уникальности при нескольких кадрах в одну секунду.
+
+**Что пишется по порогу, что без:** heartbeat-кадры (`*_heartbeat.jpg`) записываются по таймеру независимо от движения — если сцена статичная, они будут одинаковые. Кадры движения (`*_motion.jpg` / `*_p<N>.jpg`) — только когда `diff > threshold`.
 
 ---
 

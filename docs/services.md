@@ -2,6 +2,8 @@
 
 ## Backend (FastAPI)
 
+> **Статус: запланировано.** Код не написан. Telegram Bot обращается к `BACKEND_URL` из `.env`, но без запущенного backend работать не будет.
+
 **Технологии:** Python 3.11+, FastAPI, OpenCV, asyncio
 
 **Ответственности:**
@@ -29,6 +31,8 @@ GET   /cameras                 — список камер и статус по�
 ---
 
 ## ML Service (FastAPI + ONNX Runtime)
+
+> **Статус: запланировано.** Описание интерфейса — спецификация для будущей реализации.
 
 **Технологии:** Python 3.11+, FastAPI, ONNX Runtime, OpenCV, NumPy
 
