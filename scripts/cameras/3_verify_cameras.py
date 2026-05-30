@@ -187,6 +187,17 @@ def main() -> int:
         help="FFmpeg socket I/O timeout (мкс), опция stimeout (default: 8 с)",
     )
     parser.add_argument(
+        "--retry-sec",
+        type=float,
+        default=0.0,
+        help="Если камера занята — ждать N секунд и повторить (0 = не повторять)",
+    )
+    parser.add_argument(
+        "--no-hi",
+        action="store_true",
+        help="Не проверять CAM_*_HI_URL (по умолчанию HI-потоки включены)",
+    )
+    parser.add_argument(
         "--crop-rel",
         type=str,
         default=None,
@@ -225,6 +236,19 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+
+    # Добавляем HI-потоки если не передан --no-hi
+    if not args.no_hi:
+        from common.utils.cam_urls import companion_hi_url_env_key
+        hi_entries: list[tuple[str, str]] = []
+        seen_hi_urls: set[str] = set()
+        for var_name, low_url in cameras:
+            hi_key = companion_hi_url_env_key(var_name)
+            hi_url = (os.environ.get(hi_key) or "").strip()
+            if hi_url and not _skip_url(hi_url) and hi_url not in seen_hi_urls:
+                hi_entries.append((hi_key, hi_url))
+                seen_hi_urls.add(hi_url)
+        cameras = cameras + hi_entries
 
     active_for_crop = [(k, v) for k, v in cameras if not _skip_url(v)]
     crop_cli = (args.crop_rel or "").strip() or None
@@ -266,24 +290,38 @@ def main() -> int:
             print(f"  [-] {var_name}: пропуск ({entry['skip_reason']})")
             continue
 
-        print(f"  … {var_name}: подключение…")
-        try:
-            probe = probe_stream(
-                var_name,
-                url,
-                open_timeout_ms=args.open_timeout_ms,
-                read_timeout_ms=args.read_timeout_ms,
-            )
-        except Exception as e:
-            probe = {
-                "env_var": var_name,
-                "url_redacted": _redact_url(url),
-                "ok": False,
-                "opened": False,
-                "frame_read": False,
-                "error": f"{type(e).__name__}: {e}",
-                "properties": {},
-            }
+        attempts = 0
+        max_attempts = 2 if args.retry_sec > 0 else 1
+        while True:
+            attempts += 1
+            suffix = f" (попытка {attempts})" if attempts > 1 else ""
+            print(f"  … {var_name}: подключение…{suffix}")
+            try:
+                probe = probe_stream(
+                    var_name,
+                    url,
+                    open_timeout_ms=args.open_timeout_ms,
+                    read_timeout_ms=args.read_timeout_ms,
+                )
+            except Exception as e:
+                probe = {
+                    "env_var": var_name,
+                    "url_redacted": _redact_url(url),
+                    "ok": False,
+                    "opened": False,
+                    "frame_read": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "properties": {},
+                }
+            if probe.get("ok") or attempts >= max_attempts:
+                break
+            cause = probe.get("possible_cause", "")
+            if "занята" in cause or "busy" in cause.lower():
+                import time as _time
+                print(f"  [!] {var_name}: камера занята, жду {args.retry_sec:.0f} с…")
+                _time.sleep(args.retry_sec)
+            else:
+                break
 
         frame = probe.pop("_frame_bgr", None)
         stem = var_name.replace("_URL", "").lower()

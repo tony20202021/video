@@ -100,6 +100,38 @@ def pick_frame_to_save(
     return None
 
 
+def drain_cap_buffer(cap: cv2.VideoCapture, max_drain: int = 32) -> None:
+    """Дренирует накопившиеся кадры FFMPEG-буфера RTSP (FIFO).
+
+    При длительном простое HI-потока буфер накапливает устаревшие кадры.
+    Без дренажа cap.read() вернёт кадр из прошлого вместо свежего.
+    """
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    for _ in range(max_drain):
+        if not cap.grab():
+            break
+
+
+def read_hi_save_frame(
+    cap: cv2.VideoCapture,
+    *,
+    max_extra_reads: int,
+    min_laplacian_var: float,
+    min_gray_std: float,
+) -> np.ndarray | None:
+    """Дренирует буфер HI-потока и возвращает свежий годный кадр."""
+    drain_cap_buffer(cap)
+    ok, f = cap.read()
+    if not ok or f is None or f.size == 0:
+        return None
+    return pick_frame_to_save(
+        cap, f,
+        max_extra_reads=max_extra_reads,
+        min_laplacian_var=min_laplacian_var,
+        min_gray_std=min_gray_std,
+    )
+
+
 def open_cap(
     url: str,
     *,

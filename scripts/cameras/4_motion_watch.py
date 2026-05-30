@@ -41,134 +41,25 @@ if str(_SRC) not in sys.path:
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.cam_urls import resolve_hi_rtsp_url
-from common.utils.motion_utils import redact_url
+from common.utils.motion_utils import (
+    drain_cap_buffer,
+    ffmpeg_capture_options as _ffmpeg_capture_options,
+    frame_decode_plausible as _frame_decode_plausible,
+    mean_abs_diff as _mean_abs_diff,
+    open_cap as _open_capture,
+    pick_frame_to_save as _pick_frame_to_save_after_motion,
+    prepare_gray as _prepare_gray,
+    read_first_plausible_frame as _read_first_plausible_frame,
+    read_hi_save_frame as _read_hi_save_frame,
+    redact_url,
+    skip_url as _skip_url,
+    stem_from_var as _stem_from_env_var,
+)
 from common.utils.time_msk import ts_for_dir, ts_for_file
 
 DEFAULT_ENV = REPO_ROOT / ".env"
 DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "4_motion_watch"
 
-
-def _skip_url(url: str) -> bool:
-    u = (url or "").strip()
-    if not u:
-        return True
-    if u.startswith("#"):
-        return True
-    if "<" in u and ">" in u:
-        return True
-    if not u.lower().startswith("rtsp://"):
-        return True
-    return False
-
-
-def _ffmpeg_capture_options(*, use_tcp: bool, stimeout_us: int) -> str:
-    parts: list[str] = [f"stimeout;{stimeout_us}"]
-    if use_tcp:
-        parts.insert(0, "rtsp_transport;tcp")
-    return "|".join(parts)
-
-
-def _stem_from_env_var(var_name: str) -> str:
-    return var_name.replace("_URL", "").lower()
-
-
-def _prepare_gray(frame: np.ndarray, width: int) -> np.ndarray:
-    h, w = frame.shape[:2]
-    if w != width:
-        scale = width / float(w)
-        nh = max(1, int(round(h * scale)))
-        frame = cv2.resize(frame, (width, nh), interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-
-def _mean_abs_diff(prev: np.ndarray, cur: np.ndarray) -> float:
-    return float(np.mean(cv2.absdiff(prev, cur)))
-
-
-def _frame_decode_plausible(
-    bgr: np.ndarray,
-    *,
-    min_laplacian_var: float,
-    min_gray_std: float,
-) -> bool:
-    if bgr is None or bgr.size == 0:
-        return False
-    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    lap = cv2.Laplacian(g, cv2.CV_64F)
-    if float(lap.var()) < min_laplacian_var:
-        return False
-    if float(g.std()) < min_gray_std:
-        return False
-    return True
-
-
-def _read_first_plausible_frame(
-    cap: cv2.VideoCapture,
-    *,
-    max_attempts: int,
-    min_laplacian_var: float,
-    min_gray_std: float,
-) -> np.ndarray | None:
-    for _ in range(max_attempts):
-        ok, f = cap.read()
-        if (
-            ok
-            and f is not None
-            and f.size > 0
-            and _frame_decode_plausible(
-                f,
-                min_laplacian_var=min_laplacian_var,
-                min_gray_std=min_gray_std,
-            )
-        ):
-            return f
-    return None
-
-
-def _pick_frame_to_save_after_motion(
-    cap: cv2.VideoCapture,
-    first_bgr: np.ndarray,
-    *,
-    max_extra_reads: int,
-    min_laplacian_var: float,
-    min_gray_std: float,
-) -> np.ndarray | None:
-    if _frame_decode_plausible(
-        first_bgr,
-        min_laplacian_var=min_laplacian_var,
-        min_gray_std=min_gray_std,
-    ):
-        return first_bgr
-    for _ in range(max_extra_reads):
-        ok, f = cap.read()
-        if not ok or f is None or f.size == 0:
-            continue
-        if _frame_decode_plausible(
-            f,
-            min_laplacian_var=min_laplacian_var,
-            min_gray_std=min_gray_std,
-        ):
-            return f
-    return None
-
-
-def _read_hi_save_frame(
-    cap: cv2.VideoCapture,
-    *,
-    max_extra_reads: int,
-    min_laplacian_var: float,
-    min_gray_std: float,
-) -> np.ndarray | None:
-    ok, f = cap.read()
-    if not ok or f is None or f.size == 0:
-        return None
-    return _pick_frame_to_save_after_motion(
-        cap,
-        f,
-        max_extra_reads=max_extra_reads,
-        min_laplacian_var=min_laplacian_var,
-        min_gray_std=min_gray_std,
-    )
 
 
 def _open_capture(
@@ -312,6 +203,19 @@ def main() -> int:
         output_from = "аргумент --output"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Сохраняем параметры запуска сразу при старте
+    import json as _json
+    from common.utils.time_msk import ts_iso as _ts_iso
+    _run_params = {
+        "started_at_msk": _ts_iso(),
+        "script": "4_motion_watch.py",
+        "threshold": args.threshold,
+        "heartbeat_sec": None,  # заполним после вычисления
+        "tcp": args.tcp,
+        "compare_width": args.compare_width,
+        "output": str(out_dir),
+    }
+
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _ffmpeg_capture_options(
         use_tcp=args.tcp,
         stimeout_us=args.stimeout_us,
@@ -376,6 +280,16 @@ def main() -> int:
 
     prev_gray: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
     last_heartbeat: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
+
+    # Дописываем параметры и сохраняем run_params.json
+    _run_params["heartbeat_sec"] = heartbeat_sec
+    _run_params["threshold"] = threshold
+    _run_params["cameras"] = [vn for vn, _ in opened_vars]
+    _run_params["crop_global"] = list(global_crop) if global_crop else None
+    _run_params["opencv_version"] = cv2.__version__
+    (out_dir / "run_params.json").write_text(
+        _json.dumps(_run_params, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     print("Параметры запуска (фактические):")
     print(f"  env файл:                    {args.env.resolve()}")

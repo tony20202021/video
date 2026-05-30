@@ -293,6 +293,32 @@ def main() -> int:
                     print(_scrub(r["error"], args.password))
                     results.append(entry)
 
+    # ── Сравнение кадров между каналами (поиск дублей) ────────────────────────
+    duplicate_pairs: list[dict] = []
+    saved_frames = [(e, run_dir / e["frame_saved"]) for e in results
+                    if e.get("ok") and e.get("frame_saved") and e.get("proto") == "rtsp"]
+    if len(saved_frames) > 1:
+        import cv2 as _cv2
+        import numpy as _np
+        imgs = [(e, _cv2.imread(str(p))) for e, p in saved_frames if p.is_file()]
+        for i in range(len(imgs)):
+            for j in range(i + 1, len(imgs)):
+                ea, ia = imgs[i]; eb, ib = imgs[j]
+                if ia is None or ib is None or ia.shape != ib.shape:
+                    continue
+                diff = float(_np.mean(_cv2.absdiff(ia, ib)))
+                if diff < 5.0:  # порог: < 5 = почти одинаковые (только временной шум)
+                    duplicate_pairs.append({
+                        "a": ea.get("frame_saved"),
+                        "b": eb.get("frame_saved"),
+                        "mean_diff": round(diff, 2),
+                        "likely_duplicate": True,
+                    })
+        if duplicate_pairs:
+            print(f"\nВероятные дубли каналов (mean diff < 5.0):")
+            for dp in duplicate_pairs:
+                print(f"  {dp['a']} ≈ {dp['b']}  (diff={dp['mean_diff']})")
+
     # ── Отчёт ─────────────────────────────────────────────────────────────────
     report = {
         "generated_at_msk": ts_iso(),
@@ -301,6 +327,7 @@ def main() -> int:
         "channels_tested": args.channels,
         "streams_tested":  args.streams,
         "rtsp_tcp": args.tcp,
+        "duplicate_channel_pairs": duplicate_pairs,
         "results": results,
     }
     report_path = run_dir / "report.json"

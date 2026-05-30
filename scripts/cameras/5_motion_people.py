@@ -34,6 +34,7 @@ if str(_SRC) not in sys.path:
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls
 from common.utils.motion_utils import (
+    drain_cap_buffer,
     ffmpeg_capture_options,
     frame_decode_plausible,
     mean_abs_diff,
@@ -200,6 +201,11 @@ def main() -> int:
     parser.add_argument("--min-gray-std", type=float, default=2.5)
     parser.add_argument("--save-extra-reads", type=int, default=12)
     parser.add_argument("--baseline-attempts", type=int, default=16)
+    parser.add_argument(
+        "--heartbeat-sec", type=float, default=None,
+        help="Раз в N сек сохранять кадр независимо от детекции; 0 = выкл; "
+             "иначе MOTION_HEARTBEAT_SEC из .env или 600",
+    )
     args = parser.parse_args()
 
     if not args.env.is_file():
@@ -223,6 +229,12 @@ def main() -> int:
     else:
         raw_t = (os.environ.get("MOTION_DIFF_THRESHOLD") or "").strip()
         threshold = float(raw_t) if raw_t else 10.0
+
+    if args.heartbeat_sec is not None:
+        heartbeat_sec = max(0.0, float(args.heartbeat_sec))
+    else:
+        raw_hb = (os.environ.get("MOTION_HEARTBEAT_SEC") or "").strip()
+        heartbeat_sec = max(0.0, float(raw_hb)) if raw_hb else 600.0
 
     out_dir = args.output
     if out_dir is None:
@@ -269,7 +281,25 @@ def main() -> int:
         print("Ни одна камера не открылась.", file=sys.stderr)
         return 1
 
+    import json as _json
+    from common.utils.time_msk import ts_iso as _ts_iso
+    (out_dir / "run_params.json").write_text(_json.dumps({
+        "started_at_msk": _ts_iso(),
+        "script": "5_motion_people.py",
+        "threshold": threshold,
+        "conf": args.conf,
+        "nms": args.nms,
+        "model": str(args.model),
+        "tcp": args.tcp,
+        "compare_width": args.compare_width,
+        "cameras": list(caps.keys()),
+        "crop_global": list(global_crop) if global_crop else None,
+        "heartbeat_sec": heartbeat_sec,
+        "output": str(out_dir),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+
     prev_gray: dict[str, np.ndarray | None] = {k: None for k in caps}
+    last_heartbeat: dict[str, float] = {k: time.monotonic() for k in caps}
 
     print("Базовый кадр…")
     for var_name, cap in caps.items():
@@ -294,12 +324,26 @@ def main() -> int:
     try:
         while True:
             for var_name, cap in list(caps.items()):
+                # Дренируем буфер чтобы не получить устаревший кадр после медленного YOLO
+                drain_cap_buffer(cap)
                 ok, frame = cap.read()
                 if not ok or frame is None or frame.size == 0:
                     continue
                 crop = crop_by_cam[var_name]
                 frame_c = apply_crop_optional(frame, crop)
                 gray = prepare_gray(frame_c, args.compare_width)
+
+                # Heartbeat — периодический снимок независимо от детекции движения и людей
+                if heartbeat_sec > 0:
+                    now = time.monotonic()
+                    if now - last_heartbeat[var_name] >= heartbeat_sec:
+                        last_heartbeat[var_name] = now
+                        stem = stem_from_var(var_name)
+                        ts = ts_for_file()
+                        hb_name = f"{stem}_{ts}_heartbeat.jpg"
+                        cv2.imwrite(str(out_dir / hb_name), frame_c)
+                        print(f"  пульс {hb_name}")
+
                 prev = prev_gray[var_name]
                 if prev is None:
                     prev_gray[var_name] = gray
@@ -330,6 +374,19 @@ def main() -> int:
                 ts = ts_for_file()
                 fname = f"{stem}_{ts}_p{len(detections)}.jpg"
                 cv2.imwrite(str(out_dir / fname), annotated)
+
+                # Вырезаем каждого человека отдельно
+                h, w = to_c.shape[:2]
+                crops_dir = out_dir / "crops"
+                crops_dir.mkdir(exist_ok=True)
+                for idx, (x1, y1, x2, y2, conf) in enumerate(detections, 1):
+                    x1c, y1c = max(0, x1), max(0, y1)
+                    x2c, y2c = min(w, x2), min(h, y2)
+                    if x2c > x1c and y2c > y1c:
+                        crop_img = to_c[y1c:y2c, x1c:x2c]
+                        crop_name = f"{stem}_{ts}_p{idx}of{len(detections)}_conf{conf:.2f}.jpg"
+                        cv2.imwrite(str(crops_dir / crop_name), crop_img)
+
                 print(f"  {fname}  diff={diff:.2f}  люди={len(detections)}")
 
             time.sleep(0.01)
