@@ -30,3 +30,12 @@ Write-Host "  `$env:HTTPS_PROXY = `"http://127.0.0.1:$http`""
 Write-Host ""
 Write-Host "Cursor (Settings -> Http: Proxy):" -ForegroundColor Cyan
 Write-Host "  http://127.0.0.1:$http"
+Write-Host ""
+Write-Host "Apply to Cursor + Claude Code settings:" -ForegroundColor Cyan
+Write-Host "  .\sh\apply_psiphon_proxy_settings.ps1"
+Write-Host ""
+Write-Host "Or start Cursor with proxy env:" -ForegroundColor Cyan
+Write-Host "  .\sh\start_cursor_with_proxy.ps1"
+Write-Host ""
+Write-Host "Remove proxy from Cursor + Claude settings:" -ForegroundColor Cyan
+Write-Host "  .\sh\remove_psiphon_proxy_settings.ps1"
