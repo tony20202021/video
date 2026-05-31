@@ -1,0 +1,25 @@
+# Конфигурация ML-пайплайна и системы детекции
+# Используется agent.py и backend
+
+thresholds:
+  detection:
+    min_confidence: 0.35     # детекция человека (YOLOv8n)
+    nms: 0.45
+  classification:
+    min_confidence: 0.65     # классификация группы (MobileNetV3-Small)
+  identification:
+    min_confidence: 0.75     # идентификация жителя (MobileFaceNet)
+
+models:
+  detect:   models/yolov8n.onnx
+  classify: models/classify/v1.onnx   # создаётся после обучения
+  identify: models/identify/v1.onnx   # скачивается через setup_models.py
+
+temporal:
+  detection_window_size: 5   # M — размер скользящего окна
+  detection_min_hits: 3      # N — минимум срабатываний для фиксации события
+  event_end_silence_frames: 10
+
+sampling:
+  fps: 2                     # кадров/сек для анализа
+  crop_pad: 0.10             # отступ вокруг bbox при вырезке кропа (доля от bbox)

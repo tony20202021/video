@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time as _time_module
 
 import cv2
 import numpy as np
@@ -27,8 +29,13 @@ def skip_url(url: str) -> bool:
     return not u or u.startswith("#") or ("<" in u and ">" in u) or not u.lower().startswith("rtsp://")
 
 
-def ffmpeg_capture_options(*, use_tcp: bool, stimeout_us: int) -> str:
-    parts: list[str] = [f"stimeout;{stimeout_us}"]
+def ffmpeg_capture_options(
+    *,
+    use_tcp: bool,
+    stimeout_us: int,
+    rtbufsize: int = 1_048_576,  # 1 МБ — ограничивает compressed input ring-buffer FFMPEG
+) -> str:
+    parts: list[str] = [f"stimeout;{stimeout_us}", f"rtbufsize;{rtbufsize}"]
     if use_tcp:
         parts.insert(0, "rtsp_transport;tcp")
     return "|".join(parts)
@@ -76,18 +83,18 @@ def frame_decode_plausible(
                 return False
 
     # HEVC-специфичный артефакт: недекодированные блоки заполняются
-    # RGB(128,128,128) — нейтральным серым. Если >35% пикселей кадра
-    # близки к этому значению (|R-G|<12, |G-B|<12, Y∈[108,148]),
-    # кадр частично не декодирован (ловит левую/правую/любую зону).
+    # YCbCr(128,128,128) → RGB(128,128,128) — точный нейтральный серый.
+    # Используем строгий допуск ±6 и узкий диапазон [118,138] чтобы не
+    # отбрасывать ночные сцены с тёплым освещением (R>G>B, но не нейтрально).
     if bgr.ndim == 3:
         b_ch = bgr[:, :, 0].astype(np.int16)
         g_ch = bgr[:, :, 1].astype(np.int16)
         r_ch = bgr[:, :, 2].astype(np.int16)
         neutral = (
-            (np.abs(r_ch - g_ch) < 12) &
-            (np.abs(g_ch - b_ch) < 12) &
-            (g_ch > 108) &
-            (g_ch < 148)
+            (np.abs(r_ch - g_ch) < 6) &
+            (np.abs(g_ch - b_ch) < 6) &
+            (g_ch > 118) &
+            (g_ch < 138)
         )
         if float(neutral.mean()) > 0.35:
             return False
@@ -130,26 +137,17 @@ def pick_frame_to_save(
     return None
 
 
-def drain_cap_buffer(cap: cv2.VideoCapture, max_drain: int = 512, stale_ms: float = 40.0) -> None:
+def drain_cap_buffer(cap: cv2.VideoCapture, max_drain: int = 16) -> None:
     """Дренирует накопившиеся кадры FFMPEG-буфера RTSP (FIFO).
 
-    Сливает кадры пока grab() быстрый (< stale_ms) — это означает что кадры
-    уже в буфере. Когда grab() начинает блокироваться (ждёт сеть) — буфер пуст,
-    останавливаемся. Следующий cap.read() в read_hi_save_frame повторит попытку
-    с паузой если буфер оказался полностью опустошён.
-
-    Прежнее max_drain=8 (~0.67с на 12fps) было недостаточным: после долгого
-    простоя HI-потока буфер накапливал 2-3+ секунды кадров и первый кадр после
-    drain был всё равно устаревшим (задача 18b).
+    CAP_PROP_BUFFERSIZE=1 устанавливается при открытии потока (open_cap),
+    поэтому буфер обычно мал. Дренируем не более max_drain кадров без
+    таймаутов — тяжёлый timing-drain вешал процесс если поток умер
+    (первый grab() мог блокироваться до stimeout = несколько секунд).
     """
-    import time as _t
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     for _ in range(max_drain):
-        t0 = _t.monotonic()
         if not cap.grab():
-            break
-        if (_t.monotonic() - t0) * 1000 > stale_ms:
-            # grab заблокировался — буфер исчерпан, дальше ждём сеть
             break
 
 
@@ -183,6 +181,34 @@ def read_hi_save_frame(
     )
 
 
+def reopen_cap(
+    url: str,
+    caps_by_url: dict,
+    *,
+    open_timeout_ms: int,
+    read_timeout_ms: int,
+    pause_sec: float = 2.0,
+) -> bool:
+    """Закрывает старый и открывает новый VideoCapture для url.
+
+    Возвращает True если переподключение успешно. При неудаче url
+    удаляется из caps_by_url — основной цикл пропустит его.
+    """
+    import time as _t
+    old = caps_by_url.pop(url, None)
+    if old is not None:
+        try:
+            old.release()
+        except Exception:
+            pass
+    _t.sleep(pause_sec)
+    cap = open_cap(url, open_timeout_ms=open_timeout_ms, read_timeout_ms=read_timeout_ms)
+    if cap is None:
+        return False
+    caps_by_url[url] = cap
+    return True
+
+
 def open_cap(
     url: str,
     *,
@@ -195,9 +221,129 @@ def open_cap(
             cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, float(open_timeout_ms))
         if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
             cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, float(read_timeout_ms))
+        # Ограничиваем буфер одним кадром — меньше устаревших данных
+        # и быстрее drain при необходимости
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     except Exception:
         pass
     if not cap.isOpened():
         cap.release()
         return None
     return cap
+
+
+class StreamReader:
+    """Фоновый поток, непрерывно читающий один RTSP URL.
+
+    Главный цикл вызывает get_latest() — **никогда не блокируется**.
+    Поток сам переподключается при обрыве.
+
+    Использование:
+        reader = StreamReader(url, open_timeout_ms=10000, read_timeout_ms=5000)
+        reader.start()
+        ...
+        frame, ts = reader.get_latest()   # мгновенно
+        if frame is not None and reader.age_sec() < 3.0:
+            ...  # используем кадр
+        ...
+        reader.stop()
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        open_timeout_ms: int,
+        read_timeout_ms: int,
+        min_laplacian_var: float = 12.0,
+        min_gray_std: float = 2.5,
+        reconnect_pause_sec: float = 2.0,
+        scale: float = 1.0,
+    ) -> None:
+        self._url = url
+        self._open_timeout_ms = open_timeout_ms
+        self._read_timeout_ms = read_timeout_ms
+        self._min_laplacian_var = min_laplacian_var
+        self._min_gray_std = min_gray_std
+        self._reconnect_pause = reconnect_pause_sec
+        self._scale = scale  # <1.0 → уменьшить кадр перед хранением
+
+        self._lock = threading.Lock()
+        self._good_frame: np.ndarray | None = None
+        self._good_ts: float = 0.0
+
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._run, daemon=True,
+            name=f"sr-{self._url[-25:]}",
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=6)
+
+    def get_latest(self) -> tuple[np.ndarray | None, float]:
+        """Возвращает (frame, monotonic_timestamp). Никогда не блокируется."""
+        with self._lock:
+            return self._good_frame, self._good_ts
+
+    def age_sec(self) -> float:
+        """Секунд с момента последнего годного кадра."""
+        with self._lock:
+            ts = self._good_ts
+        return _time_module.monotonic() - ts if ts > 0 else float("inf")
+
+    def _run(self) -> None:
+        while self._running:
+            cap = open_cap(
+                self._url,
+                open_timeout_ms=self._open_timeout_ms,
+                read_timeout_ms=self._read_timeout_ms,
+            )
+            if cap is None:
+                _time_module.sleep(self._reconnect_pause)
+                continue
+            try:
+                fail_streak = 0
+                implausible_streak = 0
+                while self._running:
+                    ok, frame = cap.read()
+                    if ok and frame is not None and frame.size > 0:
+                        fail_streak = 0
+                        if frame_decode_plausible(
+                            frame,
+                            min_laplacian_var=self._min_laplacian_var,
+                            min_gray_std=self._min_gray_std,
+                        ):
+                            implausible_streak = 0
+                            if self._scale != 1.0:
+                                h, w = frame.shape[:2]
+                                frame = cv2.resize(
+                                    frame,
+                                    (max(1, int(w * self._scale)), max(1, int(h * self._scale))),
+                                    interpolation=cv2.INTER_AREA,
+                                )
+                            with self._lock:
+                                self._good_frame = frame
+                                self._good_ts = _time_module.monotonic()
+                        else:
+                            # ok=True но кадр битый (HEVC после обрыва/сна).
+                            # fail_streak не поможет — нужен отдельный счётчик.
+                            implausible_streak += 1
+                            if implausible_streak >= 40:
+                                break  # принудительное переподключение
+                    else:
+                        fail_streak += 1
+                        if fail_streak >= 5:
+                            break  # поток умер — переподключаемся
+                        _time_module.sleep(0.05)
+            finally:
+                cap.release()
+            if self._running:
+                _time_module.sleep(self._reconnect_pause)

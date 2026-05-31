@@ -46,16 +46,14 @@ from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, res
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.cam_urls import resolve_hi_rtsp_url
 from common.utils.motion_utils import (
-    drain_cap_buffer,
+    StreamReader,
     ffmpeg_capture_options as _ffmpeg_capture_options,
-    frame_decode_plausible as _frame_decode_plausible,
     mean_abs_diff as _mean_abs_diff,
     open_cap as _open_capture,
-    pick_frame_to_save as _pick_frame_to_save_after_motion,
     prepare_gray as _prepare_gray,
     read_first_plausible_frame as _read_first_plausible_frame,
-    read_hi_save_frame as _read_hi_save_frame,
     redact_url,
+    reopen_cap as _reopen_cap,
     skip_url as _skip_url,
     stem_from_var as _stem_from_env_var,
 )
@@ -129,8 +127,12 @@ def main() -> int:
     parser.add_argument(
         "--stimeout-us",
         type=int,
-        default=8_000_000,
+        default=3_000_000,
         help="FFmpeg stimeout, мкс",
+    )
+    parser.add_argument(
+        "--hi-scale", type=float, default=1.0,
+        help="Уменьшить HI кадр перед хранением в StreamReader (0.5 = вдвое меньше).",
     )
     parser.add_argument(
         "--min-laplacian-var",
@@ -253,29 +255,41 @@ def main() -> int:
         for vn, url in active
     }
 
-    unique_urls = set(var_low_url.values()) | set(var_hi_url.values())
+    # LOW потоки — прямые VideoCapture
     caps_by_url: dict[str, cv2.VideoCapture] = {}
-    for url in sorted(unique_urls):
-        cap = _open_capture(
+    for url in sorted(set(var_low_url.values())):
+        cap = _open_capture(url, open_timeout_ms=args.open_timeout_ms, read_timeout_ms=args.read_timeout_ms)
+        if not cap.isOpened():
+            print(f"  [!] LOW не удалось открыть: {redact_url(url)[:80]}…", file=sys.stderr)
+            cap.release()
+        else:
+            caps_by_url[url] = cap
+
+    # HI потоки — StreamReader (фоновые потоки, не блокируют основной цикл)
+    hi_readers: dict[str, StreamReader] = {}
+    for url in sorted(set(var_hi_url.values())):
+        reader = StreamReader(
             url,
             open_timeout_ms=args.open_timeout_ms,
             read_timeout_ms=args.read_timeout_ms,
+            min_laplacian_var=args.min_laplacian_var,
+            min_gray_std=args.min_gray_std,
+            scale=args.hi_scale,
         )
-        if not cap.isOpened():
-            print(f"  [!] не удалось открыть поток: {redact_url(url)[:80]}…", file=sys.stderr)
-            cap.release()
-            continue
-        caps_by_url[url] = cap
+        reader.start()
+        hi_readers[url] = reader
 
     opened_vars: list[tuple[str, str]] = [
         (vn, lu)
         for vn, lu in active
-        if lu in caps_by_url and var_hi_url[vn] in caps_by_url
+        if lu in caps_by_url and var_hi_url[vn] in hi_readers
     ]
     if not opened_vars:
         print("Ни одна камера не открылась (проверьте URL и сеть).", file=sys.stderr)
         for c in caps_by_url.values():
             c.release()
+        for r in hi_readers.values():
+            r.stop()
         return 1
 
     vars_by_low: dict[str, list[str]] = defaultdict(list)
@@ -284,6 +298,9 @@ def main() -> int:
 
     prev_gray: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
     last_heartbeat: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
+    _MAX_LOW_FAILS = 5
+    _low_fail: dict[str, int] = defaultdict(int)
+    _HI_MAX_AGE = 3.0
 
     # Дописываем параметры и сохраняем run_params.json
     _run_params["heartbeat_sec"] = heartbeat_sec
@@ -331,7 +348,7 @@ def main() -> int:
         print(f"    └ {vn}: LOW … {cr}; HI: {hi_note}")
     print("Останов: Ctrl+C\n")
 
-    print("Базовый кадр (LOW → состояние детектора, HI → файл)…")
+    print("Базовый кадр (LOW → детектор, HI → файл)…")
     for low_u, var_list in vars_by_low.items():
         cap_l = caps_by_url[low_u]
         frame_l = _read_first_plausible_frame(
@@ -345,8 +362,7 @@ def main() -> int:
                 print(f"  [!] {var_name}: нет годного LOW для baseline", file=sys.stderr)
             continue
         for var_name in var_list:
-            crop = crop_by_cam[var_name]
-            fl = apply_crop_optional(frame_l, crop)
+            fl = apply_crop_optional(frame_l, crop_by_cam[var_name])
             prev_gray[var_name] = _prepare_gray(fl, args.compare_width)
 
     by_hi_baseline: dict[str, list[str]] = defaultdict(list)
@@ -354,20 +370,20 @@ def main() -> int:
         by_hi_baseline[var_hi_url[var_name]].append(var_name)
 
     for hi_u, vlist in by_hi_baseline.items():
-        cap_h = caps_by_url[hi_u]
-        fh = _read_first_plausible_frame(
-            cap_h,
-            max_attempts=args.baseline_attempts,
-            min_laplacian_var=args.min_laplacian_var,
-            min_gray_std=args.min_gray_std,
-        )
+        reader = hi_readers[hi_u]
+        deadline = time.monotonic() + 15.0
+        fh: np.ndarray | None = None
+        while time.monotonic() < deadline:
+            fh, _ = reader.get_latest()
+            if fh is not None:
+                break
+            time.sleep(0.2)
         if fh is None:
             for var_name in vlist:
-                print(f"  [!] {var_name}: нет годного HI для baseline", file=sys.stderr)
+                print(f"  [!] {var_name}: нет HI baseline за 15с", file=sys.stderr)
             continue
         for var_name in vlist:
-            crop = crop_by_cam[var_name]
-            im = apply_crop_optional(fh, crop)
+            im = apply_crop_optional(fh, crop_by_cam[var_name])
             stem = _stem_from_env_var(var_name)
             ts0 = ts_for_file()
             bname = f"{stem}_{ts0}_baseline.jpg"
@@ -378,21 +394,25 @@ def main() -> int:
     try:
         while True:
             for low_u, var_list in vars_by_low.items():
-                cap_l = caps_by_url[low_u]
+                cap_l = caps_by_url.get(low_u)
+                if cap_l is None:
+                    if _reopen_cap(low_u, caps_by_url, open_timeout_ms=args.open_timeout_ms, read_timeout_ms=args.read_timeout_ms):
+                        print(f"  [R] LOW переподключён: {redact_url(low_u)[:60]}")
+                        _low_fail[low_u] = 0
+                    continue
                 ok_l, frame_l = cap_l.read()
                 if not ok_l or frame_l is None or frame_l.size == 0:
+                    _low_fail[low_u] += 1
+                    if _low_fail[low_u] >= _MAX_LOW_FAILS:
+                        print(f"  [!] LOW {_MAX_LOW_FAILS} сбоев — переподключение", file=sys.stderr)
+                        _reopen_cap(low_u, caps_by_url, open_timeout_ms=args.open_timeout_ms, read_timeout_ms=args.read_timeout_ms)
+                        _low_fail[low_u] = 0
                     continue
-                if not _frame_decode_plausible(
-                    frame_l,
-                    min_laplacian_var=args.min_laplacian_var,
-                    min_gray_std=args.min_gray_std,
-                ):
-                    continue
+                _low_fail[low_u] = 0
 
                 pending_motion: list[tuple[str, float, np.ndarray]] = []
                 for var_name in var_list:
-                    crop = crop_by_cam[var_name]
-                    frame_u = apply_crop_optional(frame_l, crop)
+                    frame_u = apply_crop_optional(frame_l, crop_by_cam[var_name])
                     gray = _prepare_gray(frame_u, args.compare_width)
                     prev = prev_gray[var_name]
                     if prev is None:
@@ -404,34 +424,32 @@ def main() -> int:
                     else:
                         pending_motion.append((var_name, diff, gray))
 
-                by_hi: dict[str, list[tuple[str, float, np.ndarray]]] = defaultdict(list)
-                for var_name, diff, gray_low in pending_motion:
-                    by_hi[var_hi_url[var_name]].append((var_name, diff, gray_low))
+                if pending_motion:
+                    by_hi: dict[str, list[tuple[str, float, np.ndarray]]] = defaultdict(list)
+                    for var_name, diff, gray_low in pending_motion:
+                        by_hi[var_hi_url[var_name]].append((var_name, diff, gray_low))
 
-                for hi_u, entries in by_hi.items():
-                    cap_h = caps_by_url[hi_u]
-                    to_save = _read_hi_save_frame(
-                        cap_h,
-                        max_extra_reads=args.save_extra_reads,
-                        min_laplacian_var=args.min_laplacian_var,
-                        min_gray_std=args.min_gray_std,
-                    )
-                    if to_save is None:
-                        for var_name, diff, _g in entries:
-                            print(
-                                f"  [~] {var_name}: движение diff={diff:.2f}, "
-                                f"нет годного HI — пропуск",
-                                file=sys.stderr,
-                            )
-                        continue
-                    for var_name, diff, gray_low in entries:
-                        to_u = apply_crop_optional(to_save, crop_by_cam[var_name])
-                        prev_gray[var_name] = gray_low
-                        stem = _stem_from_env_var(var_name)
-                        ts = ts_for_file()
-                        fname = f"{stem}_{ts}.jpg"
-                        cv2.imwrite(str(out_dir / fname), to_u)
-                        print(f"  сохранено {fname}  (diff={diff:.2f}, HI)")
+                    for hi_u, entries in by_hi.items():
+                        reader = hi_readers.get(hi_u)
+                        if reader is None:
+                            continue
+                        to_save, _ = reader.get_latest()  # не блокирует
+                        if to_save is None or reader.age_sec() > _HI_MAX_AGE:
+                            for var_name, diff, _ in entries:
+                                print(
+                                    f"  [~] {var_name}: движение diff={diff:.2f}, "
+                                    f"HI недоступен (age={reader.age_sec():.1f}s)",
+                                    file=sys.stderr,
+                                )
+                            continue
+                        for var_name, diff, gray_low in entries:
+                            to_u = apply_crop_optional(to_save, crop_by_cam[var_name])
+                            prev_gray[var_name] = gray_low
+                            stem = _stem_from_env_var(var_name)
+                            ts = ts_for_file()
+                            fname = f"{stem}_{ts}.jpg"
+                            cv2.imwrite(str(out_dir / fname), to_u)
+                            print(f"  сохранено {fname}  (diff={diff:.2f}, HI)")
 
                 for var_name in var_list:
                     if heartbeat_sec <= 0:
@@ -439,34 +457,28 @@ def main() -> int:
                     now = time.monotonic()
                     if now - last_heartbeat[var_name] < heartbeat_sec:
                         continue
-                    last_heartbeat[var_name] = now
-                    hi_u = var_hi_url[var_name]
-                    cap_h = caps_by_url[hi_u]
-                    hb = _read_hi_save_frame(
-                        cap_h,
-                        max_extra_reads=args.save_extra_reads,
-                        min_laplacian_var=args.min_laplacian_var,
-                        min_gray_std=args.min_gray_std,
-                    )
-                    if hb is not None:
-                        hb_u = apply_crop_optional(hb, crop_by_cam[var_name])
-                        stem = _stem_from_env_var(var_name)
-                        ts = ts_for_file()
-                        hb_name = f"{stem}_{ts}_heartbeat.jpg"
-                        cv2.imwrite(str(out_dir / hb_name), hb_u)
-                        print(f"  пульс {hb_name}")
-                    else:
-                        print(
-                            f"  [~] {var_name}: пульс — нет годного HI",
-                            file=sys.stderr,
-                        )
+                    reader = hi_readers.get(var_hi_url[var_name])
+                    if reader is None:
+                        continue
+                    hb, _ = reader.get_latest()
+                    if hb is None or reader.age_sec() > _HI_MAX_AGE * 2:
+                        continue
+                    last_heartbeat[var_name] = now  # сбрасываем только при успехе
+                    hb_u = apply_crop_optional(hb, crop_by_cam[var_name])
+                    stem = _stem_from_env_var(var_name)
+                    ts = ts_for_file()
+                    hb_name = f"{stem}_{ts}_heartbeat.jpg"
+                    cv2.imwrite(str(out_dir / hb_name), hb_u)
+                    print(f"  пульс {hb_name}")
 
-            time.sleep(0.01)
+            time.sleep(0.05)
     except KeyboardInterrupt:
         print("\nОстанов по Ctrl+C")
     finally:
         for cap in caps_by_url.values():
             cap.release()
+        for reader in hi_readers.values():
+            reader.stop()
 
     return 0
 

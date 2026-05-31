@@ -1,174 +1,220 @@
-# ML-пайплайн и обработка видео
+# ML-пайплайн: классификация и идентификация
 
 ## Модели
 
 Все модели в формате **ONNX** — единый рантайм, не требует PyTorch/TF в production.
 
-| Задача | Модель | Размер | Скорость на CPU* | Статус |
+| Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
-| Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Реализовано** — `models/yolov8n.onnx` |
-| Классификация группы | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Запланировано |
-| Детекция лица | RetinaFace-MobileNet | ~1.6 MB | ~10 мс | Запланировано |
-| Идентификация | MobileFaceNet | ~4 MB | ~5 мс/лицо | Запланировано |
-
-*Современный CPU (i5/i7), одно изображение, ONNX Runtime.
+| Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Реализовано** `models/yolov8n.onnx` |
+| Классификация группы | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Код готов, нужно обучить |
+| Идентификация жителя | MobileFaceNet | ~4 MB | ~5 мс/лицо | Код готов, нужна предобученная модель |
 
 ---
 
 ## Пайплайн (один кадр)
 
 ```
-Кадр с камеры (субпоток, напр. 640×360)
+Кадр с HI-потока (2304×2592)
       │
       ▼
-[ frame diff — отличается от предыдущего? ]
+[ frame diff на LOW → движение? ]
       │ нет → пропустить
       │ да
       ▼
-┌──────────────────────────────────────────────┐
-│  МОДЕЛЬ 1: Детекция людей                    │
-│  YOLOv8n (ONNX) — вся сцена целиком          │
-│  Выход: список bounding boxes людей          │
-└─────────────────────┬────────────────────────┘
-                      │
-          ┌───────────┴──────────┐
-     0 человек               1+ человек
-          │                      │
-     пропустить              для каждого bbox:
-     кадр                    crop + resize → 224×224
-                                  │
-                                  ▼
-              ┌───────────────────────────────────────┐
-              │  МОДЕЛЬ 2: Классификация группы       │
-              │  MobileNetV3-Small (ONNX)             │
-              │  Классы: resident / courier /         │
-              │          delivery / utilities / other │
-              └──────────────────┬────────────────────┘
-                                 │
-              ┌──────────────────┴─────────────────┐
-         class = resident                    class ≠ resident
-              │                                    │
-              │                             confidence ≥ threshold?
-              │                             ├─ нет → unclassified_groups
-              │                             └─ да → записать событие
-              │                                    (group_class, без person_id)
-              ▼
-┌─────────────────────────────────────────────────────┐
-│  МОДЕЛЬ 3a: Детекция лица (RetinaFace lite / ONNX)  │
-│  Выход: face bbox (если лицо видно)                 │
-└──────────────────────┬──────────────────────────────┘
-                       │
-         ┌─────────────┴──────────────┐
-     лицо найдено               лицо не найдено
-         │                           │
-         ▼                     использовать только
-┌─────────────────────┐        crop по всему телу
-│  face crop + align  │              │
-└──────────┬──────────┘              │
-           └──────────┬──────────────┘
-                      ▼
-        ┌─────────────────────────────────┐
-        │  МОДЕЛЬ 3b: Идентификация       │
-        │  MobileFaceNet (ONNX)           │
-        │  embedding → cosine similarity  │
-        │  с предвычисленными эмбеддингами│
-        │  жителей из БД                  │
-        └─────────────┬───────────────────┘
-                      │
-          ┌───────────┴──────────────┐
-    sim ≥ threshold              sim < threshold
-          │                           │
-    записать событие            unclassified_persons
-    (person_id, confidence)
+┌─────────────────────────────────────┐
+│  YOLOv8n: детекция людей            │
+│  → список bounding boxes            │
+└───────────────┬─────────────────────┘
+                │
+         для каждого bbox:
+         crop + resize
+                │
+                ▼
+┌─────────────────────────────────────┐
+│  MobileNetV3-Small: группа          │
+│  → resident / courier / delivery /  │
+│    utilities / other / unknown      │
+└───────────────┬─────────────────────┘
+                │
+        group == "resident"?
+                │
+                ▼
+┌─────────────────────────────────────┐
+│  MobileFaceNet: идентификация       │
+│  embedding → cosine similarity      │
+│  с эмбеддингами жителей из БД       │
+└───────────────┬─────────────────────┘
+                │
+          sim ≥ threshold?
+          ├─ да → person_id
+          └─ нет → unclassified_persons
 ```
 
 ---
 
-## Несколько людей на кадре
+## Код
 
-Каждый человек из bounding boxes обрабатывается **независимо**.
+```
+src/ml/
+  classify.py     — GroupClassifier (MobileNetV3-Small ONNX wrapper)
+  identify.py     — PersonIdentifier (MobileFaceNet + cosine similarity)
+  pipeline.py     — MLPipeline: оркестрация classify → identify
+```
 
-- Все люди из одного кадра связаны полем `frame_group_id` в коллекции events
-- Если несколько жителей из одной квартиры (`apartment_id`) идентифицированы на одном кадре → событие типа `group_pass`
-
----
-
-## Фильтрация одинаковых кадров (frame diff)
-
-Перед детекцией проверяем отличие нового кадра от предыдущего. Операция ~0.5–2 мс.
+### Использование
 
 ```python
-import cv2
-import numpy as np
+from ml.pipeline import MLPipeline, MLConfig
+from pathlib import Path
 
-def frames_differ(frame1, frame2, threshold=5.0) -> bool:
-    f1 = cv2.resize(frame1, (160, 90))
-    f2 = cv2.resize(frame2, (160, 90))
-    g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
-    g2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
-    diff = np.mean(np.abs(g1.astype(float) - g2.astype(float)))
-    return diff > threshold
+pipeline = MLPipeline(MLConfig(
+    classify_model=Path("models/classify/v1.onnx"),
+    identify_model=Path("models/identify/v1.onnx"),
+))
+
+# Загружаем эмбеддинги жителей из БД
+pipeline.load_person_embeddings({"p_001": [[0.1, 0.2, ...]]})
+
+# Обрабатываем кадр
+results = pipeline.run(bgr_frame, yolo_detections)
+for r in results:
+    print(r.group_class, r.person_id, r.identify_conf)
 ```
 
-`threshold` — это **среднее абсолютное отклонение пикселей** (mean |Δ|), измеряется в единицах яркости 0–255. Принимает дробные значения (`float`).
+### Без обученных моделей
 
-| Диапазон | Что означает |
-|----------|-------------|
-| 0–2 | Шум матрицы и сжатия Wi-Fi потока — постоянные ложные срабатывания |
-| 2–3.5 | Граница шума: при движении воздуха, дрожании камеры |
-| 3.5–10 | Небольшие изменения в сцене, тени, смена освещения |
-| 10–30 | Движение человека в кадре |
-| 60+ | Резкое изменение (включился свет, резкое движение камеры) |
-
-Подбирается экспериментально для каждой камеры. Для iCSee A31 по Wi-Fi: рабочий диапазон **3.5–5** (выше шума, ниже человека). Задаётся через `--threshold` или `MOTION_DIFF_THRESHOLD` в `.env`.
+`GroupClassifier` и `PersonIdentifier` работают без моделей — возвращают `("unknown", 0.0)`.
+Это позволяет запускать систему до обучения.
 
 ---
 
-## Логика принятия решения по последовательности кадров
+## Система разметки
 
-Real-time не требуется. Допустимая задержка — несколько секунд. Важнее точность.
-
-Одиночный кадр может дать ложный результат. Решение принимается по **скользящему окну**:
+### Workflow
 
 ```
-Кадры:     K1    K2    K3    K4    K5    K6
-Детекция:  ✓     ✓     ✗     ✓     ✓     ✓
+1. Агент обнаруживает человека → кроп + событие в MongoDB
+   (group_class=None, person_id=None → unclassified_persons)
+
+2. Админ в Telegram: /unclassified
+   → видит фото, выбирает group_class и/или person_id
+
+3. PATCH /unclassified/{id}   → reviewed=True, assigned_person_id
+
+4. POST /training/export      → скачать ZIP (images/ + labels.json)
+
+5. python scripts/train/train_classifier.py --data export.zip
+
+6. Обученная модель → models/classify/v2.onnx
 ```
 
-**Фиксация события:** детекция сработала в ≥ N из последних M кадров (например, 3 из 5)
+### API разметки
 
-**Окончание события:** детекция не срабатывает K кадров подряд → человек ушёл
+```
+GET  /unclassified                     — список неразмеченных
+PATCH /unclassified/{id}               — назначить person_id + group_class
 
-**Идентификация:** по всем кадрам события — voting, финальный person_id = большинство голосов
+POST /persons                          — создать жителя
+POST /persons/{id}/images              — добавить эталонное фото (→ вычислить эмбеддинг)
+GET  /persons                          — список жителей
+```
 
-**Трекинг нескольких людей:** по пересечению bbox между кадрами
+---
+
+## Обучение классификатора
+
+### 1. Собрать данные
+
+```bash
+# Экспортировать размеченные данные из MongoDB
+python scripts/train/export_data.py --task classify
+
+# Или через API
+GET /training/export?model=classify   → скачивает ZIP
+```
+
+### 2. Обучить модель
+
+```bash
+pip install torch torchvision
+
+python scripts/train/train_classifier.py \
+    --data .output/training/export_classify_*.zip \
+    --epochs 30
+```
+
+Результат: `models/classify/v1.onnx`
+
+### 3. Проверить метрики
+
+```
+models/classify/v1.onnx   — модель для production
+.output/training/run/training_results.json  — val_acc, history
+```
+
+### 4. Активировать
+
+Обновить `config.yaml`:
+```yaml
+models:
+  classify: models/classify/v1.onnx
+```
+
+---
+
+## Идентификация жителей
+
+### Добавить жителя
+
+```bash
+# Через API (bot отправляет фото)
+POST /persons              body: {person_id: "p_0001", name: "Иванов И.И.", apartment_id: "42"}
+POST /persons/p_0001/images  body: {image_b64: "<base64>"}
+```
+
+При добавлении фото эмбеддинг вычисляется автоматически (если модель доступна) и сохраняется в MongoDB.
+
+### Обновить эмбеддинги
+
+После смены модели (`identify/v2.onnx`) пересчитать все эмбеддинги:
+```bash
+python scripts/train/export_data.py --task identify
+```
+
+---
+
+## Структура моделей
+
+```
+models/
+  yolov8n.onnx          — детекция людей (готово)
+  classify/
+    v1.onnx             — классификатор группы (создаётся обучением)
+    v2.onnx             — следующая версия после дообучения
+  identify/
+    v1.onnx             — MobileFaceNet (скачать: scripts/setup_models.py --task identify)
+```
+
+---
+
+## Параметры качества (config.yaml)
 
 ```yaml
-# config.yaml
-temporal:
-  detection_window_size: 5      # M
-  detection_min_hits: 3         # N
-  event_end_silence_frames: 10  # кадров тишины = конец события
+thresholds:
+  detection:
+    min_confidence: 0.35   # YOLO — порог детекции человека
+  classification:
+    min_confidence: 0.65   # MobileNetV3 — ниже → "uncertain"
+  identification:
+    min_confidence: 0.75   # MobileFaceNet — ниже → unclassified_persons
 ```
 
 ---
 
-## Хранение моделей
+## Тесты
 
-Сейчас модели хранятся в `models/` в корне репозитория:
-
+```bash
+pytest tests/test_ml_pipeline.py -v
+# 18 тестов: classify, identify, pipeline, cosine similarity, preprocessing
 ```
-models/
-  yolov8n.onnx    — единственная реализованная модель
-```
-
-Когда появятся модели классификатора и идентификатора, структура будет такой:
-
-```
-models/
-  detect/     v1.0.0.onnx
-  classify/   v1.0.0.onnx
-  identify/   v1.0.0.onnx
-```
-
-Активная версия каждой модели будет указываться в `config.yaml` (файл не создан). После дообучения новая версия кладётся рядом, активируется через API.
