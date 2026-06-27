@@ -6,7 +6,7 @@
 
 Плейсхолдеры вроде <external_ip> в URL пропускаются.
 
-Обрезка склеенного кадра: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL** (как в 4_motion_watch), опционально **--crop-rel**.
+Обрезка склеенного кадра: **MOTION_CROP_REL**, **CAM_<stem>_CROP_REL** (как в 4_motion_diff_low), опционально **--crop-rel**.
 В отчёт и JPEG попадает кадр **после обрезки**; в JSON — crop_rel и размер до/после.
 
 Примечание: при недоступном RTSP часть сборок OpenCV ждёт открытия потока
@@ -39,7 +39,7 @@ from common.utils.motion_utils import redact_url as _redact_url
 from common.utils.time_msk import ts_for_dir, ts_iso
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "3_cam_verify"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "cameras" / "3_cam_verify"
 
 
 def _check_rtsp_port(host: str, port: int = 554, timeout: float = 2.0) -> bool:

@@ -25,5 +25,8 @@ pyyaml==6.0.2
 python-dotenv==1.1.0
 pydantic-settings==2.13.1
 
+# Video/RTSP timestamps
+av>=12.0.0                 # pyav: RTSP demux (используется в bench/fps_bench.py)
+
 # Tests
 pytest==9.0.3

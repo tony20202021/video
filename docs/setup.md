@@ -101,6 +101,60 @@ python -c "import fastapi; print('OK')"
 
 ---
 
+## Как организовано окружение и как вызывать Python
+
+### Имя окружения
+
+`conda_video` — прописано в `.env` как `CONDA_ENV=conda_video`.  
+`sh/start_bot.sh` читает это значение и активирует окружение автоматически (Linux-сервер).
+
+### Полный путь к Python (Windows)
+
+```
+C:\Users\Anton\miniconda3\envs\conda_video\python.exe
+```
+
+### Почему `conda` не находится в некоторых терминалах
+
+`conda init` прописывает хук активации в профиль PowerShell:
+
+```
+C:\Users\Anton\Documents\WindowsPowerShell\profile.ps1
+```
+
+Профиль загружается только в **интерактивных** сессиях. Неинтерактивные сессии (скрипты, IDE, Claude Code) профиль не запускают → `conda` нет в PATH.
+
+В обычном PowerShell / Anaconda Prompt — `conda activate conda_video` работает штатно.
+
+### Три способа вызвать Python в окружении
+
+**1. Прямой путь — самый надёжный, работает везде:**
+
+```powershell
+$py = "C:\Users\Anton\miniconda3\envs\conda_video\python.exe"
+& $py scripts/cameras/5_diff_yolo_boxes_low.py
+& $py -m pytest tests/ -v
+```
+
+**2. Через conda.exe по полному пути (форегранд):**
+
+```powershell
+& "C:\Users\Anton\miniconda3\Scripts\conda.exe" run -n conda_video python scripts/...
+```
+
+> `conda run` в фоне (с `Start-Process`) не работает — завершается с exit 255.  
+> Для фонового запуска используй способ 1 с `-u` флагом (см. `docs/bench.md`).
+
+**3. Добавить conda в PATH на время сессии:**
+
+```powershell
+$env:PATH = "C:\Users\Anton\miniconda3\condabin;" + $env:PATH
+conda activate conda_video
+# теперь python и pytest доступны напрямую
+```
+
+---
+
 ## Скачивание ML-моделей
 
 После установки зависимостей нужно подготовить ONNX-модели (папка `models/`).

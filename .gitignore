@@ -1,8 +1,9 @@
 .claude/
-.config.md
-.plan.md
+.config
+.plan
 .env
 .data/
+.models/
 .output/
 __pycache__/
 *.pyc

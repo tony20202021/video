@@ -138,8 +138,8 @@ video/
       1_scan_cameras.py   — поиск камер в сети по портам
       2_probe_channels.py — перебор channel×stream (XM/iCSee)
       3_verify_cameras.py — проверка RTSP + сохранение кадра
-      4_motion_watch.py   — frame diff по субпотоку, сохранение с HI
-      5_motion_people.py  — motion diff → YOLOv8n → кадры с людьми
+      4_motion_diff_low.py — frame diff по субпотоку, сохранение LOW-кадра
+      5_diff_yolo_boxes_low.py  — motion diff → YOLOv8n → кадры с людьми
     setup_models.py       — скачать и конвертировать ONNX-модели
     bot/run_bot.py        — запуск Telegram Bot
   sh/                     — shell скрипты (start_bot.sh, psiphon_proxy.ps1)
@@ -147,8 +147,8 @@ video/
     1_scan_cameras/       — отчёты 1_scan_cameras.py
     2_probe_channels/     — кадры и отчёты 2_probe_channels.py
     3_cam_verify/         — кадры и отчёты 3_verify_cameras.py
-    4_motion_watch/       — baseline и кадры движения 4_motion_watch.py
-    5_motion_people/      — кадры с людьми (bbox) 5_motion_people.py
+    4_motion_diff_low/    — baseline и кадры движения 4_motion_diff_low.py
+    5_diff_yolo_boxes_low/ — кадры с людьми (bbox) 5_diff_yolo_boxes_low.py
   docs/
     overview.md           — этот файл
     setup.md              — Python, conda, окружение, requirements.txt

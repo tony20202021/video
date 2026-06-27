@@ -40,7 +40,7 @@ from common.utils.person_detector import detect_people, load_model
 from common.utils.time_msk import ts_for_file, ts_iso
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_MODEL = REPO_ROOT / "models" / "yolov8n.onnx"
+DEFAULT_MODEL = REPO_ROOT / ".models" / "yolov8n.onnx"
 DEFAULT_CONFIG = REPO_ROOT / "agents.yaml"
 
 

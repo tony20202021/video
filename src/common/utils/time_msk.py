@@ -22,3 +22,13 @@ def ts_for_dir() -> str:
 def ts_iso() -> str:
     """ISO 8601 с явным офсетом +03:00 для JSON-полей."""
     return now_msk().isoformat()
+
+
+def ts_cam_for_file(cam_dt: "datetime | None") -> str:
+    """
+    Метка времени камеры для имён файлов: cam_YYYYMMDD_HHMMSS
+    Если cam_dt=None — возвращает 'cam_unknown'.
+    """
+    if cam_dt is None:
+        return "cam_unknown"
+    return cam_dt.strftime("cam_%Y%m%d_%H%M%S")

@@ -120,6 +120,39 @@ POST /persons/{id}/images              — добавить эталонное �
 GET  /persons                          — список жителей
 ```
 
+### Веб-интерфейс разметки (label_ui)
+
+`scripts/train/4_label_ui.py` — локальный Flask-сервер для ручной разметки кропов.  
+Открывает браузер автоматически. Метки сохраняются в `labels.json` при каждом клике.
+
+```bash
+# Разметить кропы из последнего прогона 5_diff_yolo_boxes_low
+python scripts/train/4_label_ui.py
+
+# Указать конкретный каталог и порт
+python scripts/train/4_label_ui.py --input .output/cameras/5_diff_yolo_boxes_low/run_XXX/crops --port 5050
+
+# Сохранить метки в явный файл
+python scripts/train/4_label_ui.py --labels .output/train/4_label_ui/labels.json
+```
+
+**Горячие клавиши в браузере:**
+
+| Клавиша | Действие |
+|---------|----------|
+| `1` | resident |
+| `2` | courier |
+| `3` | delivery |
+| `4` | utilities |
+| `5` | other |
+| `→` | следующий |
+| `←` | предыдущий |
+| `U` | пропустить |
+
+Классы соответствуют `CLASSES` в `src/ml/classify.py`.
+
+Результат: `labels.json` → передать в `1_export_data.py` или сохранить для дообучения.
+
 ---
 
 ## Обучение классификатора
@@ -215,6 +248,88 @@ thresholds:
 ## Тесты
 
 ```bash
-pytest tests/test_ml_pipeline.py -v
-# 18 тестов: classify, identify, pipeline, cosine similarity, preprocessing
+# Unit-тесты ML и utils
+pytest tests/test_ml_pipeline.py tests/test_motion_utils.py tests/test_osd_time.py -v
+
+# Интеграционные тесты на реальных данных (требует tests/data/)
+pytest tests/test_integration.py -v
+
+# Все тесты
+pytest tests/ -q
 ```
+
+---
+
+## Временны́е метки кадра (OSD)
+
+Камера iCSee записывает время в правый верхний угол кадра (`YYYY-MM-DD HH:MM:SS`).
+Модуль `src/common/utils/osd_time.py` извлекает это время без OCR-библиотек:
+
+```python
+from common.utils.osd_time import extract_osd_time
+cam_dt = extract_osd_time(hi_frame)   # datetime | None
+```
+
+Шаблоны цифр хранятся в `models/osd_templates.npz`.
+Сборка шаблонов из нового кадра с известным временем:
+
+```python
+from common.utils.osd_time import build_templates_from_frame
+build_templates_from_frame(frame, "2026-05-31 14:49:31")
+```
+
+Включение в `5_diff_yolo_boxes_low.py`:
+```
+python scripts/cameras/5_diff_yolo_boxes_low.py --cam-ts
+```
+Имя файла: `{stem}_{cam_YYYYMMDD_HHMMSS}_{pc_метка}_{suffix}.jpg`
+
+### Точное время через RTCP NTP
+
+Модуль `src/common/utils/rtcp_time.py` извлекает точное время из сетевых пакетов RTSP/TCP.  
+Метод: RTCP Sender Report (PT=200) содержит 64-bit NTP timestamp — точность ±0.1 сек.
+
+```python
+from common.utils.rtcp_time import RtcpTimingReader
+
+reader = RtcpTimingReader(rtsp_url)
+calib = reader.get_calibration(timeout=5.0)  # ждём первый RTCP SR
+if calib:
+    # calib.ntp_unix  — Unix timestamp из NTP (wall clock камеры)
+    # calib.rtp_ts    — соответствующий RTP timestamp
+    # calib.clock_rate — частота часов (обычно 90000)
+    cam_time = calib.rtp_to_datetime(rtp_ts)
+```
+
+Отличие от OSD: OSD даёт точность 1 сек (по экранным цифрам), RTCP — субсекундную.  
+OSD работает без подключения к сети (из уже захваченного кадра), RTCP требует отдельного RTSP соединения.
+
+---
+
+## Бенчмарки
+
+```bash
+# FPS пропускная способность по компонентам
+python scripts/bench/fps_bench.py --duration 30
+
+# Сравнение детекции LOW vs HI разрешения
+python scripts/bench/compare_lohi.py --pairs 20
+
+# Рассинхрон LOW/HI потоков + camera-PC offset
+python scripts/bench/sync_offset.py --duration 60 --cam-ts
+```
+
+---
+
+## Тестовые данные
+
+```bash
+# Собрать представительную выборку из .output/
+python scripts/utils/collect_test_frames.py
+```
+
+Структура `tests/data/`:
+- `raw_pairs/` — HI-кадры при срабатывании порога движения
+- `no_person/` — heartbeat кадры (пустая сцена)
+- `with_person/` — кадры с обнаруженными людьми
+- `artifacts/` — маленькие/нетипичные кадры

@@ -52,7 +52,7 @@ def _scrub(text: str, password: str) -> str:
     return text
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "2_probe_channels"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "cameras" / "2_probe_channels"
 
 DEFAULT_CHANNELS = [0, 1, 2, 3]
 DEFAULT_STREAMS   = [0, 1]

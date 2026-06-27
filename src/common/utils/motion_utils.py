@@ -45,17 +45,13 @@ def stem_from_var(var_name: str) -> str:
     return var_name.replace("_URL", "").lower()
 
 
-def prepare_gray(frame: np.ndarray, width: int) -> np.ndarray:
-    h, w = frame.shape[:2]
-    if w != width:
-        scale = width / float(w)
-        nh = max(1, int(round(h * scale)))
-        frame = cv2.resize(frame, (width, nh), interpolation=cv2.INTER_AREA)
+def prepare_gray(frame: np.ndarray, width: int = 0) -> np.ndarray:
+    # width ignored: cv2.norm(NORM_L1) быстрее resize+norm, ресайз контрпродуктивен
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
 def mean_abs_diff(prev: np.ndarray, cur: np.ndarray) -> float:
-    return float(np.mean(cv2.absdiff(prev, cur)))
+    return cv2.norm(prev, cur, cv2.NORM_L1) / prev.size
 
 
 def frame_decode_plausible(
@@ -259,6 +255,8 @@ class StreamReader:
         min_gray_std: float = 2.5,
         reconnect_pause_sec: float = 2.0,
         scale: float = 1.0,
+        extract_cam_ts: bool = False,
+        decode_max_fps: float = 0.0,
     ) -> None:
         self._url = url
         self._open_timeout_ms = open_timeout_ms
@@ -267,13 +265,19 @@ class StreamReader:
         self._min_gray_std = min_gray_std
         self._reconnect_pause = reconnect_pause_sec
         self._scale = scale  # <1.0 → уменьшить кадр перед хранением
+        self._extract_cam_ts = extract_cam_ts
+        # decode_max_fps > 0: после каждого годного кадра спим, ограничивая декодирование
+        self._decode_min_interval = 1.0 / decode_max_fps if decode_max_fps > 0 else 0.0
 
         self._lock = threading.Lock()
         self._good_frame: np.ndarray | None = None
         self._good_ts: float = 0.0
+        self._good_cam_ts: "datetime | None" = None  # время из OSD камеры
+        self._rtcp_calib: "object | None" = None      # RtcpCalibration | None
 
         self._running = False
         self._thread: threading.Thread | None = None
+        self._rtcp_thread: "threading.Thread | None" = None
 
     def start(self) -> None:
         self._running = True
@@ -282,6 +286,12 @@ class StreamReader:
             name=f"sr-{self._url[-25:]}",
         )
         self._thread.start()
+        # Фоновый поток для RTCP NTP калибровки
+        self._rtcp_thread = threading.Thread(
+            target=self._run_rtcp, daemon=True,
+            name=f"rtcp-{self._url[-20:]}",
+        )
+        self._rtcp_thread.start()
 
     def stop(self) -> None:
         self._running = False
@@ -292,6 +302,16 @@ class StreamReader:
         """Возвращает (frame, monotonic_timestamp). Никогда не блокируется."""
         with self._lock:
             return self._good_frame, self._good_ts
+
+    def get_cam_ts(self) -> "datetime | None":
+        """Время камеры из OSD (None если extract_cam_ts=False или не распознано)."""
+        with self._lock:
+            return self._good_cam_ts
+
+    def get_rtcp_calib(self) -> "object | None":
+        """RtcpCalibration если получена, иначе None."""
+        with self._lock:
+            return self._rtcp_calib
 
     def age_sec(self) -> float:
         """Секунд с момента последнего годного кадра."""
@@ -313,6 +333,7 @@ class StreamReader:
                 fail_streak = 0
                 implausible_streak = 0
                 while self._running:
+                    _t0 = _time_module.monotonic()
                     ok, frame = cap.read()
                     if ok and frame is not None and frame.size > 0:
                         fail_streak = 0
@@ -329,9 +350,28 @@ class StreamReader:
                                     (max(1, int(w * self._scale)), max(1, int(h * self._scale))),
                                     interpolation=cv2.INTER_AREA,
                                 )
+                            # Извлекаем время камеры из OSD
+                            if self._extract_cam_ts:
+                                try:
+                                    from common.utils.osd_time import extract_osd_time
+                                    cam_ts = extract_osd_time(frame)
+                                except Exception:
+                                    cam_ts = None
+                            else:
+                                cam_ts = None
                             with self._lock:
                                 self._good_frame = frame
                                 self._good_ts = _time_module.monotonic()
+                                if cam_ts is not None:
+                                    self._good_cam_ts = cam_ts
+                            # Ограничение частоты декодирования: спим остаток интервала.
+                            # Во время сна буфер VideoCapture (размер=1) накапливает
+                            # последний кадр — при следующем cap.read() получим свежий кадр.
+                            if self._decode_min_interval > 0:
+                                _elapsed = _time_module.monotonic() - _t0
+                                _sleep = self._decode_min_interval - _elapsed
+                                if _sleep > 0:
+                                    _time_module.sleep(_sleep)
                         else:
                             # ok=True но кадр битый (HEVC после обрыва/сна).
                             # fail_streak не поможет — нужен отдельный счётчик.
@@ -347,3 +387,19 @@ class StreamReader:
                 cap.release()
             if self._running:
                 _time_module.sleep(self._reconnect_pause)
+
+    def _run_rtcp(self) -> None:
+        """Фоновый поток: получает RTCP SR и обновляет калибровку периодически."""
+        try:
+            from common.utils.rtcp_time import RtcpTimingReader
+        except ImportError:
+            return
+
+        reader = RtcpTimingReader(self._url)
+        while self._running:
+            calib = reader.get_calibration(timeout=10.0)
+            if calib is not None:
+                with self._lock:
+                    self._rtcp_calib = calib
+            # Обновляем калибровку раз в 5 минут (RTCP SR приходят ~каждые 5 сек)
+            _time_module.sleep(300 if calib else 30)

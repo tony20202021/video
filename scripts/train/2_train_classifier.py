@@ -211,7 +211,7 @@ def train(
     model.eval()
 
     # Определяем следующий номер версии
-    classify_dir = REPO_ROOT / "models" / "classify"
+    classify_dir = REPO_ROOT / ".models" / "classify"
     classify_dir.mkdir(parents=True, exist_ok=True)
     existing = sorted(classify_dir.glob("v*.onnx"))
     next_v = len(existing) + 1
@@ -251,7 +251,7 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-split", type=float, default=0.2)
-    ap.add_argument("--output", type=Path, default=REPO_ROOT / ".output" / "training" / "run")
+    ap.add_argument("--output", type=Path, default=REPO_ROOT / ".output" / "train" / "2_train_classifier" / "run")
     args = ap.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)

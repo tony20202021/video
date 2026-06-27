@@ -27,7 +27,7 @@ def _now_msk_dir() -> str:
     return datetime.now(MSK).strftime("%Y%m%d_%H%M%S_msk")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "1_scan_cameras"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "cameras" / "1_scan_cameras"
 
 CAMERA_PORTS = {
     554: "RTSP",

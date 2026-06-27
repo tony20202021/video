@@ -77,14 +77,14 @@ def test_ffmpeg_options_tcp():
 
 def test_prepare_gray_output_shape():
     frame = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
-    gray = prepare_gray(frame, width=320)
+    gray = prepare_gray(frame)
     assert gray.ndim == 2
-    assert gray.shape[1] == 320
+    assert gray.shape == (480, 640)
 
 
-def test_prepare_gray_already_correct_width():
+def test_prepare_gray_preserves_size():
     frame = np.random.randint(0, 255, (240, 320, 3), dtype=np.uint8)
-    gray = prepare_gray(frame, width=320)
+    gray = prepare_gray(frame)
     assert gray.shape == (240, 320)
 
 

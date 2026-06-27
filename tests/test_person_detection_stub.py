@@ -73,7 +73,7 @@ def _run_eval_with_stub(data_dir: Path, stub_detect) -> dict:
     with patch("common.utils.person_detector.detect_people", side_effect=stub_detect):
         with patch("common.utils.person_detector.load_model", return_value=object()):
             return mod.run_eval(
-                model_path=REPO_ROOT / "models" / "yolov8n.onnx",
+                model_path=REPO_ROOT / ".models" / "yolov8n.onnx",
                 data_dir=data_dir,
                 conf=0.35,
             )

@@ -1,4 +1,4 @@
-"""Обрезка кадра по долям x,y,w,h (0…1) — общая логика для 4_motion_watch и 3_verify_cameras."""
+"""Обрезка кадра по долям x,y,w,h (0…1) — общая логика для 4_motion_diff_low, 5_diff_yolo_boxes_low и 3_verify_cameras."""
 
 from __future__ import annotations
 

@@ -7,14 +7,14 @@
 | `1_scan_cameras.py` | Сканирует подсеть по портам 554/8899/34567, определяет дубли по MAC | Нет | `.output/1_scan_cameras/scan_<UTC>/report.json` | Первый раз при настройке, чтобы найти IP камер |
 | `2_probe_channels.py` | Перебирает все комбинации channel×stream по RTSP, сохраняет кадры | Да | `.output/2_probe_channels/probe_<UTC>/` — кадры + report.json | После нахождения IP, чтобы подобрать правильный channel/stream |
 | `3_verify_cameras.py` | Проверяет URL из `.env`, читает один кадр с обрезкой | Да | `.output/3_cam_verify/cam_verify_<UTC>/` — кадры + report.json | Проверить что `.env` настроен правильно |
-| `4_motion_watch.py` | Бесконечный цикл: детектирует движение (frame diff), сохраняет кадры движения и heartbeat | Да | `.output/4_motion_watch/motion_watch_<UTC>/` — baseline + motion + heartbeat | Запускать постоянно для наблюдения движения |
-| `5_motion_people.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/5_motion_people/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
+| `4_motion_diff_low.py` | Цикл: детектирует движение (frame diff по LOW), сохраняет LOW-кадры и heartbeat | Да | `.output/cameras/4_motion_diff_low/run_<ts>/` — baseline + motion + heartbeat | Накопление кадров без ML; отладка порога |
+| `5_diff_yolo_boxes_low.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/cameras/5_diff_yolo_boxes_low/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
 
 **Порядок первичной настройки:** `1` → `2` → `3` → `4` и/или `5`
 
 **Ключевые отличия 4 vs 5:**
-- `4_motion_watch` сохраняет любое движение без ML — легковесный, всегда работает
-- `5_motion_people` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `models/yolov8n.onnx`
+- `4_motion_diff_low` сохраняет любое движение без ML — только LOW-поток, легковесный
+- `5_diff_yolo_boxes_low` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `models/yolov8n.onnx`
 - Оба можно запускать одновременно, но они открывают одни и те же RTSP-потоки
 
 ---
@@ -70,7 +70,7 @@ rtsp://<IP>:554/user=<USER>&password=<PASSWORD>&channel=1&stream=0.sdp?real_stre
 - `stream=0` — основной поток (макс. разрешение канала, до ~25 fps) — для полноразмерных кадров (архив, ML)
 - `stream=1` — субпоток (уменьшенное разрешение того же канала) — для лёгкого анализа (меньше нагрузка на CPU)
 
-В **`4_motion_watch.py`** по умолчанию: **`CAM_<stem>_URL`** — субпоток (часто `stream=1`), детекция движения; **`CAM_<stem>_HI_URL`** — основной поток (часто `stream=0`), сохранение baseline / событий / heartbeat. Если `HI_URL` не задан, высокий и низкий совпадают.
+**`4_motion_diff_low.py`** работает только с **`CAM_<stem>_URL`** — субпоток (часто `stream=1`), детекция движения и сохранение. `CAM_<stem>_HI_URL` игнорируется.
 
 **Два объектива → два URL в `.env`:** один и тот же `rtsp://<IP>:554/...`, отличается только **`channel`** (и при необходимости параллельно подобрать `stream`). Имена переменных — **`CAM_<stem>_URL`**, где `stem` — любой непустой идентификатор (цифры, хвост вроде `_9_U` / `_10_D` для IP и половины склейки). Пример с парой низкий/высокий поток для одной склейки (один `channel`, разный `stream`):
 
@@ -82,7 +82,7 @@ CAM_01_9_D_HI_URL=rtsp://<IP>:554/user=...&password=...&channel=0&stream=0.sdp?r
 CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_stream
 ```
 
-**Один RTSP, картинка склеена из двух линз:** устройство A31 (проверено на `<ip>`) возвращает **один склеенный кадр 2304×2592 на всех channel=0..3** — две камеры расположены вертикально. HTTP snapshot (`/webcapture.jpg`, `/snapshot.jpg` и пр.) возвращает HTTP 400. Используйте один URL (`channel=0&stream=1`) и обрезку: **`MOTION_CROP_REL`** или **`CAM_<stem>_CROP_REL`** (доли **x,y,w,h**) — см. раздел про `4_motion_watch.py` ниже.
+**Один RTSP, картинка склеена из двух линз:** устройство A31 (проверено на `<ip>`) возвращает **один склеенный кадр 2304×2592 на всех channel=0..3** — две камеры расположены вертикально. HTTP snapshot (`/webcapture.jpg`, `/snapshot.jpg` и пр.) возвращает HTTP 400. Используйте один URL (`channel=0&stream=1`) и обрезку: **`MOTION_CROP_REL`** или **`CAM_<stem>_CROP_REL`** (доли **x,y,w,h**) — см. раздел про `4_motion_diff_low.py` ниже.
 
 **Важно:** переменные **`CAM_*_HI_URL`** не являются отдельными «камерами» в `.env` (в список для скриптов не попадают — только **`CAM_*_URL`**). Пара задаётся так: **`CAM_<stem>_URL`** (субпоток) + **`CAM_<stem>_HI_URL`** (main).
 
@@ -119,12 +119,12 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
       cam_01_9_u_frame.jpg   — кадр после обрезки (CAM_01_9_U_URL)
       cam_01_9_d_frame.jpg
       report.json
-  4_motion_watch/
-    motion_watch_<UTC>/
-      <cam>_<UTC>_baseline.jpg      — baseline при старте
-      <cam>_<UTC>_motion.jpg        — кадр при обнаружении движения (без ML)
-      <cam>_<UTC>_heartbeat.jpg     — периодический снимок (по таймеру, без проверки движения)
-  5_motion_people/
+  4_motion_diff_low/
+    run_<UTC>/
+      <cam>_<UTC>_baseline.jpg         — baseline при старте
+      <cam>_<UTC>_diff<N>.jpg          — LOW-кадр при обнаружении движения (diff=N)
+      <cam>_<UTC>_heartbeat.jpg        — периодический снимок (по таймеру)
+  5_diff_yolo_boxes_low/
     run_<UTC>/
       <cam>_<UTC>_baseline.jpg      — baseline при старте
       <cam>_<UTC>_p<N>.jpg          — кадр с N людьми (bbox нанесены)
@@ -180,7 +180,7 @@ python scripts/cameras/2_probe_channels.py --http-only
 
 ### Проверка подключения (`3_verify_cameras.py`)
 
-Скрипт `scripts/cameras/3_verify_cameras.py` загружает `.env`, для каждой переменной **`CAM_<stem>_URL`** (напр. `CAM_01_URL`, `CAM_01_9_U_URL`, `CAM_01_10_D_URL`) с реальным `rtsp://` открывает поток, читает **один кадр** и собирает **свойства потока** (разрешение, fps, backend OpenCV и т.д.). Переменные **`CAM_*_HI_URL`** скрипт **не** опрашивает — при необходимости проверьте главный поток отдельно (временно подставив URL в тест или второй вызов). Обрезка: **`MOTION_CROP_REL`**, **`CAM_<stem>_CROP_REL`**, **`--crop-rel`** — как в `4_motion_watch.py`; в JPEG и `report.json` — кадр **после** обрезки, плюс `crop_rel` / `frame_shape_before_crop`. Плейсхолдеры вроде `<external_ip>` пропускаются. Результаты — `.output/cam_verify/cam_verify_<метка>/`: `report.json` и `cam_01_9_u_frame.jpg` и т.д. (имя файла из stem).
+Скрипт `scripts/cameras/3_verify_cameras.py` загружает `.env`, для каждой переменной **`CAM_<stem>_URL`** (напр. `CAM_01_URL`, `CAM_01_9_U_URL`, `CAM_01_10_D_URL`) с реальным `rtsp://` открывает поток, читает **один кадр** и собирает **свойства потока** (разрешение, fps, backend OpenCV и т.д.). Переменные **`CAM_*_HI_URL`** скрипт **не** опрашивает — при необходимости проверьте главный поток отдельно (временно подставив URL в тест или второй вызов). Обрезка: **`MOTION_CROP_REL`**, **`CAM_<stem>_CROP_REL`**, **`--crop-rel`** — как в `4_motion_diff_low.py`; в JPEG и `report.json` — кадр **после** обрезки, плюс `crop_rel` / `frame_shape_before_crop`. Плейсхолдеры вроде `<external_ip>` пропускаются. Результаты — `.output/cam_verify/cam_verify_<метка>/`: `report.json` и `cam_01_9_u_frame.jpg` и т.д. (имя файла из stem).
 
 Из корня репозитория:
 
@@ -192,29 +192,27 @@ python scripts/cameras/3_verify_cameras.py --crop-rel 0,0,1,0.5
 
 Флаг `--tcp` включает RTSP поверх TCP — полезно через NAT или нестабильный Wi‑Fi. Поиск камер в локальной сети по портам — отдельно `scripts/cameras/1_scan_cameras.py`.
 
-### Наблюдение изменений кадра (`4_motion_watch.py`)
+### Накопление кадров движения (`4_motion_diff_low.py`)
 
-Скрипт `scripts/cameras/4_motion_watch.py`:
+Скрипт `scripts/cameras/4_motion_diff_low.py` — только LOW-поток (`CAM_<stem>_URL`).
 
-- **`CAM_<stem>_URL`** — **низкое разрешение** (субпоток, обычно `stream=1`): по нему идёт сравнение кадров (после обрезки, уменьшение до **`compare-width`**, grayscale).
-- **`CAM_<stem>_HI_URL`** — **высокое разрешение** (главный поток, обычно `stream=0`): с него пишутся **baseline**, кадры при движении и **`…_heartbeat.jpg`**. Если переменная не задана, для сохранения используется тот же URL, что и у **`CAM_*_URL`**.
+Несколько логических камер с **одинаковым** `CAM_*_URL` (например U и D с одной склейки) открывают **один** `VideoCapture`: один `read()` за такт, обрезки применяются отдельно.
 
-Несколько логических камер с **одинаковым** `CAM_*_URL` (например U и D с одной склейки) открывают **один** `VideoCapture` на этот RTSP: за такт делается **один** `read()` низкого потока, обрезки считаются отдельно — субпоток не читается дважды. Для HI при срабатывании движения нескольких «половин» с **одним** `CAM_*_HI_URL` делается **одно** чтение главного потока и две обрезки в файл.
+При старте: читает первый годный LOW-кадр, сохраняет как baseline, задаёт внутреннее состояние детектора. Порог: **`MOTION_DIFF_THRESHOLD`** / **`--threshold`**. Пульс: **`MOTION_HEARTBEAT_SEC`** / **`--heartbeat-sec`**.
 
-При старте: сначала кадр LOW задаёт внутреннее состояние детектора, затем с HI сохраняются baseline JPEG в `.output/motion_watch/motion_watch_<UTC>/` (или `--output`). Порог: **`MOTION_DIFF_THRESHOLD`** / **`--threshold`**. Пульс: **`MOTION_HEARTBEAT_SEC`** / **`--heartbeat-sec`**.
-
-**Склеенный кадр (две линзы в одном изображении):** в `.env` задаётся обрезка в долях **x,y,w,h** от 0 до 1. Глобально **`MOTION_CROP_REL`**, для одной переменной — **`CAM_<stem>_CROP_REL`**. Те же доли применяются и к LOW, и к HI. Вертикальная черта: слева **`0,0,0.5,1`**, справа **`0.5,0,0.5,1`**. Горизонтальная: сверху **`0,0,1,0.5`**, снизу **`0,0.5,1,0.5`**.
+**Склеенный кадр:** обрезка в долях **x,y,w,h**. Глобально **`MOTION_CROP_REL`**, для одной переменной — **`CAM_<stem>_CROP_REL`**. Горизонтальная: сверху **`0,0,1,0.5`**, снизу **`0,0.5,1,0.5`**.
 
 ```bash
-python scripts/cameras/4_motion_watch.py
-python scripts/cameras/4_motion_watch.py --tcp --threshold 12
-python scripts/cameras/4_motion_watch.py --heartbeat-sec 300
-python scripts/cameras/4_motion_watch.py --crop-rel 0,0,1,0.5
+python scripts/cameras/4_motion_diff_low.py
+python scripts/cameras/4_motion_diff_low.py --tcp --threshold 12
+python scripts/cameras/4_motion_diff_low.py --heartbeat-sec 300
+python scripts/cameras/4_motion_diff_low.py --crop-rel 0,0,1,0.5
+python scripts/cameras/4_motion_diff_low.py --duration 3600   # остановиться через 1 час
 ```
 
-### Детекция людей (`5_motion_people.py`)
+### Детекция людей (`5_diff_yolo_boxes_low.py`)
 
-Скрипт `scripts/cameras/5_motion_people.py` использует тот же motion-цикл, но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person). Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
+Скрипт `scripts/cameras/5_diff_yolo_boxes_low.py` использует тот же motion-цикл (только LOW-поток), но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person) непосредственно на LOW-кадре. Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
 
 Перед первым запуском скачать модель (~6 MB):
 
@@ -224,12 +222,81 @@ wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/y
 ```
 
 ```bash
-python scripts/cameras/5_motion_people.py
-python scripts/cameras/5_motion_people.py --conf 0.4 --threshold 12
-python scripts/cameras/5_motion_people.py --model models/yolov8n.onnx --tcp
+python scripts/cameras/5_diff_yolo_boxes_low.py
+python scripts/cameras/5_diff_yolo_boxes_low.py --conf 0.25 --threshold 3.3
+python scripts/cameras/5_diff_yolo_boxes_low.py --model models/yolov8n.onnx --tcp
 ```
 
 Общие утилиты motion-цикла (фильтрация URL, frame diff, проверка кадра HEVC, открытие потока) вынесены в `src/common/utils/motion_utils.py`.
+
+#### Параметры YOLO (`.env`)
+
+| Переменная | Дефолт | Описание |
+|------------|--------|----------|
+| `YOLO_CONF` | `0.35` | Порог confidence (снизить до 0.25 для съёмки сверху/нестандартных ракурсов) |
+| `YOLO_NMS` | `0.45` | IoU порог NMS — выше = меньше слияния боксов (0.55 для плотных сцен) |
+| `YOLO_MAX_FPS` | `2.0` | Макс. частота YOLO на одну камеру, 0 = без ограничений. Ограничивает пиковую нагрузку CPU при активном движении. |
+
+Текущие рабочие значения (откалиброваны под коридор, съёмка сверху):
+```
+YOLO_CONF=0.25
+YOLO_NMS=0.55
+YOLO_MAX_FPS=4
+MOTION_DIFF_THRESHOLD=3.3
+```
+
+#### Выходные файлы прогона
+
+После завершения прогона в директории `run_<UTC>/` появляются:
+
+| Файл | Описание |
+|------|----------|
+| `run_params.json` | Параметры запуска (модель, conf, nms, threshold, ...) |
+| `run_stats.json` | Метрики качества: duration, fps, кадры ok/bad, реконнекты, интервалы, save counts |
+| `charts.png` | Интервалы кадров + дифы + сохранения + CPU по времени |
+| `pts_chart.png` | Метки времени (mono/wall/PTS) + дрейф + CPU внизу |
+| `frames.csv`, `diffs.csv`, `saves.csv`, `pts.csv`, `cpu.csv` | Сырые данные для анализа |
+
+#### Запуск в Windows (PowerShell)
+
+`conda` недоступен напрямую в PowerShell — нужен полный путь к `conda.exe`. **Надёжный способ — через ps1-файл.**
+
+**Шаг 1** — создать `C:\Users\<user>\AppData\Local\Temp\run_cam.ps1`:
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" run -n conda_video python "E:\_Home\Tony\pet projects\video\scripts\cameras\5_diff_yolo_boxes_low.py" --duration 1200
+```
+
+**Шаг 2** — запустить в отдельном окне:
+```powershell
+Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "C:\Users\<user>\AppData\Local\Temp\run_cam.ps1"
+```
+
+**Интерактивно в текущем окне (Ctrl+C для остановки):**
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" run -n conda_video python "E:\_Home\Tony\pet projects\video\scripts\cameras\5_diff_yolo_boxes_low.py" --duration 1200
+```
+
+> `-Command "..."` с экранированием — ненадёжно из-за вложенных кавычек. Использовать `-File` + ps1-файл.
+> `Start-Process conda.exe` — **не использовать**: окно закрывается мгновенно при ошибке.
+
+**Проверить что прогон запустился** — должна появиться новая директория через ~5 сек:
+```powershell
+Get-ChildItem "E:\_Home\Tony\pet projects\video\.output\cameras\5_diff_yolo_boxes_low" | Sort-Object LastWriteTime -Descending | Select-Object -First 3 Name, LastWriteTime
+```
+
+**Перегенерировать графики без повторной записи:**
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" run -n conda_video python "E:\_Home\Tony\pet projects\video\scripts\cameras\5_diff_yolo_boxes_low.py" --regen-from "E:\_Home\Tony\pet projects\video\.output\cameras\5_diff_yolo_boxes_low\run_20260627_164045_msk"
+```
+
+**Частые ошибки:**
+- `conda` не найден в PATH — использовать полный путь `$env:USERPROFILE\miniconda3\Scripts\conda.exe`
+- `UnicodeEncodeError cp1252` — забыли `$env:PYTHONIOENCODING="utf-8"`
+- `Start-Process` окно закрылось мгновенно — запустить интерактивно (`&`) чтобы увидеть ошибку
+- Директория не появилась через 10 сек — скрипт упал при старте, смотреть вывод интерактивного запуска
 
 ---
 

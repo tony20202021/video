@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = REPO_ROOT / "models" / "yolov8n.onnx"
-OUTPUT_DIR = REPO_ROOT / ".output"
+DEFAULT_MODEL = REPO_ROOT / ".models" / "yolov8n.onnx"
+TEST_DATA_DIR = REPO_ROOT / "tests" / ".data"
 
 
 @pytest.fixture(scope="module")
@@ -73,16 +73,16 @@ def test_draw_boxes_with_detection(sess):
 
 
 def test_on_baseline_frame(sess):
-    """Запускаем детекцию на реальном baseline-кадре из .output/ (если есть)."""
+    """Запускаем детекцию на реальных кадрах из tests/data/ (если есть)."""
     import cv2
     from common.utils.person_detector import detect_people
 
-    baselines = sorted(OUTPUT_DIR.rglob("*_baseline.jpg"))
-    if not baselines:
-        pytest.skip("Нет baseline-кадров в .output/ — запустите 4_motion_watch.py или 5_motion_people.py")
+    frames = sorted(TEST_DATA_DIR.rglob("*.jpg"))
+    if not frames:
+        pytest.skip("Нет тестовых кадров в tests/data/ — скопируйте из .output/ после накопления")
 
-    frame = cv2.imread(str(baselines[0]))
-    assert frame is not None, f"Не удалось прочитать {baselines[0]}"
+    frame = cv2.imread(str(frames[0]))
+    assert frame is not None, f"Не удалось прочитать {frames[0]}"
     result = detect_people(sess, frame)
     assert isinstance(result, list)
-    print(f"\nBaseline кадр: {baselines[0].name}  детекций: {len(result)}")
+    print(f"\nКадр: {frames[0].relative_to(TEST_DATA_DIR)}  детекций: {len(result)}")

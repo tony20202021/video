@@ -32,7 +32,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.time_msk import ts_for_dir
 
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "training"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "train" / "1_export_data"
 CLASSES = ["resident", "courier", "delivery", "utilities", "other"]
 
 
