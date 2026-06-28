@@ -8,14 +8,17 @@
 | `2_probe_channels.py` | Перебирает все комбинации channel×stream по RTSP, сохраняет кадры | Да | `.output/2_probe_channels/probe_<UTC>/` — кадры + report.json | После нахождения IP, чтобы подобрать правильный channel/stream |
 | `3_verify_cameras.py` | Проверяет URL из `.env`, читает один кадр с обрезкой | Да | `.output/3_cam_verify/cam_verify_<UTC>/` — кадры + report.json | Проверить что `.env` настроен правильно |
 | `4_motion_diff_low.py` | Цикл: детектирует движение (frame diff по LOW), сохраняет LOW-кадры и heartbeat | Да | `.output/cameras/4_motion_diff_low/run_<ts>/` — baseline + motion + heartbeat | Накопление кадров без ML; отладка порога |
-| `5_diff_yolo_boxes_low.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/cameras/5_diff_yolo_boxes_low/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
+| `5_1_diff_yolo_boxes_low.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/cameras/5_1_diff_yolo_boxes_low/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
+| `5_2_yolo_boxes_files.py` | Офлайн-переобработка: YOLO-детекция на уже сохранённых diff-кадрах прогонов 4 и 5_1 | Нет (файлы) | `.output/cameras/5_2_yolo_boxes_files/run_<ts>/` — детекции, timeline, cpu_chart | Ретроспективный анализ накопленных прогонов |
+| `6_2_identify_people_files.py` | То же что 5_2, но дополнительно прогоняет GroupClassifier + PersonIdentifier | Нет (файлы) | `.output/cameras/6_2_identify_people_files/run_<ts>/` | Идентификация людей по архиву |
 
-**Порядок первичной настройки:** `1` → `2` → `3` → `4` и/или `5`
+**Порядок первичной настройки:** `1` → `2` → `3` → `4` и/или `5_1`
 
-**Ключевые отличия 4 vs 5:**
+**Ключевые отличия live (4, 5_1) vs офлайн (5_2, 6_2):**
 - `4_motion_diff_low` сохраняет любое движение без ML — только LOW-поток, легковесный
-- `5_diff_yolo_boxes_low` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `models/yolov8n.onnx`
-- Оба можно запускать одновременно, но они открывают одни и те же RTSP-потоки
+- `5_1_diff_yolo_boxes_low` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `models/yolov8n.onnx`
+- `5_2` / `6_2` обрабатывают уже накопленные прогоны 4 или 5_1 офлайн; структура каталогов на входе должна быть совместимой (per-cam + diff/)
+- Оба live-скрипта можно запускать одновременно, но они открывают одни и те же RTSP-потоки
 
 ---
 
@@ -121,13 +124,41 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
       report.json
   4_motion_diff_low/
     run_<UTC>/
-      <cam>_<UTC>_baseline.jpg         — baseline при старте
-      <cam>_<UTC>_diff<N>.jpg          — LOW-кадр при обнаружении движения (diff=N)
-      <cam>_<UTC>_heartbeat.jpg        — периодический снимок (по таймеру)
-  5_diff_yolo_boxes_low/
+      images/
+        <cam>/                         — по одному подкаталогу на камеру
+          diff/
+            <cam>_<UTC>_diff<N>.jpg    — LOW-кадр при обнаружении движения
+          <cam>_<UTC>_baseline.jpg     — baseline при старте
+          <cam>_<UTC>_heartbeat.jpg    — периодический снимок (по таймеру)
+      frames.csv, diffs.csv, saves.csv, pts.csv
+      cpu.csv                          — 5 колонок: mono_s, ts_msk, cpu_pct, freq_mhz_pdh, freq_mhz_step
+      charts.png, pts_chart.png
+      run_stats.json, run_params.json, run.log
+  5_1_diff_yolo_boxes_low/
     run_<UTC>/
-      <cam>_<UTC>_baseline.jpg      — baseline при старте
-      <cam>_<UTC>_p<N>.jpg          — кадр с N людьми (bbox нанесены)
+      images/
+        <cam>/
+          diff/
+            <cam>_<UTC>_diff<N>.jpg   — raw motion-кадр (до YOLO)
+          <cam>_<UTC>_baseline.jpg
+          <cam>_<UTC>_heartbeat.jpg
+          <cam>_<UTC>_p<N>.jpg        — кадр с N людьми (bbox нанесены)
+          crops/                       — вырезанные кропы по bbox
+      frames.csv, diffs.csv, saves.csv, pts.csv
+      cpu.csv                          — 5 колонок (см. выше)
+      charts.png, pts_chart.png
+      run_stats.json, run_params.json, run.log
+  5_2_yolo_boxes_files/
+    run_<UTC>/
+      <run_name>/
+        <cam>/
+          <img>_yolo.jpg              — кадр с bbox (только при детекции)
+          crops/
+      detections.csv                  — все детекции: image_ts, run, cam, file, x1..y2, conf
+      timeline_chart.png              — события из входных прогонов + новые YOLO
+      cpu.csv, cpu_chart.png          — загрузка ЦПУ + YOLO timing + частота
+      yolo_timing.csv                 — per-image: mono_s, inference_ms, sleep_ms
+      run_stats.json, run_params.json, run.log
 ```
 
 **Формат `<UTC>` в именах файлов:** `YYYYMMDD_HHMMSS_ffffff`, где последние 6 цифр — микросекунды (`%f` в Python). Пример: `cam_01_9_d_20260418_111316_116613_baseline.jpg` → снято 2026-04-18 в 11:13:16.116613 UTC. Микросекунды нужны для уникальности при нескольких кадрах в одну секунду.
@@ -210,9 +241,9 @@ python scripts/cameras/4_motion_diff_low.py --crop-rel 0,0,1,0.5
 python scripts/cameras/4_motion_diff_low.py --duration 3600   # остановиться через 1 час
 ```
 
-### Детекция людей (`5_diff_yolo_boxes_low.py`)
+### Детекция людей (`5_1_diff_yolo_boxes_low.py`)
 
-Скрипт `scripts/cameras/5_diff_yolo_boxes_low.py` использует тот же motion-цикл (только LOW-поток), но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person) непосредственно на LOW-кадре. Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
+Скрипт `scripts/cameras/5_1_diff_yolo_boxes_low.py` использует тот же motion-цикл (только LOW-поток), но после обнаружения движения запускает **YOLOv8n ONNX** (класс 0 — person) непосредственно на LOW-кадре. Сохраняет только кадры, на которых обнаружен хотя бы один человек; на сохраняемый кадр наносит **bounding boxes** с confidence. Имя файла: `<cam>_<UTC>_p<N>.jpg` (N — количество людей).
 
 Перед первым запуском скачать модель (~6 MB):
 
@@ -222,9 +253,9 @@ wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/y
 ```
 
 ```bash
-python scripts/cameras/5_diff_yolo_boxes_low.py
-python scripts/cameras/5_diff_yolo_boxes_low.py --conf 0.25 --threshold 3.3
-python scripts/cameras/5_diff_yolo_boxes_low.py --model models/yolov8n.onnx --tcp
+python scripts/cameras/5_1_diff_yolo_boxes_low.py
+python scripts/cameras/5_1_diff_yolo_boxes_low.py --conf 0.25 --threshold 3.3
+python scripts/cameras/5_1_diff_yolo_boxes_low.py --model models/yolov8n.onnx --tcp
 ```
 
 Общие утилиты motion-цикла (фильтрация URL, frame diff, проверка кадра HEVC, открытие потока) вынесены в `src/common/utils/motion_utils.py`.
@@ -241,9 +272,11 @@ python scripts/cameras/5_diff_yolo_boxes_low.py --model models/yolov8n.onnx --tc
 ```
 YOLO_CONF=0.25
 YOLO_NMS=0.55
-YOLO_MAX_FPS=4
+YOLO_MAX_FPS=1
 MOTION_DIFF_THRESHOLD=3.3
 ```
+
+Параметры читаются из `.env` напрямую — PS1-скрипты (`5_2_yolo_boxes_files.ps1` и др.) парсят `.env` сами, не полагаясь на переменные окружения PowerShell. Приоритет: явный параметр CLI (`-Conf 0.3`) → `.env` → встроенный дефолт.
 
 #### Выходные файлы прогона
 
@@ -257,46 +290,37 @@ MOTION_DIFF_THRESHOLD=3.3
 | `pts_chart.png` | Метки времени (mono/wall/PTS) + дрейф + CPU внизу |
 | `frames.csv`, `diffs.csv`, `saves.csv`, `pts.csv`, `cpu.csv` | Сырые данные для анализа |
 
-#### Запуск в Windows (PowerShell)
+#### Запуск в Windows (PowerShell) — sh/-скрипты
 
-`conda` недоступен напрямую в PowerShell — нужен полный путь к `conda.exe`. **Надёжный способ — через ps1-файл.**
+В `sh/` лежат готовые ps1-обёртки для каждого скрипта:
 
-**Шаг 1** — создать `C:\Users\<user>\AppData\Local\Temp\run_cam.ps1`:
+| Файл | Скрипт | Назначение |
+|---|---|---|
+| `sh/cameras/4_motion_diff_low.ps1` | `4_motion_diff_low.py` | motion detection без YOLO, накопление baseline-кадров |
+| `sh/cameras/5_1_diff_yolo_boxes_low.ps1` | `5_1_diff_yolo_boxes_low.py` | motion → YOLO → сохранение bbox-кадров |
+| `sh/cameras/6_identify_people.ps1` | `6_identify_people.py` | motion → YOLO → ML (группа + идентификация человека) |
+
+**Синтаксис одинаковый для всех:**
 ```powershell
-$env:PYTHONIOENCODING = 'utf-8'
-& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" run -n conda_video python "E:\_Home\Tony\pet projects\video\scripts\cameras\5_diff_yolo_boxes_low.py" --duration 1200
+# Запуск из корня проекта:
+.\sh\cameras\5_1_diff_yolo_boxes_low.ps1              # бесконечно
+.\sh\cameras\5_1_diff_yolo_boxes_low.ps1 7200         # на 2 часа (секунды)
+.\sh\cameras\5_1_diff_yolo_boxes_low.ps1 60           # на 1 минуту (для тестов)
+.\sh\cameras\5_1_diff_yolo_boxes_low.ps1 0 ".output\cameras\5_1_diff_yolo_boxes_low\run_20260627_205503_msk"  # перегенерация графиков
 ```
 
-**Шаг 2** — запустить в отдельном окне:
-```powershell
-Start-Process powershell -ArgumentList "-NoExit", "-ExecutionPolicy", "Bypass", "-File", "C:\Users\<user>\AppData\Local\Temp\run_cam.ps1"
-```
-
-**Интерактивно в текущем окне (Ctrl+C для остановки):**
-```powershell
-$env:PYTHONIOENCODING="utf-8"
-& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" run -n conda_video python "E:\_Home\Tony\pet projects\video\scripts\cameras\5_diff_yolo_boxes_low.py" --duration 1200
-```
-
-> `-Command "..."` с экранированием — ненадёжно из-за вложенных кавычек. Использовать `-File` + ps1-файл.
-> `Start-Process conda.exe` — **не использовать**: окно закрывается мгновенно при ошибке.
+Настройки (порог, YOLO-параметры) читаются из `.env` — менять только там.  
+Дополнительные флаги (`--tcp`, `--save-raw`, `--cam-ts`) раскомментировать в `$EXTRA` внутри ps1.
 
 **Проверить что прогон запустился** — должна появиться новая директория через ~5 сек:
 ```powershell
-Get-ChildItem "E:\_Home\Tony\pet projects\video\.output\cameras\5_diff_yolo_boxes_low" | Sort-Object LastWriteTime -Descending | Select-Object -First 3 Name, LastWriteTime
-```
-
-**Перегенерировать графики без повторной записи:**
-```powershell
-$env:PYTHONIOENCODING="utf-8"
-& "$env:USERPROFILE\miniconda3\Scripts\conda.exe" run -n conda_video python "E:\_Home\Tony\pet projects\video\scripts\cameras\5_diff_yolo_boxes_low.py" --regen-from "E:\_Home\Tony\pet projects\video\.output\cameras\5_diff_yolo_boxes_low\run_20260627_164045_msk"
+Get-ChildItem "E:\_Home\Tony\pet projects\video\.output\cameras\5_1_diff_yolo_boxes_low" | Sort-Object LastWriteTime -Descending | Select-Object -First 3 Name, LastWriteTime
 ```
 
 **Частые ошибки:**
-- `conda` не найден в PATH — использовать полный путь `$env:USERPROFILE\miniconda3\Scripts\conda.exe`
-- `UnicodeEncodeError cp1252` — забыли `$env:PYTHONIOENCODING="utf-8"`
-- `Start-Process` окно закрылось мгновенно — запустить интерактивно (`&`) чтобы увидеть ошибку
-- Директория не появилась через 10 сек — скрипт упал при старте, смотреть вывод интерактивного запуска
+- `conda` не найден в PATH — sh/-скрипты используют полный путь `$env:USERPROFILE\miniconda3\Scripts\conda.exe` автоматически
+- `UnicodeEncodeError cp1252` — ps1-скрипты устанавливают `$env:PYTHONIOENCODING = "utf-8"` автоматически
+- Директория не появилась через 10 сек — скрипт упал при старте, смотреть вывод в консоли
 
 ---
 

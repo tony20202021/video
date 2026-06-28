@@ -1,0 +1,942 @@
+"""Общие примитивы для скриптов захвата/анализа камер (S4, S5, S6, ...).
+
+Содержит:
+  Tee           — дублирует stdout/stderr в лог-файл
+  CapReader     — фоновый поток чтения RTSP (Queue(1), последний кадр, авто-реконнект)
+  CpuMonitor    — фоновый поток замера CPU (psutil)
+  save_run_stats      — run_stats.json
+  save_pts_chart      — pts_chart.png
+  save_charts         — charts.png (интервалы кадров + диффы + сохранения + CPU)
+  parse_img_filename  — имя файла → (cam_name, ts_str, img_type)
+  regen_osd_from_images — OSD-метки из сохранённых изображений → osd_log
+  save_osd_chart      — osd_chart.png
+"""
+
+from __future__ import annotations
+
+import csv
+import queue
+import threading
+import time
+from collections import defaultdict
+from pathlib import Path
+
+import cv2
+
+from common.utils.motion_utils import open_cap
+from common.utils.time_msk import ts_for_file
+
+
+# ─── Tee ──────────────────────────────────────────────────────────────────────
+
+class Tee:
+    """Пишет одновременно в оригинальный поток и в файл."""
+
+    def __init__(self, stream, fobj):
+        self._stream = stream
+        self._fobj   = fobj
+
+    def write(self, data):
+        self._stream.write(data)
+        try:
+            self._fobj.write(data)
+            self._fobj.flush()
+        except Exception:
+            pass
+
+    def flush(self):
+        self._stream.flush()
+        try:
+            self._fobj.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+# ─── CapReader ─────────────────────────────────────────────────────────────────
+
+class CapReader:
+    """Фоновый поток: непрерывно читает VideoCapture, держит только последний кадр.
+
+    Queue(maxsize=1) гарантирует: main-поток всегда получает самый свежий кадр
+    без буферного лага, даже если обработка (YOLO, imwrite) занимает > 1 кадра.
+    """
+
+    _MAX_FAILS = 5
+
+    def __init__(self, url: str, cap: "cv2.VideoCapture",
+                 open_timeout_ms: int, read_timeout_ms: int):
+        self._url              = url
+        self._open_timeout_ms  = open_timeout_ms
+        self._read_timeout_ms  = read_timeout_ms
+        self._q: "queue.Queue[tuple]" = queue.Queue(maxsize=1)
+        self._stop_evt         = threading.Event()
+        self._reconnect_evt    = threading.Event()
+        self.reconnects        = 0
+
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        self._cap = cap
+
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name=f"cap-{url[-24:]}"
+        )
+        self._thread.start()
+
+    def _reopen(self) -> "cv2.VideoCapture | None":
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+        cap = open_cap(self._url,
+                       open_timeout_ms=self._open_timeout_ms,
+                       read_timeout_ms=self._read_timeout_ms)
+        if cap is not None:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self.reconnects += 1
+        return cap
+
+    def _run(self):
+        fails = 0
+        while not self._stop_evt.is_set():
+            if self._reconnect_evt.is_set():
+                self._reconnect_evt.clear()
+                self._cap = self._reopen()
+                fails = 0
+
+            if self._cap is None:
+                time.sleep(1.0)
+                self._cap = self._reopen()
+                continue
+
+            try:
+                ok, frame = self._cap.read()
+                pts = self._cap.get(cv2.CAP_PROP_POS_MSEC)
+            except Exception:
+                ok, frame, pts = False, None, -1.0
+            mono = time.monotonic()
+
+            if ok and frame is not None and frame.size > 0:
+                fails = 0
+                item = (True, frame, pts, mono)
+            else:
+                fails += 1
+                item = (False, None, pts, mono)
+                if fails >= self._MAX_FAILS:
+                    self._cap = self._reopen()
+                    fails = 0
+                    continue
+
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                pass
+            self._q.put(item)
+
+    def read(self, timeout: float = 0.5) -> "tuple[bool, cv2.Mat | None, float, float]":
+        """(ok, frame, pts_ms, mono) — всегда самый свежий кадр."""
+        try:
+            return self._q.get(timeout=timeout)
+        except queue.Empty:
+            return False, None, -1.0, time.monotonic()
+
+    def request_reconnect(self):
+        """Попросить поток переподключиться (например, при битых кадрах)."""
+        self._reconnect_evt.set()
+
+    def stop(self):
+        self._stop_evt.set()
+        if self._cap is not None:
+            self._cap.release()
+        self._thread.join(timeout=3.0)
+
+
+# ─── CPU frequency ────────────────────────────────────────────────────────────
+
+import sys as _sys
+
+# Persistent PDH query state for Windows CPU frequency (% Processor Performance × base MHz).
+# CallNtPowerInformation.CurrentMhz reports only P-state steps (e.g. 1600/2900);
+# PDH counter gives time-weighted average like Task Manager "Speed".
+_cpu_freq_pdh: dict = {}
+
+def _read_cpu_freq_mhz() -> float:
+    """Возвращает текущую среднюю частоту CPU в МГц (кросс-платформа).
+
+    Windows: PDH «% Processor Performance» × базовая частота (реестр).
+             Первый вызов инициализирует счётчик и возвращает 0.
+    Linux:   psutil.cpu_freq().current.
+    """
+    try:
+        if _sys.platform == "win32":
+            import ctypes, winreg
+
+            _s = _cpu_freq_pdh
+            if not _s:
+                pdh = ctypes.windll.pdh
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+                    ) as _k:
+                        base_mhz = int(winreg.QueryValueEx(_k, "~MHz")[0])
+                except Exception:
+                    base_mhz = 2900
+
+                class _FMT(ctypes.Structure):
+                    _fields_ = [("CStatus", ctypes.c_ulong),
+                                 ("doubleValue", ctypes.c_double)]
+
+                hq = ctypes.c_void_p()
+                hc = ctypes.c_void_p()
+                if pdh.PdhOpenQueryW(None, 0, ctypes.byref(hq)) != 0:
+                    return 0.0
+                path = r"\Processor Information(_Total)\% Processor Performance"
+                if pdh.PdhAddEnglishCounterW(hq, ctypes.c_wchar_p(path), 0, ctypes.byref(hc)) != 0:
+                    pdh.PdhCloseQuery(hq)
+                    return 0.0
+                pdh.PdhCollectQueryData(hq)          # prime — первый замер без дельты
+                _s.update(pdh=pdh, hq=hq, hc=hc, base=base_mhz, FMT=_FMT)
+                return 0.0
+
+            pdh = _s["pdh"]
+            if pdh.PdhCollectQueryData(_s["hq"]) != 0:
+                return 0.0
+            val = _s["FMT"]()
+            rc = pdh.PdhGetFormattedCounterValue(
+                _s["hc"], 0x00000200, None, ctypes.byref(val))   # 0x200 = PDH_FMT_DOUBLE
+            if rc == 0 and val.CStatus == 0:
+                return round(_s["base"] * val.doubleValue / 100.0, 1)
+        else:
+            import psutil as _ps
+            f = _ps.cpu_freq()
+            if f:
+                return round(f.current, 1)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _read_cpu_freq_stepped_mhz() -> float:
+    """Ступенчатая частота через CallNtPowerInformation (только P-state шаги)."""
+    try:
+        if _sys.platform == "win32":
+            import ctypes, ctypes.wintypes, psutil as _ps
+
+            class _PPI(ctypes.Structure):
+                _fields_ = [("Number",           ctypes.wintypes.ULONG),
+                             ("MaxMhz",           ctypes.wintypes.ULONG),
+                             ("CurrentMhz",       ctypes.wintypes.ULONG),
+                             ("MhzLimit",         ctypes.wintypes.ULONG),
+                             ("MaxIdleState",     ctypes.wintypes.ULONG),
+                             ("CurrentIdleState", ctypes.wintypes.ULONG)]
+
+            n   = _ps.cpu_count() or 1
+            buf = (_PPI * n)()
+            rc  = ctypes.windll.powrprof.CallNtPowerInformation(
+                11, None, 0, buf, ctypes.sizeof(buf))
+            if rc == 0:
+                return round(sum(buf[i].CurrentMhz for i in range(n)) / n, 1)
+    except Exception:
+        pass
+    return 0.0
+
+
+# ─── CpuMonitor ───────────────────────────────────────────────────────────────
+
+class CpuMonitor:
+    """Фоновый поток: периодически замеряет cpu_percent() через psutil.
+
+    per_process=True — измеряет только текущий процесс (0-100%, как диспетчер задач).
+    per_process=False — система в целом (по умолчанию, для live-скриптов).
+    """
+
+    def __init__(self, interval: float = 2.0, per_process: bool = False) -> None:
+        self._interval   = interval
+        self._per_process = per_process
+        self._log: list[list] = []
+        self._stop  = threading.Event()
+        self._lock  = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="cpu-monitor")
+        self._psutil = None
+        self._proc   = None
+        self._t_start = 0.0
+
+    def start(self, t_start: float) -> bool:
+        try:
+            import psutil
+            self._psutil = psutil
+            if self._per_process:
+                self._proc = psutil.Process()
+                self._proc.cpu_percent()        # warm-up
+            else:
+                psutil.cpu_percent()            # warm-up
+        except ImportError:
+            return False
+        self._t_start = t_start
+        self._thread.start()
+        return True
+
+    def snapshot(self) -> list[list]:
+        """Возвращает копию накопленного лога без остановки потока."""
+        with self._lock:
+            return list(self._log)
+
+    def stop(self) -> list[list]:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=max(self._interval + 1, 3))
+        with self._lock:
+            return list(self._log)
+
+    def _run(self) -> None:
+        n_cpu = max(1, self._psutil.cpu_count() or 1)
+        while not self._stop.is_set():
+            if self._per_process and self._proc:
+                # cpu_percent() per-process returns 0-100*N%; normalize to 0-100%
+                raw = self._proc.cpu_percent(interval=self._interval)
+                cpu = min(100.0, raw / n_cpu)
+            else:
+                cpu = self._psutil.cpu_percent(interval=self._interval)
+            with self._lock:
+                self._log.append([
+                    round(time.monotonic() - self._t_start, 2),
+                    ts_for_file(),
+                    round(cpu, 1),
+                    _read_cpu_freq_mhz(),          # PDH: непрерывная (% Processor Performance)
+                    _read_cpu_freq_stepped_mhz(),  # PPI: ступенчатая (P-state шаги)
+                ])
+
+
+# ─── run_stats.json ───────────────────────────────────────────────────────────
+
+def save_run_stats(frame_log: list, pts_log: list, saves_log: list,
+                   diffs_log: list, out_dir: Path) -> None:
+    import json as _json
+    import numpy as _np
+
+    total = len(frame_log)
+    bad   = sum(1 for r in frame_log if r[3] == 0)
+    ok    = total - bad
+
+    mono_ok  = [r[0] for r in frame_log if r[3] == 1]
+    duration = (max(mono_ok) - min(mono_ok)) if len(mono_ok) >= 2 else 0.0
+
+    by_url: dict = {}
+    for r in frame_log:
+        if r[3] == 1:
+            by_url.setdefault(r[2], []).append(r[0])
+
+    interval_stats: dict = {}
+    for url, times in by_url.items():
+        times.sort()
+        ivs = _np.diff(times) * 1000
+        if len(ivs):
+            interval_stats[url] = {
+                "mean_ms":   round(float(_np.mean(ivs)),           1),
+                "median_ms": round(float(_np.median(ivs)),         1),
+                "p95_ms":    round(float(_np.percentile(ivs, 95)), 1),
+                "p99_ms":    round(float(_np.percentile(ivs, 99)), 1),
+                "max_ms":    round(float(_np.max(ivs)),            1),
+            }
+
+    reconnects = 0
+    prev_pts: dict = {}
+    for r in pts_log:
+        url, pts = r[2], r[3]
+        if pts > 0:
+            if url in prev_pts and pts < prev_pts[url] - 500:
+                reconnects += 1
+            prev_pts[url] = pts
+
+    save_counts: dict = {}
+    for r in saves_log:
+        save_counts[r[3]] = save_counts.get(r[3], 0) + 1
+
+    diff_stats: dict = {}
+    if diffs_log:
+        dv = _np.array([r[3] for r in diffs_log if r[3] > 0])
+        if len(dv):
+            diff_stats = {
+                "mean":          round(float(_np.mean(dv)),           3),
+                "p95":           round(float(_np.percentile(dv, 95)), 3),
+                "max":           round(float(_np.max(dv)),            3),
+                "motion_events": len(diffs_log),
+            }
+
+    stats = {
+        "duration_sec":    round(duration, 1),
+        "frames_total":    total,
+        "frames_ok":       ok,
+        "frames_bad":      bad,
+        "frames_bad_pct":  round(bad / total * 100, 2) if total else 0,
+        "fps_effective":   round(ok / duration, 2) if duration > 0 else 0,
+        "reconnects":      reconnects,
+        "frame_intervals": interval_stats,
+        "saves":           save_counts,
+        "saves_total":     len(saves_log),
+        "diff":            diff_stats,
+    }
+
+    path = out_dir / "run_stats.json"
+    path.write_text(_json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  run_stats.json → {path}")
+
+
+# ─── pts_chart.png ────────────────────────────────────────────────────────────
+
+def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
+    """График соответствия меток времени: mono_s, wall clock (ts_msk), FFmpeg PTS."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as _ticker
+    except ImportError:
+        return
+    if not pts_log:
+        return
+
+    from datetime import datetime as _dt
+
+    def _parse_ts(s: str) -> float:
+        try:
+            return _dt.strptime(s[:22], "%Y%m%d_%H%M%S_%f").timestamp()
+        except Exception:
+            return 0.0
+
+    by_url: dict[str, list] = defaultdict(list)
+    for row in pts_log:
+        by_url[row[2]].append(row)
+
+    n = len(by_url)
+    n_cpu  = 1 if cpu_log else 0
+    n_rows = n * 3 + n_cpu
+    fig, axes = plt.subplots(n_rows, 1, figsize=(14, 3.5 * n_rows), squeeze=False)
+    fig.suptitle("Соответствие меток времени: mono / wall / FFmpeg PTS", fontsize=11)
+    ax_idx = 0
+
+    for url_id, rows in by_url.items():
+        rows = [r for r in rows if r[3] >= 0]  # -1.0 = timeout, невалидный PTS
+        if not rows:
+            ax_idx += 3
+            continue
+
+        mono = [r[0] for r in rows]
+        pts  = [r[3] for r in rows]
+        wall = [_parse_ts(r[1]) for r in rows]
+
+        mono0 = mono[0]
+        pts0  = pts[0]
+        wall0 = wall[0]
+
+        mono_s   = [(m - mono0)        for m in mono]
+        pts_norm = [(p - pts0) / 1000  for p in pts]
+        wall_s   = [(w - wall0)        for w in wall]
+
+        # Убираем сброс PTS при реконнекте (резкое уменьшение).
+        # Сравниваем по СЫРЫМ pts_norm — иначе каждый кадр после дропа тоже
+        # триггерит условие и offset растёт лавинообразно до переполнения.
+        pts_clean = list(pts_norm)
+        offset = 0.0
+        for i in range(1, len(pts_norm)):
+            if pts_norm[i] < pts_norm[i - 1] - 30.0:  # только при реконнекте (>30 с)
+                offset += pts_norm[i - 1] - pts_norm[i] + 0.1
+            pts_clean[i] = pts_norm[i] + offset
+
+        ax = axes[ax_idx][0]
+        ax.scatter(mono, mono_s,    color="#2255cc", s=1,  marker="o", alpha=0.2, zorder=3, label="mono, с")
+        ax.scatter(mono, wall_s,    color="#228833", s=2,  marker="s", alpha=0.2, zorder=3, label="wall clock, с")
+        ax.scatter(mono, pts_clean, color="#cc5500", s=2,  marker="^", alpha=0.2, zorder=3, label="FFmpeg PTS (норм.), с")
+        ax.set_ylabel("с от старта")
+        ax.set_title(f"{url_id} — три метки времени (все в с от первого кадра)")
+        ax.legend(loc="upper left", fontsize=8)
+        ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax_idx += 1
+
+        ax = axes[ax_idx][0]
+        drift_pts = [p - m for p, m in zip(pts_clean, mono_s)]
+        ax.scatter(mono, drift_pts, color="#cc5500", s=2, marker="^", alpha=0.2)
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
+        ax.set_ylabel("с")
+        ax.set_title(f"{url_id} — дрейф PTS − mono (с)")
+        ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax_idx += 1
+
+        ax = axes[ax_idx][0]
+        drift_wall = [w - m for w, m in zip(wall_s, mono_s)]
+        ax.scatter(mono, drift_wall, color="#228833", s=8, marker="s", alpha=0.6)
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
+        ax.set_ylabel("с")
+        ax.set_xlabel("время от старта, с")
+        ax.set_title(f"{url_id} — дрейф wall − mono (с)")
+        ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax_idx += 1
+
+    if cpu_log:
+        ax = axes[ax_idx][0]
+        cpu_t = [r[0] for r in cpu_log]
+        cpu_v = [r[2] for r in cpu_log]
+        ax.plot(cpu_t, cpu_v, color="#2255cc", linewidth=1.0)
+        ax.set_ylabel("ЦПУ, %")
+        ax.set_xlabel("время от старта, с")
+        ax.set_title("CPU usage, %")
+        ax.set_ylim(0, 105)
+        ax.yaxis.set_major_locator(_ticker.MultipleLocator(20))
+        ax.grid(True, linestyle="--", alpha=0.35)
+
+    plt.tight_layout()
+    path = out_dir / "pts_chart.png"
+    plt.savefig(str(path), dpi=120)
+    plt.close()
+    print(f"  pts_chart.png → {path}")
+
+
+# ─── charts.png ───────────────────────────────────────────────────────────────
+
+def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list,
+                threshold: float, out_dir: Path, *,
+                title: str = "camera run",
+                event_type: str = "yolo",
+                save_colors: "dict | None" = None,
+                save_levels: "dict | None" = None) -> None:
+    """Строит и сохраняет совмещённый PNG: интервалы кадров + дифы + сохранения + ЦПУ."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as _ticker
+        import numpy as _np
+    except ImportError:
+        return
+    if not frame_log:
+        return
+
+    _CAM_COLORS = ["#e05c00", "#0066cc", "#228833", "#aa22aa"]
+    _MARKERS    = ["*", (5, 1, 0), (6, 2, 0), (4, 1, 0)]
+    _sc = save_colors if save_colors is not None else {
+        "baseline": "#888888", "heartbeat": "#8844bb",
+        "diff": "#228833", "raw": "#cc6600", "yolo": "#cc3333",
+    }
+    _sl = save_levels if save_levels is not None else {
+        "baseline": 1, "heartbeat": 2, "diff": 3, "raw": 4, "yolo": 5,
+    }
+
+    by_url: dict[str, list] = defaultdict(list)
+    for row in frame_log:
+        by_url[row[2]].append(row)
+
+    n_frame_rows = len(by_url)
+    n_diffs_rows = 2 if diffs_log else 0
+    n_saves_rows = 1 if saves_log else 0
+    n_cpu_rows   = 1 if cpu_log else 0
+    n_rows = n_frame_rows + n_diffs_rows + n_saves_rows + n_cpu_rows
+    if n_rows == 0:
+        return
+
+    height_ratios = (
+        [3.0] * n_frame_rows +
+        [2.5] * n_diffs_rows +
+        [1.5] * n_saves_rows +
+        [2.0] * n_cpu_rows
+    )
+    fig, axes = plt.subplots(
+        n_rows, 1,
+        figsize=(14, sum(height_ratios) * 1.5),
+        squeeze=False,
+        gridspec_kw={"height_ratios": height_ratios},
+    )
+    fig.suptitle(f"{title} — кадры и загрузка ЦПУ", fontsize=11)
+
+    t_max = max((row[0] for row in frame_log), default=1)
+
+    def _ts_parts(ts_str: str):
+        try:
+            p = ts_str.split("_")
+            t = p[1]
+            return int(t[0:2]), int(t[2:4]), int(t[4:6]), int(p[2])
+        except Exception:
+            return None
+
+    def _ts_hms(ts_str: str) -> str:
+        r = _ts_parts(ts_str)
+        return f"{r[0]:02d}:{r[1]:02d}:{r[2]:02d}" if r else ts_str
+
+    def _ts_hmsm(ts_str: str) -> str:
+        r = _ts_parts(ts_str)
+        return f"{r[0]:02d}:{r[1]:02d}:{r[2]:02d}.{r[3]//1000:03d}" if r else ts_str
+
+    _t0_ts    = frame_log[0][1] if frame_log else ""
+    _t0_parts = _ts_parts(_t0_ts)
+    _t0_abs   = (_t0_parts[0]*3600 + _t0_parts[1]*60 + _t0_parts[2]) if _t0_parts else 0
+    _x_left   = -(_t0_abs % 60)
+
+    _tick_range = t_max * 1.02 - _x_left
+    _tick_step  = next((s for s in [60, 120, 180, 300, 600, 900, 1800]
+                        if _tick_range / s <= 20), 1800)
+    _tick_positions = list(range(int(_x_left), int(t_max * 1.02) + _tick_step, _tick_step))
+
+    def _x_time_fmt(x, _pos):
+        total = int(_t0_abs + x)
+        hh, mm, ss = total // 3600, (total % 3600) // 60, total % 60
+        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+    for ax_idx, (uid, rows) in enumerate(by_url.items()):
+        ax    = axes[ax_idx][0]
+        monos = [r[0] for r in rows]
+        ok_flags    = [r[3] for r in rows]
+        plaus_flags = [r[4] for r in rows]
+
+        if len(monos) < 2:
+            ax.set_title(f"{uid}: мало данных")
+            continue
+
+        intervals_ms = [(monos[i] - monos[i - 1]) * 1000 for i in range(1, len(monos))]
+        t_axis = monos[1:]
+
+        ax.scatter(t_axis, intervals_ms, color="#44aa44", s=14, alpha=0.45, marker="*")
+        mean_iv = sum(intervals_ms) / len(intervals_ms)
+        ax.axhline(mean_iv, color="blue", linestyle="--", linewidth=0.8, alpha=0.7)
+        ax.text(t_axis[0], mean_iv * 1.05,
+                f"среднее {mean_iv:.0f} мс  ({1000/mean_iv:.1f} fps)",
+                fontsize=8, color="blue")
+
+        n_events = 0
+        ev_list = []
+        for row in rows:
+            ev = row[5] if len(row) > 5 else ""
+            if ev == event_type:
+                lw = 0.9 if event_type == "yolo" else 0.7
+                ax.axvline(row[0], color="red", linewidth=lw, alpha=0.7)
+                n_events += 1
+                ev_list.append(row)
+
+        n_ok = sum(ok_flags)
+        n_pl = sum(1 for p in plaus_flags if p == 1)
+        ax.set_ylabel("интервал, мс")
+        ax.set_title(f"{uid}  |  кадров: {len(rows)}  ok: {n_ok}  plausible: {n_pl}")
+        ax.set_xlim(_x_left, t_max * 1.02)
+        y_lim_top = max(intervals_ms) * 1.2 if intervals_ms else 1
+        ax.set_ylim(0, y_lim_top)
+        ax.grid(True, linestyle="--", alpha=0.35)
+        ax.xaxis.set_major_formatter(_ticker.FuncFormatter(_x_time_fmt))
+        ax.xaxis.set_major_locator(_ticker.FixedLocator(_tick_positions))
+
+        if event_type == "yolo":
+            for i, row in enumerate(ev_list):
+                ts_str = row[1] if len(row) > 1 else ""
+                label  = f"YOLO\n{_ts_hmsm(ts_str)}\n+{row[0]:.1f}s"
+                y_frac = 0.75 if i % 2 == 0 else 0.45
+                ax.annotate(
+                    label, xy=(row[0], y_lim_top * y_frac),
+                    fontsize=7, ha="left", va="center",
+                    xytext=(4, 0), textcoords="offset points",
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="#fff0f0",
+                              edgecolor="red", alpha=0.55),
+                )
+
+        import matplotlib.lines as _mlines
+        legend_handles = [
+            _mlines.Line2D([], [], color="blue", linestyle="--", linewidth=0.8,
+                           label=f"среднее {mean_iv:.0f} мс"),
+        ]
+        if n_events > 0:
+            ev_label = (f"YOLO-детекция ({n_events})" if event_type == "yolo"
+                        else f"{event_type}-событие ({n_events})")
+            legend_handles.append(_mlines.Line2D([], [], color="red", linewidth=0.7,
+                                                  label=ev_label))
+        ax.legend(handles=legend_handles, loc="upper right", fontsize=8)
+
+    if diffs_log:
+        by_cam: dict[str, list] = defaultdict(list)
+        for row in diffs_log:
+            by_cam[row[2]].append(row)
+
+        all_diffs = [r[3] for r in diffs_log if r[3] > 0]
+        p95 = float(_np.percentile(all_diffs, 95)) if all_diffs else threshold * 10
+
+        def _draw_diffs_ax(ax, ylim=None):
+            for ci, (cam, rows) in enumerate(sorted(by_cam.items())):
+                dt    = [r[0] for r in rows]
+                dv    = [r[3] for r in rows]
+                color = _CAM_COLORS[ci % len(_CAM_COLORS)]
+                ax.scatter(dt, dv, color=color, s=16, alpha=0.45, label=cam,
+                           marker=_MARKERS[ci % len(_MARKERS)])
+            ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0)
+            ax.text(0, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
+            ax.set_ylabel("diff")
+            ax.set_xlim(_x_left, t_max * 1.02)
+            if ylim is not None:
+                ax.set_ylim(0, ylim)
+            ax.yaxis.set_major_locator(_ticker.MaxNLocator(10))
+            ax.grid(True, linestyle="--", alpha=0.4)
+            ax.legend(loc="upper right", fontsize=8, ncol=2)
+
+        ax = axes[n_frame_rows][0]
+        _draw_diffs_ax(ax)
+        ax.set_title(f"Frame diff — полный масштаб  ({len(diffs_log)} записей)")
+
+        ax = axes[n_frame_rows + 1][0]
+        _draw_diffs_ax(ax, ylim=p95 * 2.3)
+        ax.set_title(f"Frame diff — до p95={p95:.2f}  (детальный вид)")
+
+    if saves_log:
+        ax = axes[n_frame_rows + n_diffs_rows][0]
+
+        by_type_cam: dict[str, dict[str, list]] = {}
+        for row in saves_log:
+            t, _, cam, stype = row
+            if stype not in by_type_cam:
+                by_type_cam[stype] = {}
+            if cam not in by_type_cam[stype]:
+                by_type_cam[stype][cam] = []
+            by_type_cam[stype][cam].append(t)
+
+        cam_list = sorted({row[2] for row in saves_log})
+        cam_mk   = {cam: _MARKERS[i % len(_MARKERS)] for i, cam in enumerate(cam_list)}
+
+        def _cam_short(cam: str) -> str:
+            parts = [p for p in cam.split("_") if p and p != "URL"]
+            return parts[-1] if parts else cam
+
+        y_pos:        dict[tuple, float] = {}
+        ytick_pos:    list[float] = []
+        ytick_labels: list[str]  = []
+        y = 1.0
+        for stype in sorted(by_type_cam, key=lambda s: _sl.get(s, 99)):
+            for cam in sorted(by_type_cam[stype]):
+                y_pos[(stype, cam)] = y
+                ytick_pos.append(y)
+                ytick_labels.append(f"{stype} / {_cam_short(cam)}")
+                y += 1.0
+            y += 0.5
+
+        for (stype, cam), yv in y_pos.items():
+            times = by_type_cam[stype][cam]
+            color = _sc.get(stype, "#aaaaaa")
+            ax.scatter(times, [yv] * len(times), color=color, s=35,
+                       marker=cam_mk[cam], alpha=0.85, zorder=3)
+
+        for stype in sorted(_sl, key=_sl.get):
+            if stype in by_type_cam:
+                ax.scatter([], [], color=_sc.get(stype, "#aaaaaa"),
+                           s=35, marker="o", label=stype)
+
+        ax.set_yticks(ytick_pos)
+        ax.set_yticklabels(ytick_labels, fontsize=7)
+        ax.set_xlim(_x_left, t_max * 1.02)
+        ax.set_ylim(0, y)
+        ax.set_title(f"Сохранения кадров  ({len(saves_log)} событий)")
+        ax.legend(loc="upper right", fontsize=8, ncol=4)
+        ax.grid(True, linestyle="--", alpha=0.35)
+
+    if cpu_log:
+        ax = axes[n_frame_rows + n_diffs_rows + n_saves_rows][0]
+        cpu_t = [r[0] for r in cpu_log]
+        cpu_v = [r[2] for r in cpu_log]
+        ax.plot(cpu_t, cpu_v, color="#2255cc", linewidth=1.2)
+        ax.fill_between(cpu_t, cpu_v, alpha=0.18, color="#2255cc")
+        if cpu_v:
+            mean_cpu = sum(cpu_v) / len(cpu_v)
+            ax.axhline(mean_cpu, color="orange", linestyle="--", linewidth=0.8)
+            ax.text(cpu_t[0] if cpu_t else 0, mean_cpu + 1,
+                    f"среднее {mean_cpu:.1f}%", fontsize=8, color="orange")
+        ax.set_ylabel("ЦПУ, %")
+        ax.set_ylim(0, 105)
+        ax.set_xlim(_x_left, t_max * 1.02)
+        ax.set_title("Загрузка ЦПУ (все ядра, %)")
+        ax.grid(True, linestyle="--", alpha=0.35)
+
+    for _ax in [axes[i][0] for i in range(len(axes))]:
+        _ax.xaxis.set_major_formatter(_ticker.FuncFormatter(_x_time_fmt))
+        _ax.xaxis.set_major_locator(_ticker.FixedLocator(_tick_positions))
+    axes[-1][0].set_xlabel("время МСК")
+
+    plt.tight_layout()
+    chart_path = out_dir / "charts.png"
+    plt.savefig(str(chart_path), dpi=120)
+    plt.close()
+    print(f"  charts.png → {chart_path}")
+
+
+# ─── OSD helpers ──────────────────────────────────────────────────────────────
+
+def parse_img_filename(stem: str) -> "tuple[str, str, str] | None":
+    """Парсит имя файла → (cam_name, ts_str 'YYYY-MM-DD HH:MM:SS', img_type).
+
+    Формат: cam_01_9_u_YYYYMMDD_HHMMSS_ffffff_msk_type
+    """
+    parts = stem.split("_")
+    for i, p in enumerate(parts):
+        if len(p) == 8 and p.isdigit():
+            cam_name = "_".join(parts[:i])
+            date_p   = p
+            time_p   = parts[i + 1] if i + 1 < len(parts) else "000000"
+            img_type = parts[-1]
+            ts_str   = (f"{date_p[:4]}-{date_p[4:6]}-{date_p[6:]} "
+                        f"{time_p[:2]}:{time_p[2:4]}:{time_p[4:6]}")
+            return cam_name, ts_str, img_type
+    return None
+
+
+def regen_osd_from_images(run_dir: Path) -> list[list]:
+    """Извлекает OSD-метки из сохранённых изображений U-камеры.
+
+    Первый проход: строит LOW-шаблоны из имён файлов + изображений.
+    Второй проход: извлекает OSD-время, сохраняет osd_times.csv.
+    Возвращает osd_log: [[wall_ts_str, cam, img_type, osd_ts_str, drift_sec], ...]
+    """
+    try:
+        from common.utils.osd_time import (
+            build_low_templates_from_image,
+            extract_osd_time_low,
+            low_templates_complete,
+            _LOW_TEMPLATES,
+        )
+    except ImportError:
+        return []
+
+    images_dir = run_dir / "images"
+    if not images_dir.exists():
+        return []
+
+    imgs   = sorted(images_dir.rglob("*.jpg"))
+    u_imgs = [p for p in imgs if "_u_" in p.name or "_9_u_" in p.name]
+    if not u_imgs:
+        return []
+
+    if not low_templates_complete():
+        print(f"  [OSD] Построение LOW-шаблонов из {len(u_imgs)} изображений…")
+        added_total: set[str] = set()
+        for img_path in u_imgs:
+            info = parse_img_filename(img_path.stem)
+            if info is None:
+                continue
+            _, ts_str, _ = info
+            frame = cv2.imread(str(img_path))
+            if frame is None:
+                continue
+            new = build_low_templates_from_image(frame, ts_str)
+            added_total.update(new.keys())
+            if low_templates_complete():
+                break
+        print(f"  [OSD] Шаблоны: {sorted(_LOW_TEMPLATES.keys())} ({len(_LOW_TEMPLATES)}/12)")
+
+    from datetime import datetime as _dt
+    osd_log: list[list] = []
+    ok_count = 0
+
+    for img_path in u_imgs:
+        info = parse_img_filename(img_path.stem)
+        if info is None:
+            continue
+        cam_name, wall_ts_str, img_type = info
+
+        frame = cv2.imread(str(img_path))
+        if frame is None:
+            continue
+
+        osd_dt = extract_osd_time_low(frame)
+        if osd_dt is None:
+            osd_ts_str = ""
+            drift_sec  = None
+        else:
+            osd_ts_str = osd_dt.strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                wall_dt   = _dt.strptime(wall_ts_str, "%Y-%m-%d %H:%M:%S")
+                drift_sec = round((osd_dt - wall_dt).total_seconds(), 1)
+            except Exception:
+                drift_sec = None
+            ok_count += 1
+
+        osd_log.append([wall_ts_str, cam_name, img_type, osd_ts_str,
+                        "" if drift_sec is None else drift_sec])
+
+    print(f"  [OSD] Извлечено: {ok_count}/{len(u_imgs)} меток")
+
+    if osd_log:
+        csv_path = run_dir / "osd_times.csv"
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["wall_ts", "cam", "img_type", "osd_ts", "drift_sec"])
+            writer.writerows(osd_log)
+        print(f"  osd_times.csv → {csv_path}")
+
+    return osd_log
+
+
+def save_osd_chart(osd_log: list, out_dir: Path) -> None:
+    """График сравнения: OSD-время камеры vs wall-clock (по сохранённым кадрам)."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as _ticker
+    except ImportError:
+        return
+
+    from datetime import datetime as _dt
+
+    rows_with_osd = [r for r in osd_log if r[3]]
+    if not rows_with_osd:
+        print("  [OSD] Нет распознанных меток — график пропущен")
+        return
+
+    def _parse(s: str) -> float:
+        try:
+            return _dt.strptime(s, "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            return 0.0
+
+    wall_ts  = [_parse(r[0]) for r in rows_with_osd]
+    osd_ts   = [_parse(r[3]) for r in rows_with_osd]
+    img_type = [r[2] for r in rows_with_osd]
+    drift_vals = [(o - w) for o, w in zip(osd_ts, wall_ts)]
+
+    t0       = wall_ts[0]
+    wall_rel = [(t - t0) for t in wall_ts]
+    osd_rel  = [(t - t0) for t in osd_ts]
+
+    _TYPE_COLOR = {"baseline": "#888888", "heartbeat": "#8844bb",
+                   "yolo": "#cc3333", "diff": "#228833"}
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 8), squeeze=False,
+                             gridspec_kw={"height_ratios": [2.5, 1.5]})
+    fig.suptitle("OSD-метка камеры vs wall-clock (по сохранённым кадрам)", fontsize=11)
+
+    ax = axes[0][0]
+    ax.plot(wall_rel, wall_rel, color="#2255cc", linewidth=1.2, label="wall (эталон)")
+    ax.scatter(wall_rel, osd_rel, s=35, zorder=4,
+               c=[_TYPE_COLOR.get(t, "#888888") for t in img_type], label=None)
+    for itype, color in sorted(_TYPE_COLOR.items()):
+        if any(t == itype for t in img_type):
+            ax.scatter([], [], color=color, s=35, label=itype)
+    ax.set_ylabel("секунды от старта")
+    ax.set_xlabel("wall (с от старта)")
+    ax.legend(loc="upper left", fontsize=8)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.35)
+    ax.set_title("Время камеры OSD (точки) и wall-clock (прямая). Идеал = совпадение.")
+
+    ax = axes[1][0]
+    ax.scatter(wall_rel, drift_vals, s=35, zorder=4,
+               c=[_TYPE_COLOR.get(t, "#888888") for t in img_type])
+    ax.axhline(0, color="gray", linewidth=0.7, linestyle="--")
+    if drift_vals:
+        mean_d = sum(drift_vals) / len(drift_vals)
+        ax.axhline(mean_d, color="orange", linewidth=1.0, linestyle="--")
+        ax.text(wall_rel[0] if wall_rel else 0, mean_d + 0.3,
+                f"среднее {mean_d:+.1f}с", fontsize=8, color="orange")
+    ax.set_ylabel("OSD − wall, с")
+    ax.set_xlabel("wall (с от старта)")
+    ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
+    ax.yaxis.grid(True, linestyle="--", alpha=0.35)
+    ax.set_title("Дрейф: OSD − wall-clock (сек). Отрицательное = камера отстаёт.")
+
+    plt.tight_layout()
+    chart_path = out_dir / "osd_chart.png"
+    plt.savefig(str(chart_path), dpi=120)
+    plt.close()
+    print(f"  osd_chart.png → {chart_path}")

@@ -1,4 +1,4 @@
-# Запуск 5_diff_yolo_boxes_low.py — motion detection → YOLOv8n → кадры с людьми
+# Запуск 5_1_diff_yolo_boxes_low.py — motion detection → YOLOv8n → кадры с людьми
 #
 # Использование:
 #   .\sh\cam5.ps1              — запустить бесконечно
@@ -16,7 +16,7 @@ param(
 $CONDA_EXE  = "$env:USERPROFILE\miniconda3\Scripts\conda.exe"
 $CONDA_ENV  = "conda_video"
 $PROJECT    = "E:\_Home\Tony\pet projects\video"
-$SCRIPT     = "scripts\cameras\5_diff_yolo_boxes_low.py"
+$SCRIPT     = "scripts\cameras\5_1_diff_yolo_boxes_low.py"
 
 # ─── Текущие значения из .env (для справки; менять в .env, не здесь) ──────────
 #   MOTION_DIFF_THRESHOLD = 3.3      # порог motion diff
