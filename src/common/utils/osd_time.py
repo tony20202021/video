@@ -35,7 +35,7 @@ _WIDTH_ONE = 4            # '1' (очень узкая)
 
 _TEMPLATES: dict[str, np.ndarray] = {}
 _LOCK = threading.Lock()
-_DEFAULT_NPZ = Path(__file__).resolve().parents[3] / ".models" / "osd_templates.npz"
+_DEFAULT_NPZ = Path(__file__).resolve().parents[3] / ".models" / "osd" / "osd_templates.npz"
 
 
 # LOW-stream frame geometry (640×360, upper-half crop of full stream)
@@ -47,7 +47,7 @@ LOW_THRESH  = 220
 
 _LOW_TEMPLATES: dict[str, np.ndarray] = {}
 _LOW_LOCK = threading.Lock()
-_DEFAULT_LOW_NPZ = Path(__file__).resolve().parents[3] / ".models" / "osd_templates_low.npz"
+_DEFAULT_LOW_NPZ = Path(__file__).resolve().parents[3] / ".models" / "osd" / "osd_templates_low.npz"
 
 
 # ── Загрузка / сохранение шаблонов ───────────────────────────────────────────

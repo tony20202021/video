@@ -1,4 +1,4 @@
-"""Классификация группы человека: resident / courier / delivery / utilities / other.
+"""Классификация группы человека: 1_resident / 2_delivery / 3_utilities / 99_other.
 
 Модель: MobileNetV3-Small, обученная на кропах людей.
 Вход:  BGR кроп произвольного размера → ресайз до 224×224
@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-CLASSES = ["resident", "courier", "delivery", "utilities", "other"]
+CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
 INPUT_SIZE = 224
 # ImageNet mean/std — стандарт для MobileNetV3
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)

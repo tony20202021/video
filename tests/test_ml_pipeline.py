@@ -12,7 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ml.classify import GroupClassifier, CLASSES, _preprocess as classify_preprocess
-from ml.identify import PersonIdentifier, cosine_similarity, _preprocess as identify_preprocess
+from ml.identify import PersonIdentifier, _preprocess as identify_preprocess
 from ml.pipeline import MLPipeline, MLConfig, PersonResult, _extract_crop
 
 
@@ -40,81 +40,58 @@ class TestGroupClassifier:
         assert blob.dtype == np.float32
 
     def test_preprocess_normalization(self):
-        # Чёрный кадр: нормализованные значения должны быть отрицательными (сдвиг от mean)
         bgr = np.zeros((224, 224, 3), dtype=np.uint8)
         blob = classify_preprocess(bgr)
         assert (blob < 0).any()
 
     def test_classes_list(self):
-        assert "resident" in CLASSES
-        assert "courier" in CLASSES
-        assert len(CLASSES) == 5
+        assert "1_resident" in CLASSES
+        assert "2_delivery" in CLASSES
+        assert "courier" not in CLASSES
+        assert len(CLASSES) == 4
 
 
 # ─── PersonIdentifier ─────────────────────────────────────────────────────────
 
 class TestPersonIdentifier:
-    def test_no_model_embed_returns_none(self):
+    def test_no_model_not_ready(self):
         ident = PersonIdentifier()
         assert not ident.ready
-        result = ident.embed(np.zeros((100, 100, 3), dtype=np.uint8))
-        assert result is None
 
-    def test_identify_without_model(self):
+    def test_person_count_without_model(self):
         ident = PersonIdentifier()
-        pid, sim = ident.identify(np.zeros((100, 100, 3), dtype=np.uint8))
+        assert ident.person_count == 0
+
+    def test_identify_without_model_returns_none(self):
+        ident = PersonIdentifier()
+        pid, conf = ident.identify(np.zeros((100, 100, 3), dtype=np.uint8))
         assert pid is None
-        assert sim == 0.0
+        assert conf == 0.0
 
-    def test_add_and_identify_with_mock(self):
+    def test_identify_with_explicit_classes(self):
+        ident = PersonIdentifier(classes=["alice", "bob"])
+        # Без модели всё равно (None, 0.0) — сессии нет
+        assert not ident.ready
+        pid, conf = ident.identify(np.zeros((100, 100, 3), dtype=np.uint8))
+        assert pid is None
+        assert conf == 0.0
+
+    def test_load_nonexistent_returns_false(self):
         ident = PersonIdentifier()
-        # Добавляем эмбеддинги напрямую (без модели)
-        emb_alice = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
-        emb_bob   = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32)
-        ident.add_embedding("alice", emb_alice)
-        ident.add_embedding("bob", emb_bob)
-
-        # Ищем ближайшего к alice вручную
-        query = np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32)
-        best_id, best_sim = None, -1.0
-        for pid, emb in ident._embeddings.items():
-            s = cosine_similarity(query, emb)
-            if s > best_sim:
-                best_id, best_sim = pid, s
-        assert best_id == "alice"
-        assert best_sim > 0.9
-
-    def test_load_embeddings_from_dict(self):
-        ident = PersonIdentifier()
-        data = {
-            "p_001": [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]],
-            "p_002": [[0.0, 1.0, 0.0]],
-        }
-        ident.load_embeddings(data)
-        assert ident.person_count == 2
-        assert "p_001" in ident._embeddings
-        assert "p_002" in ident._embeddings
-
-    def test_cosine_similarity_identical(self):
-        v = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-        assert abs(cosine_similarity(v, v) - 1.0) < 1e-6
-
-    def test_cosine_similarity_orthogonal(self):
-        a = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        b = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-        assert abs(cosine_similarity(a, b)) < 1e-6
+        ok = ident.load(Path("/nonexistent/model.onnx"))
+        assert ok is False
+        assert not ident.ready
 
     def test_preprocess_shape(self):
         bgr = np.random.randint(0, 255, (160, 120, 3), dtype=np.uint8)
         blob = identify_preprocess(bgr)
-        assert blob.shape == (1, 3, 112, 112)
+        assert blob.shape == (1, 3, 224, 224)
         assert blob.dtype == np.float32
 
-    def test_preprocess_range(self):
-        bgr = np.zeros((112, 112, 3), dtype=np.uint8)
+    def test_preprocess_normalization(self):
+        bgr = np.zeros((224, 224, 3), dtype=np.uint8)
         blob = identify_preprocess(bgr)
-        # Нулевой пиксель → (0 - 127.5) / 128 ≈ -0.996
-        assert abs(blob[0, 0, 0, 0] - (-127.5 / 128.0)) < 1e-4
+        assert (blob < 0).any()
 
 
 # ─── MLPipeline ───────────────────────────────────────────────────────────────
@@ -147,6 +124,15 @@ class TestMLPipeline:
         results = pipeline.run(frame, det)
         assert results[0].bbox == (50, 60, 150, 250)
         assert abs(results[0].detect_conf - 0.88) < 1e-6
+
+    def test_classify_crop_no_model(self):
+        pipeline = self._make_pipeline()
+        crop = np.zeros((64, 48, 3), dtype=np.uint8)
+        r = pipeline.classify_crop(crop)
+        assert isinstance(r, PersonResult)
+        assert r.group_class == "unknown"
+        assert r.person_id is None
+        assert r.bbox == (0, 0, 0, 0)
 
     def test_extract_crop_clamps_to_frame(self):
         frame = np.ones((100, 100, 3), dtype=np.uint8)

@@ -60,6 +60,7 @@ from common.utils.camera_run import (
     parse_img_filename as _parse_img_filename,
     regen_osd_from_images as _regen_osd_from_images,
     save_charts as _save_charts_base,
+    save_cpu_csv as _save_cpu_csv,
     save_osd_chart as _save_osd_chart,
     save_pts_chart as _save_pts_chart,
     save_run_stats as _save_run_stats,
@@ -77,7 +78,7 @@ from common.utils.motion_utils import (
 from common.utils.time_msk import ts_cam_for_file, ts_for_dir, ts_for_file
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "cameras" / "4_motion_diff_low"
+DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "pipeline" / "1_motion_diff"
 
 _S4_SAVE_COLORS = {"baseline": "#888888", "diff": "#cc3333", "heartbeat": "#8844bb", "raw": "#dd8800"}
 _S4_SAVE_LEVELS = {"baseline": 1, "diff": 2, "heartbeat": 3, "raw": 4}
@@ -129,6 +130,89 @@ class _RtcpWorker:
 
 
 
+def _regen_csv_from_images(run_dir: Path) -> None:
+    """Восстанавливает saves.csv и diffs.csv из имён сохранённых картинок."""
+    import re as _re
+    from datetime import datetime as _dt
+
+    images_dir = run_dir / "images"
+    if not images_dir.exists():
+        print("  [!] images/ не найден — восстановление невозможно")
+        return
+
+    def _parse_stem(stem: str):
+        """→ (ts_human, ts_msk, cam, img_type) или None."""
+        parts = stem.split("_")
+        for i, part in enumerate(parts):
+            if len(part) == 8 and part.isdigit():
+                cam = "_".join(parts[:i])
+                ts_msk = "_".join(parts[i:i+4]) if i + 3 < len(parts) else part
+                img_type = parts[-1]
+                date_p = part
+                time_p = parts[i + 1] if i + 1 < len(parts) else "000000"
+                ts_human = (f"{date_p[:4]}-{date_p[4:6]}-{date_p[6:]} "
+                            f"{time_p[:2]}:{time_p[2:4]}:{time_p[4:6]}")
+                return ts_human, ts_msk, cam, img_type
+        return None
+
+    # entries: (ts_human, ts_msk, cam, img_type)
+    entries = []
+    for cam_dir in sorted(images_dir.iterdir()):
+        if not cam_dir.is_dir():
+            continue
+        diff_dir = cam_dir / "diff"
+        if diff_dir.exists():
+            for p in sorted(diff_dir.glob("*.jpg")):
+                r = _parse_stem(p.stem)
+                if r:
+                    entries.append(r)
+        for p in sorted(cam_dir.glob("*.jpg")):
+            r = _parse_stem(p.stem)
+            if r:
+                entries.append(r)
+
+    if not entries:
+        print("  [!] Картинок не найдено — восстановление невозможно")
+        return
+
+    entries.sort(key=lambda x: x[0])
+
+    def _ts_to_epoch(ts_human: str) -> float:
+        try:
+            return _dt.strptime(ts_human, "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            return 0.0
+
+    t0 = _ts_to_epoch(entries[0][0])
+    saves_rows, diffs_rows = [], []
+
+    for ts_human, ts_msk, cam, img_type in entries:
+        mono_s = round(_ts_to_epoch(ts_human) - t0, 3)
+        if img_type.startswith("diff"):
+            save_type = "diff"
+            m = _re.match(r"diff(\d+\.?\d*)", img_type)
+            diff_val = float(m.group(1)) if m else 0.0
+            diffs_rows.append([mono_s, ts_msk, cam, round(diff_val, 3)])
+        elif img_type in ("baseline", "heartbeat"):
+            save_type = img_type
+        else:
+            save_type = img_type
+        saves_rows.append([mono_s, ts_msk, cam, save_type])
+
+    if saves_rows:
+        with open(run_dir / "saves.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["mono_s", "ts_msk", "cam", "type"])
+            w.writerows(saves_rows)
+        print(f"  saves.csv:  {len(saves_rows)} записей (из картинок)")
+    if diffs_rows:
+        with open(run_dir / "diffs.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["mono_s", "ts_msk", "cam", "diff"])
+            w.writerows(diffs_rows)
+        print(f"  diffs.csv:  {len(diffs_rows)} записей (из картинок)")
+
+
 def _regen_charts(run_dir: Path) -> None:
     """Перечитывает CSV из существующего run-каталога и перегенерирует графики."""
     import csv as _csv
@@ -156,6 +240,10 @@ def _regen_charts(run_dir: Path) -> None:
             return default
 
     print(f"Перегенерация графиков из: {run_dir}")
+
+    if not (run_dir / "saves.csv").exists():
+        print("CSV-файлы не найдены — восстанавливаю из картинок…")
+        _regen_csv_from_images(run_dir)
 
     frame_log = [[_f(r[0]), r[1], r[2], _i(r[3]), _i(r[4]), r[5] if len(r) > 5 else ""]
                  for r in _load("frames.csv") if len(r) >= 5]
@@ -516,12 +604,22 @@ def main() -> int:
 
     except KeyboardInterrupt:
         print("\nОстанов по Ctrl+C")
+        print("Сохранение статистики — не нажимайте Ctrl+C повторно…", flush=True)
     finally:
         for r in readers.values():
-            r.stop()
+            try:
+                r.stop()
+            except KeyboardInterrupt:
+                pass
         for w in rtcp_workers.values():
-            w.stop()
-        cpu_log = cpu_monitor.stop()
+            try:
+                w.stop()
+            except KeyboardInterrupt:
+                pass
+        try:
+            cpu_log = cpu_monitor.stop()
+        except KeyboardInterrupt:
+            cpu_log = cpu_monitor.snapshot()
 
         print("\nСохранение результатов…")
 
@@ -553,12 +651,7 @@ def main() -> int:
                 writer.writerows(pts_log)
             print(f"  pts.csv:    {len(pts_log)} записей")
 
-        if cpu_log:
-            with open(out_dir / "cpu.csv", "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["mono_s", "ts_msk", "cpu_pct"])
-                writer.writerows(cpu_log)
-            print(f"  cpu.csv:    {len(cpu_log)} замеров")
+        _save_cpu_csv(cpu_log, out_dir)
 
         _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, out_dir)
         _save_pts_chart(pts_log, cpu_log, out_dir)

@@ -16,7 +16,7 @@ from backend.db import get_db
 
 MSK = timezone(timedelta(hours=3))
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLASSES = ["resident", "courier", "delivery", "utilities", "other"]
+CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
 router = APIRouter(prefix="/training", tags=["training"])
 
 
@@ -120,13 +120,6 @@ async def list_models():
     for task in ("detect", "classify", "identify"):
         task_dir = models_dir / task
         if not task_dir.is_dir():
-            # Проверяем старое расположение (yolov8n.onnx в корне models/)
-            if task == "detect":
-                old = models_dir / "yolov8n.onnx"
-                if old.is_file():
-                    result[task] = [{"version": "v1", "path": str(old.relative_to(REPO_ROOT)),
-                                     "size_mb": round(old.stat().st_size / 1024**2, 1)}]
-                    continue
             result[task] = []
             continue
         versions = []

@@ -61,7 +61,7 @@ def main() -> int:
     ap.add_argument("--force", action="store_true", help="Перезаписать если файл уже существует")
     args = ap.parse_args()
 
-    out_path = MODELS_DIR / f"{args.model}.onnx"
+    out_path = MODELS_DIR / "detect" / f"{args.model}.onnx"
 
     if out_path.is_file() and not args.force:
         print(f"Модель уже есть: {out_path}")

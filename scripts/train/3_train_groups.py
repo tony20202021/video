@@ -1,19 +1,20 @@
-"""Обучение классификатора группы (MobileNetV3-Small → ONNX).
+"""Обучение классификатора группы (Модель 1 — MobileNetV3-Small → ONNX).
 
 Входные данные:
   - Директория images/ с кропами людей
-  - labels.json с разметкой (формат из export_data.py)
+  - labels.json с разметкой (формат из /training/export)
 
 Выходные данные:
-  - models/classify/v<N>.onnx   — ONNX модель для production
-  - training_results.json       — метрики
+  - .models/classify/v<N>.onnx   — ONNX модель для production
+  - .models/classify/backbone.pt — веса backbone для инициализации Модели 2
+  - training_results.json        — метрики
 
 Требования:
   pip install torch torchvision
 
 Usage:
-    python scripts/train/train_classifier.py --data .output/training/export_classify_*.zip
-    python scripts/train/train_classifier.py --data /path/to/export_dir --epochs 30
+    python scripts/train/2_train_groups.py --data .output/training/export_classify_*.zip
+    python scripts/train/2_train_groups.py --data /path/to/export_dir --epochs 30
 """
 
 from __future__ import annotations
@@ -28,26 +29,46 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLASSES = ["resident", "courier", "delivery", "utilities", "other"]
+CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
 NUM_CLASSES = len(CLASSES)
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 
 
 def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
-    """Распаковывает zip если нужно, возвращает (images_dir, labels)."""
+    """Распаковывает zip если нужно, возвращает (images_dir, labels).
+
+    Поддерживает два формата labels.json:
+      1. Стандартный (из 1_export_data / /training/export):
+           {"labels": [{"image": "img_001.jpg", "class": "resident"}]}
+         images_dir = data_path/images/
+      2. Формат 4_label_ui:
+           {"labels": {"relative/path/to/crop.jpg": "resident"}}
+         images_dir = REPO_ROOT (пути хранятся относительно корня репо)
+    """
     if data_path.suffix == ".zip":
         extract_dir = data_path.parent / data_path.stem
         with zipfile.ZipFile(data_path) as zf:
             zf.extractall(extract_dir)
         data_path = extract_dir
 
-    labels_file = data_path / "labels.json"
+    if data_path.is_file() and data_path.name == "labels.json":
+        labels_file = data_path
+    else:
+        labels_file = data_path / "labels.json"
     if not labels_file.is_file():
         raise FileNotFoundError(f"labels.json не найден в {data_path}")
 
-    labels = json.loads(labels_file.read_text(encoding="utf-8"))["labels"]
-    images_dir = data_path / "images"
-    return images_dir, labels
+    raw = json.loads(labels_file.read_text(encoding="utf-8"))
+    raw_labels = raw["labels"]
+
+    if isinstance(raw_labels, dict):
+        # Формат 4_label_ui: ключ — путь относительно REPO_ROOT
+        labels = [{"image": path, "class": cls}
+                  for path, cls in raw_labels.items()]
+        return REPO_ROOT, labels
+    else:
+        # Стандартный список: images/ + имена файлов
+        return data_path / "images", raw_labels
 
 
 def _build_model(num_classes: int, pretrained: bool = True):
@@ -61,7 +82,6 @@ def _build_model(num_classes: int, pretrained: bool = True):
     model = M.mobilenet_v3_small(
         weights=M.MobileNet_V3_Small_Weights.IMAGENET1K_V1 if pretrained else None
     )
-    # Заменяем голову классификатора
     in_features = model.classifier[3].in_features
     model.classifier[3] = __import__("torch").nn.Linear(in_features, num_classes)
     return model
@@ -89,7 +109,6 @@ def train(
 
     images_dir, labels = _load_dataset(data_path)
 
-    # Фильтруем только существующие файлы и известные классы
     valid = [
         lb for lb in labels
         if (images_dir / lb["image"]).is_file()
@@ -106,7 +125,6 @@ def train(
     for cls, cnt in sorted(class_counts.items()):
         print(f"  {cls}: {cnt}")
 
-    # Dataset
     _train_tf = transforms.Compose([
         transforms.Resize(256),
         transforms.RandomCrop(224),
@@ -154,7 +172,7 @@ def train(
         return {}
     model = model.to(device)
 
-    # Сначала обучаем только голову, потом всю сеть
+    # Фаза 1: только голова
     for param in model.features.parameters():
         param.requires_grad = False
 
@@ -166,7 +184,7 @@ def train(
     history = []
 
     for epoch in range(1, epochs + 1):
-        # Разморозим веса с середины обучения
+        # Фаза 2: вся сеть с середины обучения
         if epoch == epochs // 2 + 1:
             for param in model.parameters():
                 param.requires_grad = True
@@ -206,11 +224,11 @@ def train(
             best_val_acc = val_acc
             torch.save(model.state_dict(), output_dir / "best.pt")
 
-    # Загружаем лучшие веса и экспортируем в ONNX
+    # Загружаем лучшие веса
     model.load_state_dict(torch.load(output_dir / "best.pt", map_location=device))
     model.eval()
 
-    # Определяем следующий номер версии
+    # Экспорт в ONNX
     classify_dir = REPO_ROOT / ".models" / "classify"
     classify_dir.mkdir(parents=True, exist_ok=True)
     existing = sorted(classify_dir.glob("v*.onnx"))
@@ -224,6 +242,14 @@ def train(
         opset_version=12,
         dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
     )
+
+    # Сохраняем backbone для инициализации Модели 2 (5_train_residents.py)
+    backbone_path = classify_dir / "backbone.pt"
+    backbone_state = {k: v for k, v in model.state_dict().items()
+                      if k.startswith("features.")}
+    torch.save(backbone_state, backbone_path)
+    print(f"Backbone (для Модели 2): {backbone_path}")
+
     (output_dir / "best.pt").unlink(missing_ok=True)
 
     metrics = {
@@ -234,6 +260,7 @@ def train(
         "class_counts": class_counts,
         "history": history,
         "model_path": str(onnx_path),
+        "backbone_path": str(backbone_path),
     }
     (output_dir / "training_results.json").write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -244,14 +271,15 @@ def train(
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Обучение классификатора группы")
+    ap = argparse.ArgumentParser(description="Обучение классификатора группы (Модель 1)")
     ap.add_argument("--data", type=Path, required=True,
                     help="Путь к zip-архиву или директории с images/ и labels.json")
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-split", type=float, default=0.2)
-    ap.add_argument("--output", type=Path, default=REPO_ROOT / ".output" / "train" / "2_train_classifier" / "run")
+    ap.add_argument("--output", type=Path,
+                    default=REPO_ROOT / ".output" / "train" / "3_train_groups" / "run")
     args = ap.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)

@@ -10,14 +10,17 @@
 | `4_motion_diff_low.py` | Цикл: детектирует движение (frame diff по LOW), сохраняет LOW-кадры и heartbeat | Да | `.output/cameras/4_motion_diff_low/run_<ts>/` — baseline + motion + heartbeat | Накопление кадров без ML; отладка порога |
 | `5_1_diff_yolo_boxes_low.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/cameras/5_1_diff_yolo_boxes_low/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
 | `5_2_yolo_boxes_files.py` | Офлайн-переобработка: YOLO-детекция на уже сохранённых diff-кадрах прогонов 4 и 5_1 | Нет (файлы) | `.output/cameras/5_2_yolo_boxes_files/run_<ts>/` — детекции, timeline, cpu_chart | Ретроспективный анализ накопленных прогонов |
-| `6_2_identify_people_files.py` | То же что 5_2, но дополнительно прогоняет GroupClassifier + PersonIdentifier | Нет (файлы) | `.output/cameras/6_2_identify_people_files/run_<ts>/` | Идентификация людей по архиву |
+| `6_2_classify_groups_files.py` | Берёт кропы 5_2, прогоняет GroupClassifier (Модель 1) | Нет (файлы) | `.output/cameras/6_2_classify_groups_files/run_<ts>/` | Классификация кропов по группам |
+| `6_3_identify_residents_files.py` | Берёт кропы `resident/` из 6_2, прогоняет PersonIdentifier (Модель 2) | Нет (файлы) | `.output/cameras/6_3_identify_residents_files/run_<ts>/` | Идентификация конкретных жителей |
 
 **Порядок первичной настройки:** `1` → `2` → `3` → `4` и/или `5_1`
 
-**Ключевые отличия live (4, 5_1) vs офлайн (5_2, 6_2):**
+**Ключевые отличия live (4, 5_1) vs офлайн (5_2, 6_2, 6_3):**
 - `4_motion_diff_low` сохраняет любое движение без ML — только LOW-поток, легковесный
-- `5_1_diff_yolo_boxes_low` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `models/yolov8n.onnx`
-- `5_2` / `6_2` обрабатывают уже накопленные прогоны 4 или 5_1 офлайн; структура каталогов на входе должна быть совместимой (per-cam + diff/)
+- `5_1_diff_yolo_boxes_low` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `.models/detect/yolov8n.onnx`
+- `5_2` обрабатывает накопленные прогоны 4 или 5_1 офлайн, вырезает кропы YOLO
+- `6_2` берёт кропы `5_2` → GroupClassifier (Модель 1) → `classified/<group>/`
+- `6_3` берёт `classified/resident/` из `6_2` → PersonIdentifier (Модель 2) → `classified/<person_id>/`
 - Оба live-скрипта можно запускать одновременно, но они открывают одни и те же RTSP-потоки
 
 ---
@@ -255,7 +258,7 @@ wget -P models/ https://github.com/ultralytics/assets/releases/download/v8.3.0/y
 ```bash
 python scripts/cameras/5_1_diff_yolo_boxes_low.py
 python scripts/cameras/5_1_diff_yolo_boxes_low.py --conf 0.25 --threshold 3.3
-python scripts/cameras/5_1_diff_yolo_boxes_low.py --model models/yolov8n.onnx --tcp
+python scripts/cameras/5_1_diff_yolo_boxes_low.py --model .models/detect/yolov8n.onnx --tcp
 ```
 
 Общие утилиты motion-цикла (фильтрация URL, frame diff, проверка кадра HEVC, открытие потока) вынесены в `src/common/utils/motion_utils.py`.
@@ -298,18 +301,29 @@ MOTION_DIFF_THRESHOLD=3.3
 |---|---|---|
 | `sh/cameras/4_motion_diff_low.ps1` | `4_motion_diff_low.py` | motion detection без YOLO, накопление baseline-кадров |
 | `sh/cameras/5_1_diff_yolo_boxes_low.ps1` | `5_1_diff_yolo_boxes_low.py` | motion → YOLO → сохранение bbox-кадров |
-| `sh/cameras/6_identify_people.ps1` | `6_identify_people.py` | motion → YOLO → ML (группа + идентификация человека) |
+| `sh/cameras/5_2_yolo_boxes_files.ps1` | `5_2_yolo_boxes_files.py` | офлайн: YOLO на сохранённых diff-кадрах |
+| `sh/cameras/6_2_classify_groups_files.ps1` | `6_2_classify_groups_files.py` | офлайн: GroupClassifier на кропах 5_2 |
+| `sh/cameras/6_3_identify_residents_files.ps1` | `6_3_identify_residents_files.py` | офлайн: PersonIdentifier на кропах `resident/` из 6_2 |
 
-**Синтаксис одинаковый для всех:**
+**Синтаксис для живых скриптов (4, 5_1):**
 ```powershell
-# Запуск из корня проекта:
 .\sh\cameras\5_1_diff_yolo_boxes_low.ps1              # бесконечно
 .\sh\cameras\5_1_diff_yolo_boxes_low.ps1 7200         # на 2 часа (секунды)
 .\sh\cameras\5_1_diff_yolo_boxes_low.ps1 60           # на 1 минуту (для тестов)
 .\sh\cameras\5_1_diff_yolo_boxes_low.ps1 0 ".output\cameras\5_1_diff_yolo_boxes_low\run_20260627_205503_msk"  # перегенерация графиков
 ```
 
-Настройки (порог, YOLO-параметры) читаются из `.env` — менять только там.  
+**Синтаксис для офлайн-скриптов (5_2, 6_2, 6_3):**
+```powershell
+.\sh\cameras\5_2_yolo_boxes_files.ps1                       # обрабатывает все InputDirs из ps1
+.\sh\cameras\5_2_yolo_boxes_files.ps1 -Conf 0.3             # явный порог (переопределяет .env)
+.\sh\cameras\6_2_classify_groups_files.ps1                  # классификация по группам
+.\sh\cameras\6_2_classify_groups_files.ps1 -ClassifyConf 0.70
+.\sh\cameras\6_3_identify_residents_files.ps1               # идентификация жителей
+.\sh\cameras\6_3_identify_residents_files.ps1 -IdentifyConf 0.75 -Model ".models\identify\v1.onnx"
+```
+
+Настройки (YOLO-параметры `YOLO_CONF`, `YOLO_NMS`, `YOLO_MAX_FPS`; ML-пороги `CLASSIFY_CONF`, `IDENTIFY_CONF`) читаются из `.env` — менять только там. Приоритет: явный параметр CLI → `.env` → встроенный дефолт.  
 Дополнительные флаги (`--tcp`, `--save-raw`, `--cam-ts`) раскомментировать в `$EXTRA` внутри ps1.
 
 **Проверить что прогон запустился** — должна появиться новая директория через ~5 сек:

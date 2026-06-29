@@ -1,29 +1,28 @@
 """
-Офлайн переобработка сохранённых прогонов: YOLO + ML-пайплайн на уже записанных кадрах.
+Переобработка сохранённых прогонов: YOLO-детекция на уже записанных кадрах.
 
 Входные данные (один или несколько позиционных аргументов):
   - Каталог прогона:       .output/cameras/.../run_YYYYMMDD_HHMMSS_msk
-  - Родительский каталог:  .output/cameras/5_1_diff_yolo_boxes_low  (находит все run_*)
+  - Родительский каталог:  .output/cameras/5_diff_yolo_boxes_low  (находит все run_*)
   Можно смешивать.
 
 Выход:
-  .output/cameras/6_2_identify_people_files/run_<ts>/
-    <parent_stem>/
-      <run_name>/
-        <cam>/
-          <img>_yolo.jpg        — кадр с рамками + ML-метками
-          crops/
-    detections.csv              — все детекции: mono_s, cam, bbox, group, person_id, conf
-    person_timeline.png         — хронология по person_id / группе
-    timeline_chart.png          — события по прогонам (из saves.csv + новые детекции)
-    cpu.csv / cpu_chart.png
+  .output/cameras/5_2_/run_<ts>/
+    <run_name>/               — по одному на каждый входной прогон
+      <cam>/
+        <img>_yolo.jpg        — кадр с рамками (только при детекции)
+        crops/
+    detections.csv            — все новые детекции: image_ts, run, cam, file, x1..y2, conf
+    timeline_chart.png        — сводный график: события из входных прогонов + новые YOLO
+    cpu.csv / cpu_chart.png   — загрузка ЦПУ только на переобработку
     run_stats.json
     run.log
 
 Usage:
-    python scripts/cameras/6_2_identify_people_files.py .output/cameras/5_1_diff_yolo_boxes_low
-    python scripts/cameras/6_2_identify_people_files.py run_dir1 run_dir2
-    python scripts/cameras/6_2_identify_people_files.py --no-ml .output/cameras/5_1_diff_yolo_boxes_low
+    python scripts/cameras/5_2_yolo_boxes_files.py .output/cameras/5_diff_yolo_boxes_low
+    python scripts/cameras/5_2_yolo_boxes_files.py run_dir1 run_dir2
+    python scripts/cameras/5_2_yolo_boxes_files.py \\
+        .output/cameras/4_motion_diff_low .output/cameras/5_diff_yolo_boxes_low
 """
 
 from __future__ import annotations
@@ -50,31 +49,22 @@ if str(_SRC) not in sys.path:
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     Tee as _Tee,
+    draw_cpu_on_ax as _draw_cpu_on_ax,
     parse_img_filename as _parse_img_filename,
+    save_cpu_csv as _save_cpu_csv,
 )
 from common.utils.time_msk import ts_for_dir
 
 MSK = timezone(timedelta(hours=3))
 
-DEFAULT_OUTPUT     = REPO_ROOT / ".output" / "cameras" / "6_2_identify_people_files"
-DEFAULT_MODEL      = REPO_ROOT / ".models" / "yolov8n.onnx"
-DEFAULT_CONFIG     = REPO_ROOT / "config.yaml"
-DEFAULT_EMBEDDINGS = REPO_ROOT / ".models" / "embeddings.json"
+DEFAULT_OUTPUT = REPO_ROOT / ".output" / "pipeline" / "2_yolo_boxes_files"
+DEFAULT_MODEL  = REPO_ROOT / ".models" / "detect" / "yolov8n.onnx"
 
 YOLO_INPUT_SIZE = 640
 PERSON_CLASS    = 0
 BOX_COLOR       = (0, 255, 0)
 BOX_THICKNESS   = 2
 FONT            = cv2.FONT_HERSHEY_SIMPLEX
-
-_GROUP_COLOR = {
-    "resident":  (0, 200, 0),
-    "courier":   (0, 165, 255),
-    "delivery":  (255, 165, 0),
-    "utilities": (160, 0, 160),
-    "other":     (128, 128, 128),
-    "unknown":   (128, 128, 128),
-}
 
 _SAVE_COLORS = {
     "baseline":  "#888888",
@@ -86,7 +76,7 @@ _SAVE_COLORS = {
 _SAVE_LEVELS = {"baseline": 1, "heartbeat": 2, "diff": 3, "raw": 4, "yolo": 5}
 
 
-# ─── YOLOv8n inference ────────────────────────────────────────────────────────
+# ─── YOLOv8n inference (copied from 5_diff_yolo_boxes_low.py) ─────────────────
 
 def _load_model(model_path: Path):
     try:
@@ -97,7 +87,8 @@ def _load_model(model_path: Path):
     if not model_path.is_file():
         print(
             f"Модель не найдена: {model_path}\n"
-            f"  Скачать: python scripts/setup_models.py",
+            f"  Скачать: wget -P models/ "
+            f"https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx",
             file=sys.stderr,
         )
         return None
@@ -112,7 +103,7 @@ def _preprocess(bgr: np.ndarray) -> tuple[np.ndarray, float, int, int]:
     canvas = np.full((YOLO_INPUT_SIZE, YOLO_INPUT_SIZE, 3), 114, dtype=np.uint8)
     pad_x = (YOLO_INPUT_SIZE - nw) // 2
     pad_y = (YOLO_INPUT_SIZE - nh) // 2
-    canvas[pad_y:pad_y + nh, pad_x:pad_x + nw] = resized
+    canvas[pad_y : pad_y + nh, pad_x : pad_x + nw] = resized
     blob = canvas[:, :, ::-1].astype(np.float32) / 255.0
     blob = blob.transpose(2, 0, 1)[np.newaxis]
     return blob, scale, pad_x, pad_y
@@ -134,8 +125,8 @@ def _postprocess(
     mask = person_scores >= conf_threshold
     if not mask.any():
         return []
-    scores = person_scores[mask]
-    bxywh  = preds[:, :4][mask]
+    scores  = person_scores[mask]
+    bxywh   = preds[:, :4][mask]
     cx, cy, bw, bh = bxywh[:, 0], bxywh[:, 1], bxywh[:, 2], bxywh[:, 3]
     x1 = cx - bw / 2
     y1 = cy - bh / 2
@@ -177,78 +168,43 @@ def draw_boxes(bgr: np.ndarray, detections) -> np.ndarray:
     return out
 
 
-def _draw_boxes_ml(bgr: np.ndarray, results: list) -> np.ndarray:
-    out = bgr.copy()
-    for r in results:
-        x1, y1, x2, y2 = r.bbox
-        color = _GROUP_COLOR.get(r.group_class, (128, 128, 128))
-        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
-        label = (f"{r.person_id}({r.identify_conf:.2f})"
-                 if r.person_id else f"{r.group_class}({r.group_conf:.2f})")
-        (tw, th), baseline = cv2.getTextSize(label, FONT, 0.5, 1)
-        bg_y1 = max(0, y1 - th - baseline - 2)
-        cv2.rectangle(out, (x1, bg_y1), (x1 + tw, y1), color, -1)
-        cv2.putText(out, label, (x1, y1 - baseline - 1), FONT, 0.5,
-                    (255, 255, 255), 1, cv2.LINE_AA)
-    return out
-
-
-# ─── ML-пайплайн ──────────────────────────────────────────────────────────────
-
-def _load_ml_pipeline(config_path: Path, embeddings_path: Path):
-    if not config_path.is_file():
-        return None
-    try:
-        import yaml
-    except ImportError:
-        print("  [ML] Нужен pyyaml: pip install pyyaml", file=sys.stderr)
-        return None
-    try:
-        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"  [ML] Ошибка чтения {config_path}: {e}", file=sys.stderr)
-        return None
-    try:
-        from ml.pipeline import MLPipeline
-        pipeline = MLPipeline.from_config(cfg)
-    except Exception as e:
-        print(f"  [ML] Ошибка инициализации MLPipeline: {e}", file=sys.stderr)
-        return None
-    if embeddings_path.is_file():
-        try:
-            embeddings = _json.loads(embeddings_path.read_text(encoding="utf-8"))
-            pipeline.load_person_embeddings(embeddings)
-            print(f"  [ML] Эмбеддинги: {pipeline.identifier.person_count} жителей "
-                  f"из {embeddings_path.name}")
-        except Exception as e:
-            print(f"  [ML] Ошибка загрузки эмбеддингов: {e}", file=sys.stderr)
-    return pipeline
-
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _expand_inputs(paths: list[Path]) -> list[tuple[Path, str]]:
+    """Expand parent dirs to run_* subdirs.
+
+    Returns list of (run_dir, parent_stem) where parent_stem is the name of the
+    containing script-output dir (e.g. '4_motion_diff_low'), or '' if the path
+    was itself a run dir passed directly.
+    """
+    def _is_run(d: Path) -> bool:
+        return (d / "frames.csv").exists() or (d / "saves.csv").exists()
+
     runs: list[tuple[Path, str]] = []
     for p in paths:
         if not p.exists():
             print(f"  [!] Не найдено: {p}", file=sys.stderr)
             continue
-        if (p / "frames.csv").exists():
+        if _is_run(p):
             runs.append((p, ""))
         else:
-            subs = sorted(
-                c for c in p.iterdir()
-                if c.is_dir() and c.name.startswith("run_") and (c / "frames.csv").exists()
-            )
+            subs = sorted(c for c in p.iterdir() if c.is_dir() and c.name.startswith("run_") and _is_run(c))
             if subs:
                 for s in subs:
                     runs.append((s, p.name))
             else:
-                print(f"  [!] Нет run_* с frames.csv в: {p}", file=sys.stderr)
+                print(f"  [!] Нет run_* с frames.csv/saves.csv в: {p}", file=sys.stderr)
     return runs
 
 
 def _find_images(run_dir: Path) -> dict[str, list[Path]]:
+    """Returns {cam_stem: [jpg_paths]} — only motion-event images.
+
+    For runs with cam subdirs (S5/S6 style):
+      - If cam/diff/ exists and has images → use only those (motion-diff frames).
+      - Otherwise → all direct .jpg in the cam dir.
+    For flat runs (S4 style, no cam subdirs): all .jpg in images/ directly.
+    """
     images_dir = run_dir / "images"
     if not images_dir.exists():
         return {}
@@ -277,6 +233,7 @@ def _load_csv(path: Path, min_cols: int) -> list[list]:
 
 
 def _parse_ts_msk(ts_str: str) -> float:
+    """Parse YYYYMMDD_HHMMSS_ffffff_msk to epoch float."""
     try:
         parts = ts_str.split("_")
         d, t = parts[0], parts[1]
@@ -290,6 +247,7 @@ def _parse_ts_msk(ts_str: str) -> float:
 
 
 def _img_ts_to_mono(img_ts_str: str, wall_t0_epoch: float, first_mono_s: float) -> float:
+    """Convert 'YYYY-MM-DD HH:MM:SS' (from parse_img_filename) to mono_s for chart."""
     try:
         dt = datetime.strptime(img_ts_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=MSK)
         return dt.timestamp() - wall_t0_epoch + first_mono_s
@@ -300,11 +258,25 @@ def _img_ts_to_mono(img_ts_str: str, wall_t0_epoch: float, first_mono_s: float) 
 # ─── Charts ───────────────────────────────────────────────────────────────────
 
 def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
+    """Сводный график: для каждого прогона — интервалы кадров + сохранения + новые YOLO.
+
+    run_data list items:
+      label         : str  (run dir name)
+      frame_log     : [[mono_s, ts_msk, url_id, ok, plausible, event], ...]
+      saves_log     : [[mono_s, ts_msk, cam, type], ...]  (old yolo filtered out)
+      diffs_log     : [[mono_s, ts_msk, cam, diff_val], ...]
+      threshold     : float
+      wall_t0       : float  (epoch of first frame in run)
+      first_mono_s  : float  (mono_s of first frame)
+      yolo_new      : [[cam_stem, img_stem, n_people, mono_approx], ...]
+    """
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import matplotlib.ticker as _ticker
+        import numpy as _np
+        import matplotlib.lines as _mlines
     except ImportError:
         print("  [!] matplotlib не найден — график не сохранён")
         return
@@ -319,29 +291,42 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
         except Exception:
             return None
 
-    n_rows = sum(1 for d in run_data if d["frame_log"])
+    # One subplot per run (saves + new YOLO events only)
+    def _has_data(d: dict) -> bool:
+        return bool(d["frame_log"] or d["saves_log"] or d.get("diffs_log"))
+
+    n_rows = sum(1 for d in run_data if _has_data(d))
     if n_rows == 0:
         return
 
-    fig, axes = plt.subplots(n_rows, 1,
-                              figsize=(16, max(n_rows * 2.5, 4)), squeeze=False)
-    fig.suptitle("6_2 — события по прогонам (переобработка YOLO+ML)", fontsize=11)
+    fig, axes = plt.subplots(
+        n_rows, 1,
+        figsize=(16, max(n_rows * 2.5, 4)),
+        squeeze=False,
+    )
+    fig.suptitle("5_2 — события по прогонам (переобработка YOLO)", fontsize=11)
+
     ax_idx = 0
 
     for d in run_data:
         label     = d["label"]
         frame_log = d["frame_log"]
         saves_log = d["saves_log"]
-        yolo_new  = d["yolo_new"]
+        diffs_log = d.get("diffs_log", [])
+        yolo_new  = d["yolo_new"]  # [[cam_stem, img_stem, n_people, mono_approx], ...]
 
-        if not frame_log:
+        if not _has_data(d):
             continue
 
-        t_max     = max(row[0] for row in frame_log)
-        _t0_ts    = frame_log[0][1]
+        _all_monos = [r[0] for r in frame_log] + [r[0] for r in saves_log] + [r[0] for r in diffs_log]
+        t_max = max(_all_monos) if _all_monos else 60.0
+
+        _first_ts  = next((r[1] for r in frame_log + saves_log + diffs_log if r[1]), "")
+        _t0_ts    = _first_ts
         _t0_parts = _ts_parts(_t0_ts)
         _t0_abs   = (_t0_parts[0] * 3600 + _t0_parts[1] * 60 + _t0_parts[2]) if _t0_parts else 0
         _x_left   = -(_t0_abs % 60)
+
         _tick_range = t_max * 1.02 - _x_left
         _tick_step  = next((s for s in [60, 120, 180, 300, 600, 900, 1800]
                             if _tick_range / s <= 20), 1800)
@@ -351,13 +336,14 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
             total = int(_t0 + x)
             return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
 
+        # ── Saves subplot (only) ──
         by_stype: dict[str, list[float]] = defaultdict(list)
         for r in saves_log:
             try:
                 by_stype[r[3]].append(float(r[0]))
             except (ValueError, IndexError):
                 pass
-        for _, _, label_ml, mono_approx in yolo_new:
+        for _, _, n_people, mono_approx in yolo_new:
             by_stype["yolo"].append(mono_approx)
 
         if by_stype or yolo_new:
@@ -368,13 +354,13 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
                 y_pos[stype] = y
                 ax.scatter(by_stype[stype], [y] * len(by_stype[stype]),
                            color=_SAVE_COLORS.get(stype, "#888888"),
-                           s=25, alpha=0.8, marker="o",
-                           label=f"{stype} ({len(by_stype[stype])})")
+                           s=25, alpha=0.8, marker="o", label=f"{stype} ({len(by_stype[stype])})")
                 y += 1.0
+            # Annotate YOLO events with person count
             yolo_y = y_pos.get("yolo", y - 1.0)
-            for _, _, label_ml, mono_approx in yolo_new:
+            for cam_stem, img_stem, n_people, mono_approx in yolo_new:
                 ax.annotate(
-                    label_ml, xy=(mono_approx, yolo_y),
+                    f"p{n_people}", xy=(mono_approx, yolo_y),
                     fontsize=5, ha="left", va="center", color="red",
                     xytext=(3, 0), textcoords="offset points",
                 )
@@ -383,7 +369,7 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
             ax.set_ylim(0, y + 0.5)
             ax.set_xlim(_x_left, t_max * 1.02)
             ax.set_title(
-                f"{label} — сохранения  |  YOLO/ML-новых: {len(yolo_new)}", fontsize=8
+                f"{label} — сохранения  |  YOLO-новых: {len(yolo_new)}", fontsize=8
             )
             ax.legend(loc="upper right", fontsize=7, ncol=5)
             ax.grid(True, linestyle="--", alpha=0.35)
@@ -398,84 +384,6 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
     plt.savefig(str(out_path), dpi=110)
     plt.close()
     print(f"  timeline_chart.png → {out_path}")
-
-
-def _save_person_timeline(detections_log: list, out_path: Path) -> None:
-    if not detections_log:
-        return
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        return
-
-    _ENT_COLORS = {
-        "resident":  "#228833",
-        "courier":   "#cc6600",
-        "delivery":  "#0055cc",
-        "utilities": "#770077",
-        "other":     "#888888",
-        "unknown":   "#888888",
-    }
-
-    # detections_log row: [mono_approx, run_name, cam, x1, y1, x2, y2,
-    #                       det_conf, group, group_conf, person_id, id_conf]
-    by_cam: dict[str, dict[str, list[float]]] = {}
-    for row in detections_log:
-        mono_s    = float(row[0])
-        cam       = row[2]
-        person_id = row[10] if len(row) > 10 else ""
-        group     = row[8]  if len(row) > 8  else "unknown"
-        entity    = person_id if person_id else group
-        by_cam.setdefault(cam, {}).setdefault(entity, []).append(mono_s)
-
-    all_entities: list[str] = []
-    for cam_map in by_cam.values():
-        for e in cam_map:
-            if e not in all_entities:
-                all_entities.append(e)
-
-    n = len(all_entities)
-    if n == 0:
-        return
-
-    y_idx = {e: i + 1 for i, e in enumerate(all_entities)}
-    cam_list    = sorted(by_cam.keys())
-    cam_markers = ["o", "s", "^", "D"]
-
-    fig, ax = plt.subplots(figsize=(14, max(3, n * 0.7 + 1.5)))
-    fig.suptitle("Timeline: детекции людей по времени", fontsize=11)
-
-    total_events = 0
-    for ci, cam in enumerate(cam_list):
-        mk = cam_markers[ci % len(cam_markers)]
-        for entity, times in sorted(by_cam[cam].items()):
-            y     = y_idx[entity]
-            grp   = entity if entity in _ENT_COLORS else "unknown"
-            color = _ENT_COLORS.get(grp, "#888888")
-            ax.scatter(times, [y] * len(times), s=40, alpha=0.75,
-                       color=color, marker=mk, zorder=3)
-            total_events += len(times)
-
-    ax.set_yticks(list(y_idx.values()))
-    ax.set_yticklabels(list(y_idx.keys()), fontsize=8)
-    ax.set_ylim(0, n + 1)
-    ax.set_xlabel("моно-время, с")
-    ax.set_title(f"Детекции: {total_events} событий, {n} уникальных объектов")
-    ax.grid(True, linestyle="--", alpha=0.35)
-    if len(cam_list) > 1:
-        import matplotlib.lines as _mlines
-        handles = [_mlines.Line2D([], [], color="gray",
-                                   marker=cam_markers[i % len(cam_markers)],
-                                   linestyle="None", label=cam)
-                   for i, cam in enumerate(cam_list)]
-        ax.legend(handles=handles, loc="upper right", fontsize=8)
-
-    plt.tight_layout()
-    plt.savefig(str(out_path), dpi=120)
-    plt.close()
-    print(f"  person_timeline.png → {out_path}")
 
 
 def _save_cpu_chart(cpu_log: list, out_path: Path,
@@ -493,48 +401,18 @@ def _save_cpu_chart(cpu_log: list, out_path: Path,
     n_rows = 2 if has_timing else 1
     fig, axes = plt.subplots(n_rows, 1, figsize=(14, 3 * n_rows), squeeze=False)
 
+    # ── CPU subplot ──
     ax = axes[0][0]
-    t = [r[0] for r in cpu_log]
-    v = [float(r[2]) for r in cpu_log]
-    ax.plot(t, v, color="#2255cc", linewidth=1.2, label="ЦПУ %")
-    ax.fill_between(t, v, alpha=0.18, color="#2255cc")
-    ax.set_ylim(0, 105)
-    ax.set_ylabel("ЦПУ, %")
-    ax.set_title("6_2 — загрузка ЦПУ")
-    ax.grid(True, linestyle="--", alpha=0.35)
+    _draw_cpu_on_ax(ax, cpu_log, title="5_2 — загрузка ЦПУ")
     if not has_timing:
         ax.set_xlabel("время от старта, с")
 
-    freq_pdh  = [float(r[3]) for r in cpu_log if len(r) > 3]
-    freq_step = [float(r[4]) for r in cpu_log if len(r) > 4]
-    if (freq_pdh and any(f > 0 for f in freq_pdh)) or \
-       (freq_step and any(f > 0 for f in freq_step)):
-        t_freq = [r[0] for r in cpu_log if len(r) > 3]
-        ax2f = ax.twinx()
-        all_vals = [f for f in freq_pdh + freq_step if f > 0]
-        if freq_pdh and any(f > 0 for f in freq_pdh):
-            ax2f.plot(t_freq, freq_pdh, color="#ffbb55", linewidth=1.0,
-                      linestyle="--", alpha=0.5,
-                      marker=".", markersize=4,
-                      markerfacecolor="#ff8800", markeredgewidth=0,
-                      label="МГц (PDH)")
-        if freq_step and any(f > 0 for f in freq_step):
-            t_step = [r[0] for r in cpu_log if len(r) > 4]
-            ax2f.step(t_step, freq_step, color="#aaaaaa", linewidth=0.8,
-                      alpha=0.6, where="post", label="МГц (P-state)")
-        ax2f.set_ylabel("частота, МГц", color="#ff8800", fontsize=8)
-        ax2f.tick_params(axis="y", labelcolor="#ff8800", labelsize=7)
-        ax2f.legend(loc="lower right", fontsize=7)
-        f_min = min(all_vals)
-        f_max = max(all_vals)
-        pad = max((f_max - f_min) * 0.15, 50)
-        ax2f.set_ylim(max(0, f_min - pad), f_max + pad)
-
+    # ── YOLO timing subplot ──
     if has_timing:
         ax2 = axes[1][0]
-        ts  = [r[0] for r in timing_log]
-        inf = [r[1] for r in timing_log]
-        slp = [r[2] for r in timing_log]
+        ts   = [r[0] for r in timing_log]
+        inf  = [r[1] for r in timing_log]   # inference_ms
+        slp  = [r[2] for r in timing_log]   # sleep_ms
         avg_inf = sum(inf) / len(inf) if inf else 0
         avg_slp = sum(slp) / len(slp) if slp else 0
         ax2.bar(ts, inf, width=0.3, color="#cc3333", alpha=0.8,
@@ -566,27 +444,23 @@ def _save_cpu_chart(cpu_log: list, out_path: Path,
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Офлайн YOLO+ML-переобработка сохранённых кадров"
+        description="YOLO re-detection on saved camera run images"
     )
     parser.add_argument("inputs", nargs="+", type=Path,
                         help="Run dirs or parent dirs (with run_* subdirs)")
-    parser.add_argument("--model",      type=Path, default=DEFAULT_MODEL)
-    parser.add_argument("--config",     type=Path, default=DEFAULT_CONFIG,
-                        help="config.yaml с путями к ML-моделям")
-    parser.add_argument("--embeddings", type=Path, default=DEFAULT_EMBEDDINGS,
-                        help="JSON-файл с эмбеддингами жителей")
-    parser.add_argument("--no-ml",      action="store_true",
-                        help="Не загружать ML-пайплайн (только YOLO)")
-    parser.add_argument("--conf",       type=float, default=None,
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--conf", type=float, default=None,
                         help="Порог confidence (env: YOLO_CONF, default: 0.35)")
-    parser.add_argument("--nms",        type=float, default=None,
+    parser.add_argument("--nms", type=float, default=None,
                         help="Порог NMS IoU (env: YOLO_NMS, default: 0.45)")
-    parser.add_argument("--crop-pad",   type=float, default=0.40,
-                        help="Отступ вокруг bbox при вырезке кропа (default: 0.40)")
+    parser.add_argument("--crop-pad", type=float, default=0.40,
+                        help="Crop padding fraction (default 0.40)")
     parser.add_argument("--yolo-max-fps", type=float, default=None, metavar="FPS",
                         help="Макс. скорость YOLO-инференса, изображений/с "
-                             "(0 = без ограничений). Env: YOLO_MAX_FPS. Default 2.0.")
-    parser.add_argument("--output",     type=Path, default=None)
+                             "(0 = без ограничений). "
+                             "Env: YOLO_MAX_FPS. Default 2.0.")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Override output dir (default: .output/cameras/5_2_yolo_boxes_files/run_<ts>)")
     parser.add_argument("--cpu-interval", type=float, default=2.0)
     args = parser.parse_args()
 
@@ -601,6 +475,7 @@ def main() -> int:
             if p.pid != _this_pid
             and (p.info.get("name") or "").lower() in _py_names
             and any(_this_name in (c or "") for c in (p.info.get("cmdline") or []))
+            # Exclude conda infrastructure (python.exe conda-script.py run ... python script.py ...)
             and not any("conda" in (c or "").lower() for c in (p.info.get("cmdline") or []))
         ]
         if _others:
@@ -608,7 +483,7 @@ def main() -> int:
                   file=sys.stderr)
             return 1
     except ImportError:
-        pass
+        pass  # psutil not available — skip check
 
     sess = _load_model(args.model)
     if sess is None:
@@ -628,17 +503,20 @@ def main() -> int:
 
     _yolo_interval = (1.0 / args.yolo_max_fps) if args.yolo_max_fps > 0 else 0.0
 
-    # ML pipeline
-    mlpipeline = None
-    if not args.no_ml:
-        mlpipeline = _load_ml_pipeline(args.config, args.embeddings)
-        if mlpipeline is not None:
-            print(f"  [ML] Классификатор: {'готов' if mlpipeline.classifier.ready else 'не загружен'}")
-            print(f"  [ML] Идентификатор: {'готов' if mlpipeline.identifier.ready else 'не загружен'}")
-        else:
-            print("  [ML] Пайплайн не загружен — только YOLO-детекция")
-    else:
-        print("  [ML] --no-ml: только YOLO-детекция")
+    def _ef(key: str, default: float) -> float:
+        _v = (os.environ.get(key) or "").strip()
+        try:
+            return float(_v) if _v else default
+        except ValueError:
+            return default
+
+    _yolo_interval_min = _yolo_interval
+    _yolo_min_fps      = _ef("YOLO_MIN_FPS",      0.033)
+    _yolo_interval_max = (1.0 / _yolo_min_fps) if _yolo_min_fps > 0 else 30.0
+    _ADAPT_WINDOW      = int(_ef("YOLO_ADAPT_WINDOW", 10))
+    _ADAPT_HIGH        = _ef("YOLO_ADAPT_HIGH",   0.90)
+    _ADAPT_LOW         = _ef("YOLO_ADAPT_LOW",    0.40)
+    _ADAPT_FACTOR      = _ef("YOLO_ADAPT_FACTOR", 2.0)
 
     run_pairs = _expand_inputs(args.inputs)
     if not run_pairs:
@@ -648,11 +526,12 @@ def main() -> int:
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _log_raw      = open(out_dir / "run.log", "w", encoding="utf-8", errors="replace")
-    _log_fd       = _log_raw.fileno()
+    _log_raw    = open(out_dir / "run.log", "w", encoding="utf-8", errors="replace")
+    _log_fd     = _log_raw.fileno()
     _log_last_sync = [time.monotonic()]
 
     class _SyncFile:
+        """Wraps a text file: flush + periodic os.fsync so viewers see updates promptly."""
         def write(self, data: str) -> None:
             _log_raw.write(data)
             _log_raw.flush()
@@ -673,17 +552,17 @@ def main() -> int:
                 pass
             _log_raw.close()
 
-    _log_file  = _SyncFile()
-    _orig_out  = sys.stdout
-    _orig_err  = sys.stderr
-    sys.stdout = _Tee(_orig_out, _log_file)
-    sys.stderr = _Tee(_orig_err, _log_file)
+    _log_file   = _SyncFile()
+    _orig_out   = sys.stdout
+    _orig_err   = sys.stderr
+    sys.stdout  = _Tee(_orig_out, _log_file)
+    sys.stderr  = _Tee(_orig_err, _log_file)
 
     t_start     = time.monotonic()
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
     cpu_active  = args.cpu_interval > 0 and cpu_monitor.start(t_start)
 
-    # Periodic CPU snapshot thread
+    # Periodic CPU snapshot thread: saves cpu.csv + cpu_chart.png every 60s
     _periodic_stop = threading.Event()
 
     def _periodic_cpu_save() -> None:
@@ -692,10 +571,7 @@ def main() -> int:
             if not _snap:
                 continue
             try:
-                with open(out_dir / "cpu.csv", "w", newline="", encoding="utf-8") as _f:
-                    _w = csv.writer(_f)
-                    _w.writerow(["mono_s", "ts_msk", "cpu_pct", "freq_mhz_pdh", "freq_mhz_step"])
-                    _w.writerows(_snap)
+                _save_cpu_csv(_snap, out_dir)
                 _tsnap = list(timing_log)
                 if _tsnap:
                     with open(out_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as _f:
@@ -710,21 +586,22 @@ def main() -> int:
     if cpu_active:
         _periodic_thread.start()
 
-    # Save launch params immediately
-    ml_desc = "классификатор+идентификатор" if mlpipeline is not None else ("только YOLO" if not args.no_ml else "--no-ml")
+    # Save launch params immediately so the run is identifiable even if it crashes
     run_params = {
-        "script":        "6_2_identify_people_files",
-        "inputs":        [str(p) for p in args.inputs],
-        "model":         str(args.model),
-        "config":        str(args.config) if not args.no_ml else None,
-        "embeddings":    str(args.embeddings) if not args.no_ml else None,
-        "ml_active":     mlpipeline is not None,
-        "conf":          args.conf,
-        "nms":           args.nms,
-        "crop_pad":      args.crop_pad,
-        "yolo_max_fps":  args.yolo_max_fps,
-        "cpu_interval":  args.cpu_interval,
-        "out_dir":       str(out_dir),
+        "script":             "5_2_yolo_boxes_files",
+        "inputs":             [str(p) for p in args.inputs],
+        "model":              str(args.model),
+        "conf":               args.conf,
+        "nms":                args.nms,
+        "crop_pad":           args.crop_pad,
+        "yolo_max_fps":       args.yolo_max_fps,
+        "yolo_min_fps":       _yolo_min_fps,
+        "yolo_adapt_window":  _ADAPT_WINDOW,
+        "yolo_adapt_high":    _ADAPT_HIGH,
+        "yolo_adapt_low":     _ADAPT_LOW,
+        "yolo_adapt_factor":  _ADAPT_FACTOR,
+        "cpu_interval":       args.cpu_interval,
+        "out_dir":            str(out_dir),
     }
     (out_dir / "run_params.json").write_text(
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -733,9 +610,9 @@ def main() -> int:
     yolo_rate = (f"≤{args.yolo_max_fps} fps (интервал {_yolo_interval:.2f}s)"
                  if _yolo_interval > 0 else "без ограничений")
     print(f"Модель:       {args.model}")
-    print(f"ML:           {ml_desc}")
     print(f"Conf / NMS:   {args.conf} / {args.nms}")
-    print(f"YOLO rate:    {yolo_rate}")
+    print(f"YOLO rate:    {yolo_rate}  min={_yolo_min_fps} fps")
+    print(f"Адаптация:    window={_ADAPT_WINDOW}  high={_ADAPT_HIGH}  low={_ADAPT_LOW}  factor=×{_ADAPT_FACTOR}")
     print(f"Вывод:        {out_dir}")
     print(f"Прогонов:     {len(run_pairs)}")
     for rd, parent_stem in run_pairs:
@@ -749,17 +626,20 @@ def main() -> int:
             print(f"  {prefix}{rd.name}  [нет diff-изображений]")
     print()
 
-    all_detections:      list[list] = []
-    run_data:            list[dict] = []
-    timing_log:          list[list] = []  # [mono_s, inference_ms, sleep_ms]
-    grand_total_checked  = 0
-    grand_total_detected = 0
+    all_detections:       list[list] = []
+    run_data:             list[dict] = []
+    timing_log:           list[list] = []  # [mono_s, inference_ms, sleep_ms]
+    grand_total_checked   = 0
+    grand_total_detected  = 0
 
     for run_dir, parent_stem in run_pairs:
         run_name = run_dir.name
-        label    = f"{parent_stem}/{run_name}" if parent_stem else run_name
+        _ps = parent_stem or run_dir.parent.name
+        label    = f"{_ps}/{run_name}"
         print(f"── {label} ──────────────────────────────────────")
 
+        # Output goes into parent_stem subdir if the source had one.
+        # Created lazily — only when the first detection is actually written.
         run_out = (out_dir / parent_stem / run_name) if parent_stem else (out_dir / run_name)
         _run_out_created = [False]
 
@@ -768,8 +648,10 @@ def main() -> int:
                 run_out.mkdir(parents=True, exist_ok=True)
                 _run_out_created[0] = True
 
+        # Load original CSVs
         frame_raw = _load_csv(run_dir / "frames.csv", 5)
         saves_raw = _load_csv(run_dir / "saves.csv", 4)
+        diffs_raw = _load_csv(run_dir / "diffs.csv", 4)
 
         frame_log: list[list] = []
         for r in frame_raw:
@@ -782,22 +664,40 @@ def main() -> int:
         saves_log: list[list] = []
         for r in saves_raw:
             if r[3] == "yolo":
-                continue
+                continue  # drop old YOLO saves; replaced by new detections
             try:
                 saves_log.append([float(r[0]), r[1], r[2], r[3]])
             except (ValueError, IndexError):
                 pass
 
-        wall_t0_epoch = _parse_ts_msk(frame_log[0][1]) if frame_log else 0.0
-        first_mono_s  = frame_log[0][0] if frame_log else 0.0
+        diffs_log: list[list] = []
+        for r in diffs_raw:
+            try:
+                diffs_log.append([float(r[0]), r[1], r[2], float(r[3])])
+            except (ValueError, IndexError):
+                pass
+
+        threshold = 10.0
+        params_p = run_dir / "run_params.json"
+        if params_p.exists():
+            try:
+                threshold = float(
+                    _json.loads(params_p.read_text(encoding="utf-8")).get("threshold", 10.0)
+                )
+            except Exception:
+                pass
+
+        # wall_t0 for mono→time mapping on chart; fall back to saves_log when frame_log missing
+        _t0_src = (frame_log or saves_log or diffs_log)
+        wall_t0_epoch = _parse_ts_msk(_t0_src[0][1]) if _t0_src else 0.0
+        first_mono_s  = float(_t0_src[0][0]) if _t0_src else 0.0
 
         images_by_cam = _find_images(run_dir)
         if not images_by_cam:
             print(f"  [!] Нет изображений в {run_dir / 'images'}")
             continue
 
-        # yolo_new: [cam_stem, img_stem, label_ml, mono_approx]
-        yolo_new: list[list] = []
+        yolo_new: list[list] = []  # [cam_stem, img_stem, n_people, mono_approx]
         n_detected = 0
         n_total    = 0
 
@@ -828,6 +728,21 @@ def main() -> int:
 
                 timing_log.append([round(_t_yolo_start - t_start, 3),
                                     round(_inference_ms, 1), round(_slept_ms, 1)])
+
+                # Адаптивный FPS: корректируем интервал по соотношению работа/сон
+                if _yolo_interval_min > 0 and len(timing_log) >= _ADAPT_WINDOW:
+                    _w = timing_log[-_ADAPT_WINDOW:]
+                    _work  = sum(r[1] for r in _w)
+                    _total = sum(r[1] + r[2] for r in _w)
+                    if _total > 0:
+                        _ratio = _work / _total
+                        if _ratio > _ADAPT_HIGH and _yolo_interval < _yolo_interval_max:
+                            _yolo_interval = min(_yolo_interval * _ADAPT_FACTOR, _yolo_interval_max)
+                            print(f"  [adaptive] {_ratio:.0%} работы → {1/_yolo_interval:.2f} fps")
+                        elif _ratio < _ADAPT_LOW and _yolo_interval > _yolo_interval_min:
+                            _yolo_interval = max(_yolo_interval / _ADAPT_FACTOR, _yolo_interval_min)
+                            print(f"  [adaptive] {_ratio:.0%} работы → {1/_yolo_interval:.2f} fps")
+
                 if not detections:
                     continue
 
@@ -836,39 +751,10 @@ def main() -> int:
                 cam_out.mkdir(exist_ok=True)
                 crops_dir.mkdir(exist_ok=True)
 
-                # ML pipeline
-                if mlpipeline is not None:
-                    ml_results = mlpipeline.run(frame, detections)
-                    annotated  = _draw_boxes_ml(frame, ml_results)
-                    label_ml   = ",".join(r.person_id or r.group_class for r in ml_results)
-                    for r in ml_results:
-                        parsed = _parse_img_filename(img_path.stem)
-                        mono_approx = (_img_ts_to_mono(parsed[1], wall_t0_epoch, first_mono_s)
-                                       if parsed and wall_t0_epoch else 0.0)
-                        all_detections.append([
-                            round(mono_approx, 3), run_name, cam_stem,
-                            r.bbox[0], r.bbox[1], r.bbox[2], r.bbox[3],
-                            round(r.detect_conf, 3),
-                            r.group_class, round(r.group_conf, 3),
-                            r.person_id or "", round(r.identify_conf, 3),
-                            img_path.name,
-                        ])
-                else:
-                    annotated  = draw_boxes(frame, detections)
-                    label_ml   = f"p{len(detections)}"
-                    parsed = _parse_img_filename(img_path.stem)
-                    mono_approx = (_img_ts_to_mono(parsed[1], wall_t0_epoch, first_mono_s)
-                                   if parsed and wall_t0_epoch else 0.0)
-                    for x1, y1, x2, y2, conf in detections:
-                        all_detections.append([
-                            round(mono_approx, 3), run_name, cam_stem,
-                            x1, y1, x2, y2, round(conf, 3),
-                            "unknown", 0.0, "", 0.0, img_path.name,
-                        ])
-
+                annotated = draw_boxes(frame, detections)
                 cv2.imwrite(str(cam_out / (img_path.stem + "_yolo.jpg")), annotated)
 
-                # Crops
+                # Crops (recalculated from scratch)
                 h, w = frame.shape[:2]
                 for idx, (x1, y1, x2, y2, conf) in enumerate(detections, 1):
                     bw_box = x2 - x1;  bh_box = y2 - y1
@@ -880,41 +766,49 @@ def main() -> int:
                                      f"_p{idx}of{len(detections)}_conf{conf:.2f}.jpg")
                         cv2.imwrite(str(crops_dir / crop_name), frame[y1c:y2c, x1c:x2c])
 
+                # mono_approx for chart
                 parsed = _parse_img_filename(img_path.stem)
-                mono_approx = (_img_ts_to_mono(parsed[1], wall_t0_epoch, first_mono_s)
-                               if parsed and wall_t0_epoch else 0.0)
-                yolo_new.append([cam_stem, img_path.stem, label_ml, mono_approx])
-                print(f"    {img_path.name}  →  {label_ml}")
+                mono_approx = 0.0
+                if parsed and wall_t0_epoch:
+                    mono_approx = _img_ts_to_mono(parsed[1], wall_t0_epoch, first_mono_s)
+
+                yolo_new.append([cam_stem, img_path.stem, len(detections), mono_approx])
+                for x1, y1, x2, y2, conf in detections:
+                    all_detections.append([
+                        img_path.stem, run_name, cam_stem, img_path.name,
+                        x1, y1, x2, y2, round(conf, 4),
+                    ])
+                print(f"    {img_path.name}  →  {len(detections)} чел.")
 
         grand_total_checked  += n_total
         grand_total_detected += n_detected
         print(f"  Итого: {n_detected} с людьми / {n_total} проверено")
         if n_detected == 0:
-            print("  (нет детекций)")
+            print("  (нет детекций YOLO)")
         print()
 
         run_data.append({
             "label":        label,
             "frame_log":    frame_log,
             "saves_log":    saves_log,
+            "diffs_log":    diffs_log,
+            "threshold":    threshold,
             "wall_t0":      wall_t0_epoch,
             "first_mono_s": first_mono_s,
             "yolo_new":     yolo_new,
         })
 
-        # Промежуточное обновление графиков после каждого прогона
+        # Промежуточное обновление графика и detections.csv после каждого прогона
         if all_detections:
             try:
                 with open(out_dir / "detections.csv", "w", newline="", encoding="utf-8") as _f:
                     _w = csv.writer(_f)
-                    _w.writerow(["mono_s", "run_name", "cam",
-                                 "x1", "y1", "x2", "y2", "detect_conf",
-                                 "group", "group_conf", "person_id", "identify_conf", "filename"])
+                    _w.writerow(["image_ts", "run_name", "cam", "filename",
+                                 "x1", "y1", "x2", "y2", "conf"])
                     _w.writerows(all_detections)
             except Exception:
                 pass
         _save_combined_chart(run_data, out_dir / "timeline_chart.png")
-        _save_person_timeline(all_detections, out_dir / "person_timeline.png")
 
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
@@ -924,20 +818,13 @@ def main() -> int:
         det_path = out_dir / "detections.csv"
         with open(det_path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["mono_s", "run_name", "cam",
-                        "x1", "y1", "x2", "y2", "detect_conf",
-                        "group", "group_conf", "person_id", "identify_conf", "filename"])
+            w.writerow(["image_ts", "run_name", "cam", "filename", "x1", "y1", "x2", "y2", "conf"])
             w.writerows(all_detections)
         print(f"detections.csv: {len(all_detections)} записей → {det_path}")
     else:
         print("Детекций не найдено.")
 
-    # cpu.csv
-    if cpu_log:
-        with open(out_dir / "cpu.csv", "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["mono_s", "ts_msk", "cpu_pct", "freq_mhz"])
-            w.writerows(cpu_log)
+    _save_cpu_csv(cpu_log, out_dir)
 
     # yolo_timing.csv
     if timing_log:
@@ -948,7 +835,6 @@ def main() -> int:
 
     # Charts
     _save_combined_chart(run_data, out_dir / "timeline_chart.png")
-    _save_person_timeline(all_detections, out_dir / "person_timeline.png")
     _save_cpu_chart(cpu_log, out_dir / "cpu_chart.png", timing_log or None)
 
     # run_stats.json
@@ -957,7 +843,6 @@ def main() -> int:
         "images_yolo_checked": grand_total_checked,
         "images_with_people":  grand_total_detected,
         "detections_total":    len(all_detections),
-        "ml_active":           mlpipeline is not None,
         "duration_sec":        round(time.monotonic() - t_start, 1),
         "model":               str(args.model),
         "conf":                args.conf,

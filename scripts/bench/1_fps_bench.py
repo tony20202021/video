@@ -80,7 +80,7 @@ class CpuMonitor:
 
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_MODEL = REPO_ROOT / ".models" / "yolov8n.onnx"
+DEFAULT_MODEL = REPO_ROOT / ".models" / "detect" / "yolov8n.onnx"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "bench" / "1_fps"
 
 

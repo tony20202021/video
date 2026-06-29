@@ -86,7 +86,7 @@
 | Компонент | Статус | Примечание |
 |-----------|--------|------------|
 | Скрипты камер (1–5) | **Реализовано** | Поиск, зондирование, верификация, motion detection, YOLOv8n |
-| YOLOv8n ONNX | **Реализовано** | `models/yolov8n.onnx` (~13 MB) |
+| YOLOv8n ONNX | **Реализовано** | `.models/detect/yolov8n.onnx` (~13 MB) |
 | Telegram Bot | **Реализовано** | aiogram 3.0, обращается к backend API |
 | Backend (FastAPI) | **В разработке** | `/status` работает, `/events` `/persons` `/cameras` — стабы |
 | Web App | **В разработке** | Базовый HTML-интерфейс |

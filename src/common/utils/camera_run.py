@@ -148,7 +148,10 @@ class CapReader:
         self._stop_evt.set()
         if self._cap is not None:
             self._cap.release()
-        self._thread.join(timeout=3.0)
+        try:
+            self._thread.join(timeout=3.0)
+        except KeyboardInterrupt:
+            pass
 
 
 # ─── CPU frequency ────────────────────────────────────────────────────────────
@@ -159,6 +162,8 @@ import sys as _sys
 # CallNtPowerInformation.CurrentMhz reports only P-state steps (e.g. 1600/2900);
 # PDH counter gives time-weighted average like Task Manager "Speed".
 _cpu_freq_pdh: dict = {}
+# PDH state for % Processor Utility (Task Manager view — frequency-adjusted).
+_cpu_utility_pdh: dict = {}
 
 def _read_cpu_freq_mhz() -> float:
     """Возвращает текущую среднюю частоту CPU в МГц (кросс-платформа).
@@ -212,6 +217,48 @@ def _read_cpu_freq_mhz() -> float:
             f = _ps.cpu_freq()
             if f:
                 return round(f.current, 1)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _read_cpu_utility_pct() -> float:
+    """Windows: PDH «% Processor Utility» — как диспетчер задач (учитывает троттлинг).
+
+    Первый вызов инициализирует счётчик и возвращает 0.
+    На Linux всегда возвращает 0.
+    """
+    try:
+        if _sys.platform != "win32":
+            return 0.0
+        import ctypes
+        _s = _cpu_utility_pdh
+        if not _s:
+            pdh = ctypes.windll.pdh
+
+            class _FMT(ctypes.Structure):
+                _fields_ = [("CStatus", ctypes.c_ulong),
+                             ("doubleValue", ctypes.c_double)]
+
+            hq = ctypes.c_void_p()
+            hc = ctypes.c_void_p()
+            if pdh.PdhOpenQueryW(None, 0, ctypes.byref(hq)) != 0:
+                return 0.0
+            path = r"\Processor Information(_Total)\% Processor Utility"
+            if pdh.PdhAddEnglishCounterW(hq, ctypes.c_wchar_p(path), 0, ctypes.byref(hc)) != 0:
+                pdh.PdhCloseQuery(hq)
+                return 0.0
+            pdh.PdhCollectQueryData(hq)          # prime
+            _s.update(pdh=pdh, hq=hq, hc=hc, FMT=_FMT)
+            return 0.0
+        pdh = _s["pdh"]
+        if pdh.PdhCollectQueryData(_s["hq"]) != 0:
+            return 0.0
+        val = _s["FMT"]()
+        rc = pdh.PdhGetFormattedCounterValue(
+            _s["hc"], 0x00000200, None, ctypes.byref(val))
+        if rc == 0 and val.CStatus == 0:
+            return round(min(100.0, max(0.0, val.doubleValue)), 1)
     except Exception:
         pass
     return 0.0
@@ -285,7 +332,10 @@ class CpuMonitor:
     def stop(self) -> list[list]:
         self._stop.set()
         if self._thread.is_alive():
-            self._thread.join(timeout=max(self._interval + 1, 3))
+            try:
+                self._thread.join(timeout=max(self._interval + 1, 3))
+            except KeyboardInterrupt:
+                pass
         with self._lock:
             return list(self._log)
 
@@ -305,6 +355,7 @@ class CpuMonitor:
                     round(cpu, 1),
                     _read_cpu_freq_mhz(),          # PDH: непрерывная (% Processor Performance)
                     _read_cpu_freq_stepped_mhz(),  # PPI: ступенчатая (P-state шаги)
+                    _read_cpu_utility_pct(),       # PDH: % Processor Utility (как диспетчер задач)
                 ])
 
 
@@ -381,6 +432,81 @@ def save_run_stats(frame_log: list, pts_log: list, saves_log: list,
     path = out_dir / "run_stats.json"
     path.write_text(_json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  run_stats.json → {path}")
+
+
+# ─── CPU chart helper ─────────────────────────────────────────────────────────
+
+def draw_cpu_on_ax(ax, cpu_log: list, *,
+                   title: str = "Загрузка ЦПУ",
+                   show_mean: bool = False) -> None:
+    """Рисует ЦПУ% + утилизацию + частоту на готовый axes.
+
+    Не создаёт фигуру — вызывается как из save_charts (subplot),
+    так и из _save_cpu_chart в 5_2/6_2 (отдельный файл).
+    """
+    t = [r[0] for r in cpu_log]
+    v = [float(r[2]) for r in cpu_log]
+    ax.plot(t, v, color="#2255cc", linewidth=1.0, linestyle="--", alpha=0.65,
+            label="% Proc. Time")
+    utility_v = [float(r[5]) for r in cpu_log if len(r) > 5]
+    if utility_v and any(u > 0 for u in utility_v):
+        t_util = [r[0] for r in cpu_log if len(r) > 5]
+        ax.plot(t_util, utility_v, color="#22bb44", linewidth=1.3,
+                label="% Proc. Utility (Диспетчер)")
+        ax.fill_between(t_util, utility_v, alpha=0.18, color="#22bb44")
+    ax.legend(loc="upper right", fontsize=7)
+    if show_mean and v:
+        mean_cpu = sum(v) / len(v)
+        ax.axhline(mean_cpu, color="orange", linestyle="--", linewidth=0.8)
+        ax.text(t[0] if t else 0, mean_cpu + 1,
+                f"среднее {mean_cpu:.1f}%", fontsize=8, color="orange")
+    ax.set_ylabel("ЦПУ, %")
+    ax.set_ylim(0, 105)
+    ax.set_title(title)
+    ax.grid(True, linestyle="--", alpha=0.35)
+
+    freq_pdh  = [float(r[3]) for r in cpu_log if len(r) > 3]
+    freq_step = [float(r[4]) for r in cpu_log if len(r) > 4]
+    if (freq_pdh and any(f > 0 for f in freq_pdh)) or \
+       (freq_step and any(f > 0 for f in freq_step)):
+        t_freq   = [r[0] for r in cpu_log if len(r) > 3]
+        ax2f     = ax.twinx()
+        all_vals = [f for f in freq_pdh + freq_step if f > 0]
+        if freq_pdh and any(f > 0 for f in freq_pdh):
+            ax2f.plot(t_freq, freq_pdh, color="#ffbb55", linewidth=1.0,
+                      linestyle="--", alpha=0.5,
+                      marker=".", markersize=9,
+                      markerfacecolor="#ffee11", markeredgewidth=0,
+                      label="МГц (PDH)")
+        if freq_step and any(f > 0 for f in freq_step):
+            t_step = [r[0] for r in cpu_log if len(r) > 4]
+            ax2f.step(t_step, freq_step, color="#aaaaaa", linewidth=0.8,
+                      alpha=0.6, where="post",
+                      marker=".", markersize=8,
+                      markerfacecolor="#dddddd", markeredgewidth=0,
+                      label="МГц (P-state)")
+        ax2f.set_ylabel("частота, МГц", color="#ff8800", fontsize=8)
+        ax2f.tick_params(axis="y", labelcolor="#ff8800", labelsize=7)
+        ax2f.legend(loc="lower right", fontsize=7)
+        if all_vals:
+            f_min = min(all_vals)
+            f_max = max(all_vals)
+            pad   = max((f_max - f_min) * 0.15, 50)
+            ax2f.set_ylim(max(0, f_min - pad), f_max + pad)
+
+
+# ─── cpu.csv ──────────────────────────────────────────────────────────────────
+
+def save_cpu_csv(cpu_log: list, out_dir: Path) -> None:
+    """Сохраняет cpu.csv со стандартным заголовком (6 колонок)."""
+    import csv as _csv
+    if not cpu_log:
+        return
+    with open(out_dir / "cpu.csv", "w", newline="", encoding="utf-8") as f:
+        w = _csv.writer(f)
+        w.writerow(["mono_s", "ts_msk", "cpu_pct", "freq_mhz_pdh", "freq_mhz_step", "cpu_utility_pct"])
+        w.writerows(cpu_log)
+    print(f"  cpu.csv:    {len(cpu_log)} замеров")
 
 
 # ─── pts_chart.png ────────────────────────────────────────────────────────────
@@ -478,15 +604,8 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
 
     if cpu_log:
         ax = axes[ax_idx][0]
-        cpu_t = [r[0] for r in cpu_log]
-        cpu_v = [r[2] for r in cpu_log]
-        ax.plot(cpu_t, cpu_v, color="#2255cc", linewidth=1.0)
-        ax.set_ylabel("ЦПУ, %")
+        draw_cpu_on_ax(ax, cpu_log, title="CPU usage, %")
         ax.set_xlabel("время от старта, с")
-        ax.set_title("CPU usage, %")
-        ax.set_ylim(0, 105)
-        ax.yaxis.set_major_locator(_ticker.MultipleLocator(20))
-        ax.grid(True, linestyle="--", alpha=0.35)
 
     plt.tight_layout()
     path = out_dir / "pts_chart.png"
@@ -512,7 +631,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         import numpy as _np
     except ImportError:
         return
-    if not frame_log:
+    if not frame_log and not diffs_log and not saves_log:
         return
 
     _CAM_COLORS = ["#e05c00", "#0066cc", "#228833", "#aa22aa"]
@@ -551,7 +670,9 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     )
     fig.suptitle(f"{title} — кадры и загрузка ЦПУ", fontsize=11)
 
-    t_max = max((row[0] for row in frame_log), default=1)
+    _all_monos = ([r[0] for r in frame_log] + [r[0] for r in diffs_log]
+                  + [r[0] for r in saves_log] + [r[0] for r in cpu_log])
+    t_max = max(_all_monos, default=1)
 
     def _ts_parts(ts_str: str):
         try:
@@ -569,7 +690,8 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         r = _ts_parts(ts_str)
         return f"{r[0]:02d}:{r[1]:02d}:{r[2]:02d}.{r[3]//1000:03d}" if r else ts_str
 
-    _t0_ts    = frame_log[0][1] if frame_log else ""
+    _t0_first = next((r[1] for r in frame_log + diffs_log + saves_log if r[1]), "")
+    _t0_ts    = _t0_first
     _t0_parts = _ts_parts(_t0_ts)
     _t0_abs   = (_t0_parts[0]*3600 + _t0_parts[1]*60 + _t0_parts[2]) if _t0_parts else 0
     _x_left   = -(_t0_abs % 60)
@@ -735,20 +857,8 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
 
     if cpu_log:
         ax = axes[n_frame_rows + n_diffs_rows + n_saves_rows][0]
-        cpu_t = [r[0] for r in cpu_log]
-        cpu_v = [r[2] for r in cpu_log]
-        ax.plot(cpu_t, cpu_v, color="#2255cc", linewidth=1.2)
-        ax.fill_between(cpu_t, cpu_v, alpha=0.18, color="#2255cc")
-        if cpu_v:
-            mean_cpu = sum(cpu_v) / len(cpu_v)
-            ax.axhline(mean_cpu, color="orange", linestyle="--", linewidth=0.8)
-            ax.text(cpu_t[0] if cpu_t else 0, mean_cpu + 1,
-                    f"среднее {mean_cpu:.1f}%", fontsize=8, color="orange")
-        ax.set_ylabel("ЦПУ, %")
-        ax.set_ylim(0, 105)
+        draw_cpu_on_ax(ax, cpu_log, title="Загрузка ЦПУ (все ядра, %)", show_mean=True)
         ax.set_xlim(_x_left, t_max * 1.02)
-        ax.set_title("Загрузка ЦПУ (все ядра, %)")
-        ax.grid(True, linestyle="--", alpha=0.35)
 
     for _ax in [axes[i][0] for i in range(len(axes))]:
         _ax.xaxis.set_major_formatter(_ticker.FuncFormatter(_x_time_fmt))

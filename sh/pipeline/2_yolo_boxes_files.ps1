@@ -1,4 +1,4 @@
-# 5_2_yolo_boxes_files.ps1 — YOLO-переобработка сохранённых прогонов S4 и S5
+﻿# 5_2_yolo_boxes_files.ps1 — YOLO-переобработка сохранённых прогонов S4 и S5
 #
 # Запускает 5_2_yolo_boxes_files.py на всех run_* из:
 #   .output/cameras/4_motion_diff_low
@@ -38,40 +38,38 @@ if ($null -eq $YoloMaxFps) { $YoloMaxFps = _ef "YOLO_MAX_FPS" 2.0 }
 if ($null -eq $Conf)       { $Conf       = _ef "YOLO_CONF"    0.35 }
 if ($null -eq $Nms)        { $Nms        = _ef "YOLO_NMS"     0.45 }
 
-$Conda   = "$env:USERPROFILE\miniconda3\Scripts\conda.exe"
+$env:PYTHONIOENCODING = "utf-8"
+chcp 65001 | Out-Null
+
 $Env     = "conda_video"
-$Script  = "$Repo\scripts\cameras\5_2_yolo_boxes_files.py"
+$Python  = "$env:USERPROFILE\miniconda3\envs\$Env\python.exe"
+$Script  = "$Repo\scripts\pipeline\2_yolo_boxes_files.py"
 
-$S4Dir   = "$Repo\.output\cameras\4_motion_diff_low"
-$S5Dir   = "$Repo\.output\cameras\5_1_diff_yolo_boxes_low"
+$S1Dir   = "$Repo\.output\pipeline\1_motion_diff"
 
-# Явный список прогонов для обработки
+# Явный список прогонов для обработки (все run_* из 1_motion_diff)
+# $S1Dir
+# Или конкретные прогоны:
 $InputDirs = @(
-    # 4
-    "$S4Dir\run_20260628_143650_msk",
-    # 5
-    "$S5Dir\run_20260627_111922_msk",
-    "$S5Dir\run_20260627_174648_msk",
-    "$S5Dir\run_20260627_191131_msk",
-    "$S5Dir\run_20260627_205503_msk"
+    "$S1Dir\run_20260629_210753_msk"    
 )
 
-Write-Host "=== 5_2_yolo_boxes_files ===" -ForegroundColor Cyan
+Write-Host "=== 2_yolo_boxes_files ===" -ForegroundColor Cyan
 Write-Host "Repo:   $Repo"
 Write-Host "Script: $Script"
-Write-Host "Прогоны:"
+Write-Host "Runs:"
 foreach ($d in $InputDirs) { Write-Host "  $d" }
 Write-Host ""
 
 $Missing = $InputDirs | Where-Object { -not (Test-Path $_) }
 if ($Missing.Count -gt 0) {
-    Write-Host "[!] Не найдены каталоги:" -ForegroundColor Red
+    Write-Host "[!] Dirs not found:" -ForegroundColor Red
     $Missing | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
     exit 1
 }
 
 $AllArgs = $InputDirs + @("--yolo-max-fps", "$YoloMaxFps", "--conf", "$Conf", "--nms", "$Nms") + $ExtraArgs
-Write-Host "Аргументы:" ($AllArgs -join " ")
+Write-Host "Args:" ($AllArgs -join " ")
 Write-Host ""
 
-& $Conda run -n $Env --no-capture-output python $Script @AllArgs
+& $Python $Script @AllArgs

@@ -43,7 +43,7 @@ from common.utils.motion_utils import (
 from common.utils.time_msk import ts_for_dir
 
 DEFAULT_ENV = REPO_ROOT / ".env"
-DEFAULT_MODEL = REPO_ROOT / ".models" / "yolov8n.onnx"
+DEFAULT_MODEL = REPO_ROOT / ".models" / "detect" / "yolov8n.onnx"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "bench" / "2_compare_lohi"
 
 YOLO_INPUT = 640

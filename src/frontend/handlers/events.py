@@ -8,11 +8,10 @@ from ..keyboards.navigation import event_detail, pager
 router = Router()
 
 GROUP_CLASS_RU = {
-    "resident": "Житель",
-    "courier": "Курьер",
-    "delivery": "Доставка",
-    "utilities": "ЖКХ",
-    "other": "Другой",
+    "1_resident":  "Житель",
+    "2_delivery":  "Доставка",
+    "3_utilities": "ЖКХ",
+    "99_other":    "Другой",
 }
 
 

@@ -6,9 +6,49 @@
 
 | Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
-| Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Реализовано** `models/yolov8n.onnx` |
-| Классификация группы | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Код готов, нужно обучить |
-| Идентификация жителя | MobileFaceNet | ~4 MB | ~5 мс/лицо | Код готов, нужна предобученная модель |
+| Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Готово** `.models/detect/yolov8n.onnx` |
+| Классификация группы (Модель 1) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | v0 — болванка, нужно обучить |
+| Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Нужно обучить |
+
+---
+
+## Почему две модели с одной архитектурой
+
+Задачи принципиально разные по типу и частоте обновления:
+
+| | Модель 1 (группы) | Модель 2 (жители) |
+|---|---|---|
+| Классы | resident / courier / delivery / utilities / other | конкретные жители + unknown_resident |
+| Множество классов | закрытое, меняется редко | открытое (новый житель = новый класс) |
+| Датасет | все группы, данных относительно много | только жители, данных мало |
+| Переобучение | редко (новый тип посетителя) | раз в 2–4 недели по мере накопления данных |
+
+Одна модель на обе задачи не подходит: периодическое переобучение Модели 2 (новые жители,
+новые outfit) сдвигало бы backbone и деградировало бы Модель 1.
+
+Та же архитектура для обеих потому что:
+- вход одинаковый (кроп сверху, тот же ракурс и освещение)
+- датасет жителей маленький → более тяжёлый backbone даст переобучение, а не точность
+- позволяет использовать трансфер цепочкой (см. ниже)
+
+---
+
+## Почему не cosine similarity по эмбеддингам для жителей
+
+Очевидный подход — взять предобученные эмбеддинги (ReID, FaceNet) и сравнивать их
+косинусным расстоянием. Он не подходит по нескольким причинам:
+
+- **Угол камеры сверху** — стандартные ReID-модели обучены на виде сбоку/спереди,
+  у них другое распределение признаков; лицо часто не видно вообще
+- **Разная одежда** — appearance-based эмбеддинги кодируют цвет куртки как основной
+  признак; тот же человек в другой одежде будет дальше по косинусному расстоянию,
+  чем другой человек в похожей одежде
+- **Нет контрольных фото** — для enrollment нужны фотографии в контролируемых
+  условиях; у нас только кропы из тех же камер с тем же углом
+
+Классификатор, обученный на накопленных кропах из тех же камер, учит признаки
+специфичные для нашего ракурса (форма силуэта сверху, ширина плеч, форма головы)
+и с каждым циклом переобучения становится лучше, включая новые outfit.
 
 ---
 
@@ -32,23 +72,25 @@
                 │
                 ▼
 ┌─────────────────────────────────────┐
-│  MobileNetV3-Small: группа          │
+│  Модель 1 — MobileNetV3-Small       │
 │  → resident / courier / delivery /  │
-│    utilities / other / unknown      │
+│    utilities / other                │
+│  conf < 0.65 → uncertain            │
 └───────────────┬─────────────────────┘
                 │
         group == "resident"?
-                │
+                │ да
                 ▼
 ┌─────────────────────────────────────┐
-│  MobileFaceNet: идентификация       │
-│  embedding → cosine similarity      │
-│  с эмбеддингами жителей из БД       │
+│  Модель 2 — MobileNetV3-Small       │
+│  → Иванов(0.91) / Петров(0.43) /   │
+│    ... / unknown_resident           │
+│  conf < 0.70 → unknown_resident     │
 └───────────────┬─────────────────────┘
                 │
-          sim ≥ threshold?
-          ├─ да → person_id
-          └─ нет → unclassified_persons
+          conf ≥ 0.70?
+          ├─ да → person_id (авто-метка)
+          └─ нет → очередь на ручную разметку
 ```
 
 ---
@@ -57,8 +99,8 @@
 
 ```
 src/ml/
-  classify.py     — GroupClassifier (MobileNetV3-Small ONNX wrapper)
-  identify.py     — PersonIdentifier (MobileFaceNet + cosine similarity)
+  classify.py     — GroupClassifier (Модель 1: MobileNetV3-Small ONNX wrapper)
+  identify.py     — PersonIdentifier (Модель 2: MobileNetV3-Small ONNX wrapper)
   pipeline.py     — MLPipeline: оркестрация classify → identify
 ```
 
@@ -69,23 +111,24 @@ from ml.pipeline import MLPipeline, MLConfig
 from pathlib import Path
 
 pipeline = MLPipeline(MLConfig(
-    classify_model=Path("models/classify/v1.onnx"),
-    identify_model=Path("models/identify/v1.onnx"),
+    classify_model=Path(".models/classify/v1.onnx"),
+    identify_model=Path(".models/identify/v1.onnx"),
 ))
-
-# Загружаем эмбеддинги жителей из БД
-pipeline.load_person_embeddings({"p_001": [[0.1, 0.2, ...]]})
 
 # Обрабатываем кадр
 results = pipeline.run(bgr_frame, yolo_detections)
 for r in results:
+    # r.group_class   — "resident" / "courier" / ...
+    # r.group_conf    — уверенность Модели 1
+    # r.person_id     — "person_01" или "" если unknown_resident
+    # r.identify_conf — уверенность Модели 2 (0 если group != "resident")
     print(r.group_class, r.person_id, r.identify_conf)
 ```
 
 ### Без обученных моделей
 
 `GroupClassifier` и `PersonIdentifier` работают без моделей — возвращают `("unknown", 0.0)`.
-Это позволяет запускать систему до обучения.
+Это позволяет запускать скрипты до обучения.
 
 ---
 
@@ -106,7 +149,7 @@ for r in results:
 
 5. python scripts/train/train_classifier.py --data export.zip
 
-6. Обученная модель → models/classify/v2.onnx
+6. Обученная модель → .models/classify/v2.onnx
 ```
 
 ### API разметки
@@ -172,18 +215,19 @@ GET /training/export?model=classify   → скачивает ZIP
 ```bash
 pip install torch torchvision
 
-python scripts/train/train_classifier.py \
+python scripts/train/2_train_groups.py \
     --data .output/training/export_classify_*.zip \
     --epochs 30
 ```
 
-Результат: `models/classify/v1.onnx`
+Результат: `.models/classify/v1.onnx` и `.models/classify/backbone.pt` (для Модели 2)
 
 ### 3. Проверить метрики
 
 ```
-models/classify/v1.onnx   — модель для production
-.output/training/run/training_results.json  — val_acc, history
+.models/classify/v1.onnx       — модель для production
+.models/classify/backbone.pt   — backbone для инициализации Модели 2
+.output/train/2_train_groups/run/training_results.json  — val_acc, history
 ```
 
 ### 4. Активировать
@@ -191,42 +235,118 @@ models/classify/v1.onnx   — модель для production
 Обновить `config.yaml`:
 ```yaml
 models:
-  classify: models/classify/v1.onnx
+  classify: .models/classify/v1.onnx
 ```
 
 ---
 
 ## Идентификация жителей
 
-### Добавить жителя
+### Добавить нового жителя
 
-```bash
-# Через API (bot отправляет фото)
-POST /persons              body: {person_id: "p_0001", name: "Иванов И.И.", apartment_id: "42"}
-POST /persons/p_0001/images  body: {image_b64: "<base64>"}
+Новый житель = новый класс в Модели 2. Без переобучения модель его не знает.
+
+```
+1. Накопить 15–30 кропов жителя из разных дней (→ разная одежда)
+2. Разметить вручную (label_ui: назначить person_id)
+3. Добавить в датасет жителей: datasets/residents/person_01/
+4. Запустить переобучение Модели 2 (см. ниже)
 ```
 
-При добавлении фото эмбеддинг вычисляется автоматически (если модель доступна) и сохраняется в MongoDB.
+До переобучения новый житель будет попадать в `unknown_resident` — это ожидаемо.
 
-### Обновить эмбеддинги
+### Переобучение Модели 2
 
-После смены модели (`identify/v2.onnx`) пересчитать все эмбеддинги:
-```bash
-python scripts/train/export_data.py --task identify
+Цикл переобучения — раз в 2–4 недели или при добавлении нового жителя.
+
+**Важно:** каждый раз обучать на **полном накопленном датасете** (не только новые данные),
+иначе модель забудет старых жителей (catastrophic forgetting).
+
+**Стартовые веса:** от предыдущей версии Модели 2 (не от Модели 1 заново).
+Исключение: если изменился состав классов кардинально (жители съехали) — тогда
+перезапустить с весов backbone Модели 1.
+
 ```
+Цикл 1:  backbone Модели 1  → обучение на {неделя 1}       → Модель 2 v1
+Цикл 2:  Модель 2 v1        → обучение на {неделя 1 + 2}   → Модель 2 v2
+Цикл 3:  Модель 2 v2        → обучение на {неделя 1+2+3}   → Модель 2 v3
+```
+
+**Команды:**
+
+```bash
+# Первый цикл — backbone от Модели 1
+python scripts/train/5_train_residents.py \
+    --data export_identify.zip \
+    --backbone .models/classify/backbone.pt \
+    --epochs 30
+
+# Последующие циклы — веса предыдущей версии Модели 2
+python scripts/train/5_train_residents.py \
+    --data export_identify_full.zip \
+    --init-from .models/identify/v1.pt \
+    --epochs 30
+```
+
+Через PowerShell: `.\sh\train\5_train_residents.ps1 -Data export.zip -Backbone .models\classify\backbone.pt`
+
+### Трансфер между моделями
+
+```
+ImageNet weights
+    ↓
+fine-tune на датасете групп (resident/courier/...)
+    ↓
+Модель 1  (.models/classify/v1.onnx)
+    │
+    └── сохранить backbone без головы
+            ↓
+        fine-tune на датасете жителей
+            ↓
+        Модель 2 v1  (.models/identify/v1.onnx)
+            ↓ (от неё же)
+        Модель 2 v2  (.models/identify/v2.onnx)
+            ↓ ...
+```
+
+Смысл: Модель 1 учит backbone понимать «что такое человек в нашем ракурсе сверху»
+лучше, чем ImageNet. Модель 2 стартует с этих весов — ей легче выучить тонкие
+различия между жителями.
 
 ---
 
 ## Структура моделей
 
 ```
-models/
-  yolov8n.onnx          — детекция людей (готово)
+.models/
+  detect/
+    yolov8n.onnx        — детекция людей (готово)
+    yolov8s.onnx        — альтернатива: точнее, но медленнее
   classify/
-    v1.onnx             — классификатор группы (создаётся обучением)
-    v2.onnx             — следующая версия после дообучения
+    v0.onnx             — Модель 1: болванка (низкая точность, нужно обучить)
+    v1.onnx             — после первого обучения на размеченных данных
+    backbone.pt         — только features (PyTorch) для инициализации Модели 2
   identify/
-    v1.onnx             — MobileFaceNet (скачать: scripts/setup_models.py --task identify)
+    v1.onnx             — Модель 2: после первого обучения на жителях
+    v2.onnx             — после первого цикла переобучения
+    ...
+  osd/
+    osd_templates.npz     — шаблоны цифр OSD (HI-поток)
+    osd_templates_low.npz — шаблоны цифр OSD (LOW-поток)
+```
+
+---
+
+## Аугментация при обучении
+
+**Модель 1 (группы):** стандартная — случайный crop, flip, нормализация яркости.
+
+**Модель 2 (жители):** обязательно сильный **цветовой jitter** (HSV ±30–40%) чтобы модель
+не запоминала цвет одежды как основной признак. Без этого одежда доминирует над
+формой тела, и модель плохо обобщается на другие дни.
+
+```python
+transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.4, hue=0.15)
 ```
 
 ---
@@ -238,18 +358,22 @@ thresholds:
   detection:
     min_confidence: 0.35   # YOLO — порог детекции человека
   classification:
-    min_confidence: 0.65   # MobileNetV3 — ниже → "uncertain"
+    min_confidence: 0.65   # Модель 1 — ниже → "uncertain" (не назначать группу)
   identification:
-    min_confidence: 0.75   # MobileFaceNet — ниже → unclassified_persons
+    min_confidence: 0.70   # Модель 2 — ниже → unknown_resident (в очередь на разметку)
 ```
+
+Порог идентификации 0.70 — эмпирический старт. На ранних версиях Модели 2
+(мало данных) его стоит поднять до 0.80, чтобы уменьшить количество неверных
+авто-меток.
 
 ---
 
 ## Тесты
 
 ```bash
-# Unit-тесты ML и utils
-pytest tests/test_ml_pipeline.py tests/test_motion_utils.py tests/test_osd_time.py -v
+# Unit-тесты ML, utils и camera-скриптов
+pytest tests/test_ml_pipeline.py tests/test_cameras_6x.py tests/test_motion_utils.py tests/test_osd_time.py -v
 
 # Интеграционные тесты на реальных данных (требует tests/data/)
 pytest tests/test_integration.py -v
@@ -270,7 +394,7 @@ from common.utils.osd_time import extract_osd_time
 cam_dt = extract_osd_time(hi_frame)   # datetime | None
 ```
 
-Шаблоны цифр хранятся в `models/osd_templates.npz`.
+Шаблоны цифр хранятся в `.models/osd/osd_templates.npz`.
 Сборка шаблонов из нового кадра с известным временем:
 
 ```python
