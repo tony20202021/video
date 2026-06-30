@@ -6,11 +6,11 @@
 #   .\sh\train\4_label_ui.ps1 -Port 8080
 
 param(
-    [string] $InputDir      = "E:\_Home\Tony\pet projects\video\.data\groups\v1",   # каталог кропов для разметки
+    [string] $InputDir      = "E:\_Home\Tony\pet projects\video\.data\groups\new",   # каталог кропов для разметки
     [string] $Labels        = "",   # файл меток; по умолчанию .output\train\2_label_ui\labels.json
     [string] $Dataset       = "E:\_Home\Tony\pet projects\video\.data\groups\v1",   # каталог датасета для чтения классов; по умолчанию .data\groups\последняя версия
     [int]    $Port          = 5050,
-    [bool]   $UnlabeledOnly = $false         # показывать только неразмеченные; -UnlabeledOnly $false — все
+    [bool]   $UnlabeledOnly = $true         # показывать только неразмеченные; -UnlabeledOnly $false — все
 )
 
 $ErrorActionPreference = "Stop"

@@ -7,24 +7,39 @@
 | Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
 | Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Готово** `.models/detect/yolov8n.onnx` |
-| Классификация группы (Модель 1) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | v0 — болванка, нужно обучить |
+| Классификация группы (Модель 1) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | **v1 обучена** `.models/classify/v1.onnx` |
 | Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Нужно обучить |
+
+---
+
+## Классы Модели 1
+
+Три класса (папки датасета = имена классов):
+
+| Класс | Описание |
+|-------|----------|
+| `1_resident` | Житель дома |
+| `2_delivery` | Курьер / доставка |
+| `3_utilities` | Коммунальные службы |
+
+Дополнительные папки датасета (не являются классами модели):
+
+| Папка | Назначение |
+|-------|------------|
+| `skip/` | Намеренно пропущены при разметке (нечёткие кропы и т.п.) |
+| `unknown/` | Не определился класс |
+| `new/` | Новые кропы без разметки (→ `2_label_ui` → `1_dataset_groups apply`) |
 
 ---
 
 ## Почему две модели с одной архитектурой
 
-Задачи принципиально разные по типу и частоте обновления:
-
 | | Модель 1 (группы) | Модель 2 (жители) |
 |---|---|---|
-| Классы | resident / courier / delivery / utilities / other | конкретные жители + unknown_resident |
+| Классы | 1_resident / 2_delivery / 3_utilities | конкретные жители + unknown_resident |
 | Множество классов | закрытое, меняется редко | открытое (новый житель = новый класс) |
 | Датасет | все группы, данных относительно много | только жители, данных мало |
-| Переобучение | редко (новый тип посетителя) | раз в 2–4 недели по мере накопления данных |
-
-Одна модель на обе задачи не подходит: периодическое переобучение Модели 2 (новые жители,
-новые outfit) сдвигало бы backbone и деградировало бы Модель 1.
+| Переобучение | редко (новый тип посетителя) | раз в 2–4 недели по мере накопления |
 
 Та же архитектура для обеих потому что:
 - вход одинаковый (кроп сверху, тот же ракурс и освещение)
@@ -35,20 +50,16 @@
 
 ## Почему не cosine similarity по эмбеддингам для жителей
 
-Очевидный подход — взять предобученные эмбеддинги (ReID, FaceNet) и сравнивать их
-косинусным расстоянием. Он не подходит по нескольким причинам:
-
 - **Угол камеры сверху** — стандартные ReID-модели обучены на виде сбоку/спереди,
-  у них другое распределение признаков; лицо часто не видно вообще
+  лицо часто не видно вообще
 - **Разная одежда** — appearance-based эмбеддинги кодируют цвет куртки как основной
-  признак; тот же человек в другой одежде будет дальше по косинусному расстоянию,
+  признак; тот же человек в другой одежде окажется дальше по косинусному расстоянию,
   чем другой человек в похожей одежде
-- **Нет контрольных фото** — для enrollment нужны фотографии в контролируемых
-  условиях; у нас только кропы из тех же камер с тем же углом
+- **Нет контрольных фото** — у нас только кропы из тех же камер с тем же углом
 
-Классификатор, обученный на накопленных кропах из тех же камер, учит признаки
-специфичные для нашего ракурса (форма силуэта сверху, ширина плеч, форма головы)
-и с каждым циклом переобучения становится лучше, включая новые outfit.
+Классификатор, обученный на накопленных кропах, учит признаки специфичные для нашего
+ракурса (силуэт сверху, ширина плеч, форма головы) и с каждым циклом переобучения
+становится лучше, включая новые outfit.
 
 ---
 
@@ -73,12 +84,12 @@
                 ▼
 ┌─────────────────────────────────────┐
 │  Модель 1 — MobileNetV3-Small       │
-│  → resident / courier / delivery /  │
-│    utilities / other                │
+│  → 1_resident / 2_delivery /        │
+│    3_utilities                      │
 │  conf < 0.65 → uncertain            │
 └───────────────┬─────────────────────┘
                 │
-        group == "resident"?
+        group == "1_resident"?
                 │ да
                 ▼
 ┌─────────────────────────────────────┐
@@ -115,156 +126,165 @@ pipeline = MLPipeline(MLConfig(
     identify_model=Path(".models/identify/v1.onnx"),
 ))
 
-# Обрабатываем кадр
 results = pipeline.run(bgr_frame, yolo_detections)
 for r in results:
-    # r.group_class   — "resident" / "courier" / ...
+    # r.group_class   — "1_resident" / "2_delivery" / "3_utilities"
     # r.group_conf    — уверенность Модели 1
     # r.person_id     — "person_01" или "" если unknown_resident
-    # r.identify_conf — уверенность Модели 2 (0 если group != "resident")
+    # r.identify_conf — уверенность Модели 2 (0 если group != "1_resident")
     print(r.group_class, r.person_id, r.identify_conf)
 ```
 
 ### Без обученных моделей
 
 `GroupClassifier` и `PersonIdentifier` работают без моделей — возвращают `("unknown", 0.0)`.
-Это позволяет запускать скрипты до обучения.
 
 ---
 
-## Система разметки
-
-### Workflow
+## Workflow разметки и обучения Модели 1
 
 ```
-1. Агент обнаруживает человека → кроп + событие в MongoDB
-   (group_class=None, person_id=None → unclassified_persons)
+1. pipeline/2_yolo_boxes_files → кропы в .output/pipeline/2_yolo_boxes_files/run_XXX/
 
-2. Админ в Telegram: /unclassified
-   → видит фото, выбирает group_class и/или person_id
+2. Добавить в датасет:
+   .\sh\train\1_dataset_groups.ps1 add -Src .output\pipeline\2_yolo_boxes_files\run_XXX -Dataset .data\groups\v1
 
-3. PATCH /unclassified/{id}   → reviewed=True, assigned_person_id
+3. Проверить на дубли с уже размеченным:
+   .\sh\train\1_dataset_groups.ps1 check -Src .data\groups\v1\new -Dataset .data\groups\v1
+   → уникальные → new/unique/, дубли → new/double/
 
-4. POST /training/export      → скачать ZIP (images/ + labels.json)
+4. Разметить:
+   .\sh\train\2_label_ui.ps1
+   Открывает http://127.0.0.1:5050 — веб-разметчик с галереей
 
-5. python scripts/train/train_classifier.py --data export.zip
+5. Применить разметку в датасет:
+   .\sh\train\1_dataset_groups.ps1 apply -Move
+   → файлы перемещаются из new/ в 1_resident/, 2_delivery/, 3_utilities/
 
-6. Обученная модель → .models/classify/v2.onnx
+6. Обучить:
+   .\sh\train\3_train_groups.ps1
+   → .models/classify/v<N>.onnx
+
+7. (опционально) Проверить промежуточный результат во время обучения:
+   python scripts/train/3a_eval_pt.py
 ```
 
-### API разметки
+---
 
-```
-GET  /unclassified                     — список неразмеченных
-PATCH /unclassified/{id}               — назначить person_id + group_class
+## Скрипты обучения
 
-POST /persons                          — создать жителя
-POST /persons/{id}/images              — добавить эталонное фото (→ вычислить эмбеддинг)
-GET  /persons                          — список жителей
-```
+| Скрипт | Назначение |
+|--------|-----------|
+| `sh/train/1_dataset_groups.ps1` | Управление датасетом: `build / apply / check / add / status` |
+| `sh/train/2_label_ui.ps1` | Запуск веб-разметчика кропов |
+| `sh/train/3_train_groups.ps1` | Обучение Модели 1 |
+| `sh/train/5_train_residents.ps1` | Обучение Модели 2 |
 
-### Веб-интерфейс разметки (label_ui)
+---
 
-`scripts/train/4_label_ui.py` — локальный Flask-сервер для ручной разметки кропов.  
-Открывает браузер автоматически. Метки сохраняются в `labels.json` при каждом клике.
+## Веб-разметчик (2_label_ui)
 
-```bash
-# Разметить кропы из последнего прогона 5_diff_yolo_boxes_low
-python scripts/train/4_label_ui.py
-
-# Указать конкретный каталог и порт
-python scripts/train/4_label_ui.py --input .output/cameras/5_diff_yolo_boxes_low/run_XXX/crops --port 5050
-
-# Сохранить метки в явный файл
-python scripts/train/4_label_ui.py --labels .output/train/4_label_ui/labels.json
+```powershell
+.\sh\train\2_label_ui.ps1
+.\sh\train\2_label_ui.ps1 -InputDir ".output\pipeline\2_yolo_boxes_files\run_XXX"
+.\sh\train\2_label_ui.ps1 -UnlabeledOnly $true   # только неразмеченные
 ```
 
-**Горячие клавиши в браузере:**
+Открывает три URL:
+- `http://127.0.0.1:5050` — разметчик (одиночный кроп + кнопки)
+- `http://127.0.0.1:5050/gallery` — галерея сессии (все кропы, сгруппированы по метке)
+- `http://127.0.0.1:5050/gallery/dataset` — галерея датасета (файлы из папок датасета, перемещение между классами)
+
+**Горячие клавиши:**
 
 | Клавиша | Действие |
 |---------|----------|
-| `1` | resident |
-| `2` | courier |
-| `3` | delivery |
-| `4` | utilities |
-| `5` | other |
-| `→` | следующий |
+| `1` | 1_resident |
+| `2` | 2_delivery |
+| `3` | 3_utilities |
+| `→` | следующий без разметки |
 | `←` | предыдущий |
-| `U` | пропустить |
-
-Классы соответствуют `CLASSES` в `src/ml/classify.py`.
-
-Результат: `labels.json` → передать в `1_export_data.py` или сохранить для дообучения.
+| `U` | пропустить (unknown) |
 
 ---
 
-## Обучение классификатора
+## Обучение Модели 1 (3_train_groups)
 
-### 1. Собрать данные
+```powershell
+# Стандартный запуск (данные из .data/groups/v1)
+.\sh\train\3_train_groups.ps1
 
-```bash
-# Экспортировать размеченные данные из MongoDB
-python scripts/train/export_data.py --task classify
+# Явный путь и параметры
+.\sh\train\3_train_groups.ps1 -Data ".data\groups\v1" -Epochs 30
 
-# Или через API
-GET /training/export?model=classify   → скачивает ZIP
+# Отключить коррекцию дисбаланса
+.\sh\train\3_train_groups.ps1 -ClassWeights $false -WeightedSampling $false
 ```
 
-### 2. Обучить модель
+**Параметры:**
 
-```bash
-pip install torch torchvision
+| Параметр | По умолчанию | Описание |
+|----------|-------------|----------|
+| `-Data` | `.data\groups\v1` | Папка датасета или zip |
+| `-Epochs` | `20` | Число эпох |
+| `-BatchSize` | `32` | Размер батча |
+| `-Lr` | `1e-3` | Learning rate |
+| `-ValSplit` | `0.2` | Доля валидации (стратифицированная) |
+| `-ClassWeights` | `$true` | Взвешенная функция потерь |
+| `-WeightedSampling` | `$true` | WeightedRandomSampler |
 
-python scripts/train/2_train_groups.py \
-    --data .output/training/export_classify_*.zip \
-    --epochs 30
+**Обработка дисбаланса классов:**
+
+Оба флага включены по умолчанию — актуально при дисбалансе (текущий датасет ~15:1).
+- `ClassWeights` — веса классов в `CrossEntropyLoss`, обратно пропорционально частоте
+- `WeightedSampling` — `WeightedRandomSampler`: равномерная выборка из каждого класса в батче
+- Разбивка train/val — **стратифицированная**: `val_split` % берётся из каждого класса отдельно
+
+**Фазы обучения:**
+1. Эпохи 1 → N/2: обучается только классификационная голова (backbone заморожен)
+2. Эпохи N/2+1 → N: размораживается вся сеть, lr × 0.1
+
+**Результаты:**
+```
+.models/classify/v<N>.onnx             — модель для production
+.models/classify/backbone.pt           — backbone для инициализации Модели 2
+.output/train/3_train_groups/run/training_results.json
 ```
 
-Результат: `.models/classify/v1.onnx` и `.models/classify/backbone.pt` (для Модели 2)
-
-### 3. Проверить метрики
-
+**Аугментация при обучении:**
+```python
+transforms.RandomCrop(224)
+transforms.RandomHorizontalFlip()
+transforms.RandomRotation(10)               # небольшой наклон камеры
+transforms.RandomPerspective(0.2, p=0.5)   # угол обзора камеры
+transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05)
+transforms.RandomErasing(p=0.3)            # частичное перекрытие людей
 ```
-.models/classify/v1.onnx       — модель для production
-.models/classify/backbone.pt   — backbone для инициализации Модели 2
-.output/train/2_train_groups/run/training_results.json  — val_acc, history
-```
 
-### 4. Активировать
-
-Обновить `config.yaml`:
-```yaml
-models:
-  classify: .models/classify/v1.onnx
+**Проверка во время обучения (пока идут эпохи):**
+```powershell
+& "$env:USERPROFILE\miniconda3\envs\conda_video\python.exe" scripts\train\3a_eval_pt.py
 ```
+Показывает точность по каждому классу на случайной выборке из датасета.
 
 ---
 
-## Идентификация жителей
+## Идентификация жителей (Модель 2)
 
 ### Добавить нового жителя
 
-Новый житель = новый класс в Модели 2. Без переобучения модель его не знает.
-
 ```
-1. Накопить 15–30 кропов жителя из разных дней (→ разная одежда)
-2. Разметить вручную (label_ui: назначить person_id)
-3. Добавить в датасет жителей: datasets/residents/person_01/
-4. Запустить переобучение Модели 2 (см. ниже)
+1. Накопить 15–30 кропов из разных дней (разная одежда)
+2. Разметить в 2_label_ui
+3. Запустить переобучение Модели 2
 ```
 
-До переобучения новый житель будет попадать в `unknown_resident` — это ожидаемо.
+До переобучения новый житель попадёт в `unknown_resident`.
 
-### Переобучение Модели 2
+### Переобучение
 
 Цикл переобучения — раз в 2–4 недели или при добавлении нового жителя.
-
-**Важно:** каждый раз обучать на **полном накопленном датасете** (не только новые данные),
-иначе модель забудет старых жителей (catastrophic forgetting).
-
-**Стартовые веса:** от предыдущей версии Модели 2 (не от Модели 1 заново).
-Исключение: если изменился состав классов кардинально (жители съехали) — тогда
-перезапустить с весов backbone Модели 1.
+Всегда обучать на **полном накопленном датасете** (иначе catastrophic forgetting).
 
 ```
 Цикл 1:  backbone Модели 1  → обучение на {неделя 1}       → Модель 2 v1
@@ -272,46 +292,31 @@ models:
 Цикл 3:  Модель 2 v2        → обучение на {неделя 1+2+3}   → Модель 2 v3
 ```
 
-**Команды:**
-
-```bash
+```powershell
 # Первый цикл — backbone от Модели 1
-python scripts/train/5_train_residents.py \
-    --data export_identify.zip \
-    --backbone .models/classify/backbone.pt \
-    --epochs 30
+.\sh\train\5_train_residents.ps1 -Data export.zip -Backbone .models\classify\backbone.pt
 
-# Последующие циклы — веса предыдущей версии Модели 2
-python scripts/train/5_train_residents.py \
-    --data export_identify_full.zip \
-    --init-from .models/identify/v1.pt \
-    --epochs 30
+# Последующие циклы — веса предыдущей версии
+.\sh\train\5_train_residents.ps1 -Data export_full.zip -InitFrom .models\identify\v1.pt
 ```
-
-Через PowerShell: `.\sh\train\5_train_residents.ps1 -Data export.zip -Backbone .models\classify\backbone.pt`
 
 ### Трансфер между моделями
 
 ```
 ImageNet weights
     ↓
-fine-tune на датасете групп (resident/courier/...)
+fine-tune на датасете групп (1_resident / 2_delivery / 3_utilities)
     ↓
 Модель 1  (.models/classify/v1.onnx)
     │
-    └── сохранить backbone без головы
+    └── backbone.pt (только features, без головы)
             ↓
         fine-tune на датасете жителей
             ↓
         Модель 2 v1  (.models/identify/v1.onnx)
             ↓ (от неё же)
         Модель 2 v2  (.models/identify/v2.onnx)
-            ↓ ...
 ```
-
-Смысл: Модель 1 учит backbone понимать «что такое человек в нашем ракурсе сверху»
-лучше, чем ImageNet. Модель 2 стартует с этих весов — ей легче выучить тонкие
-различия между жителями.
 
 ---
 
@@ -321,32 +326,14 @@ fine-tune на датасете групп (resident/courier/...)
 .models/
   detect/
     yolov8n.onnx        — детекция людей (готово)
-    yolov8s.onnx        — альтернатива: точнее, но медленнее
   classify/
-    v0.onnx             — Модель 1: болванка (низкая точность, нужно обучить)
-    v1.onnx             — после первого обучения на размеченных данных
+    v1.onnx             — Модель 1: обучена на датасете .data/groups/v1
     backbone.pt         — только features (PyTorch) для инициализации Модели 2
   identify/
     v1.onnx             — Модель 2: после первого обучения на жителях
-    v2.onnx             — после первого цикла переобучения
-    ...
   osd/
     osd_templates.npz     — шаблоны цифр OSD (HI-поток)
     osd_templates_low.npz — шаблоны цифр OSD (LOW-поток)
-```
-
----
-
-## Аугментация при обучении
-
-**Модель 1 (группы):** стандартная — случайный crop, flip, нормализация яркости.
-
-**Модель 2 (жители):** обязательно сильный **цветовой jitter** (HSV ±30–40%) чтобы модель
-не запоминала цвет одежды как основной признак. Без этого одежда доминирует над
-формой тела, и модель плохо обобщается на другие дни.
-
-```python
-transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.4, hue=0.15)
 ```
 
 ---
@@ -358,102 +345,28 @@ thresholds:
   detection:
     min_confidence: 0.35   # YOLO — порог детекции человека
   classification:
-    min_confidence: 0.65   # Модель 1 — ниже → "uncertain" (не назначать группу)
+    min_confidence: 0.65   # Модель 1 — ниже → "uncertain"
   identification:
-    min_confidence: 0.70   # Модель 2 — ниже → unknown_resident (в очередь на разметку)
+    min_confidence: 0.70   # Модель 2 — ниже → unknown_resident
 ```
 
-Порог идентификации 0.70 — эмпирический старт. На ранних версиях Модели 2
-(мало данных) его стоит поднять до 0.80, чтобы уменьшить количество неверных
-авто-меток.
+На ранних версиях Модели 2 (мало данных) стоит поднять порог идентификации до 0.80.
+
+---
+
+## Аугментация Модели 2 (жители)
+
+Обязательно сильный **цветовой jitter** — модель не должна запоминать цвет одежды:
+
+```python
+transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.4, hue=0.15)
+```
 
 ---
 
 ## Тесты
 
 ```bash
-# Unit-тесты ML, utils и camera-скриптов
 pytest tests/test_ml_pipeline.py tests/test_cameras_6x.py tests/test_motion_utils.py tests/test_osd_time.py -v
-
-# Интеграционные тесты на реальных данных (требует tests/data/)
-pytest tests/test_integration.py -v
-
-# Все тесты
 pytest tests/ -q
 ```
-
----
-
-## Временны́е метки кадра (OSD)
-
-Камера iCSee записывает время в правый верхний угол кадра (`YYYY-MM-DD HH:MM:SS`).
-Модуль `src/common/utils/osd_time.py` извлекает это время без OCR-библиотек:
-
-```python
-from common.utils.osd_time import extract_osd_time
-cam_dt = extract_osd_time(hi_frame)   # datetime | None
-```
-
-Шаблоны цифр хранятся в `.models/osd/osd_templates.npz`.
-Сборка шаблонов из нового кадра с известным временем:
-
-```python
-from common.utils.osd_time import build_templates_from_frame
-build_templates_from_frame(frame, "2026-05-31 14:49:31")
-```
-
-Включение в `5_diff_yolo_boxes_low.py`:
-```
-python scripts/cameras/5_diff_yolo_boxes_low.py --cam-ts
-```
-Имя файла: `{stem}_{cam_YYYYMMDD_HHMMSS}_{pc_метка}_{suffix}.jpg`
-
-### Точное время через RTCP NTP
-
-Модуль `src/common/utils/rtcp_time.py` извлекает точное время из сетевых пакетов RTSP/TCP.  
-Метод: RTCP Sender Report (PT=200) содержит 64-bit NTP timestamp — точность ±0.1 сек.
-
-```python
-from common.utils.rtcp_time import RtcpTimingReader
-
-reader = RtcpTimingReader(rtsp_url)
-calib = reader.get_calibration(timeout=5.0)  # ждём первый RTCP SR
-if calib:
-    # calib.ntp_unix  — Unix timestamp из NTP (wall clock камеры)
-    # calib.rtp_ts    — соответствующий RTP timestamp
-    # calib.clock_rate — частота часов (обычно 90000)
-    cam_time = calib.rtp_to_datetime(rtp_ts)
-```
-
-Отличие от OSD: OSD даёт точность 1 сек (по экранным цифрам), RTCP — субсекундную.  
-OSD работает без подключения к сети (из уже захваченного кадра), RTCP требует отдельного RTSP соединения.
-
----
-
-## Бенчмарки
-
-```bash
-# FPS пропускная способность по компонентам
-python scripts/bench/fps_bench.py --duration 30
-
-# Сравнение детекции LOW vs HI разрешения
-python scripts/bench/compare_lohi.py --pairs 20
-
-# Рассинхрон LOW/HI потоков + camera-PC offset
-python scripts/bench/sync_offset.py --duration 60 --cam-ts
-```
-
----
-
-## Тестовые данные
-
-```bash
-# Собрать представительную выборку из .output/
-python scripts/utils/collect_test_frames.py
-```
-
-Структура `tests/data/`:
-- `raw_pairs/` — HI-кадры при срабатывании порога движения
-- `no_person/` — heartbeat кадры (пустая сцена)
-- `with_person/` — кадры с обнаруженными людьми
-- `artifacts/` — маленькие/нетипичные кадры

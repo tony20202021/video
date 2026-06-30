@@ -70,68 +70,31 @@ _CLASS_COLORS = {
     "1_resident":  "#228833",
     "2_delivery":  "#0055cc",
     "3_utilities": "#770077",
-    "99_other":    "#888888",
     "uncertain":   "#dddddd",
     "unknown":     "#aaaaaa",
 }
 
 
-# ─── Input discovery ─────────────────────────────────────────────────────────
-
-def _has_crops(d: Path) -> bool:
-    """Проверяет что d — это 5_2 run (содержит sub_run/<cam>/crops/)."""
-    try:
-        for sub in d.iterdir():
-            if not sub.is_dir() or not sub.name.startswith("run_"):
-                continue
-            for cam in sub.iterdir():
-                if cam.is_dir() and (cam / "crops").is_dir():
-                    return True
-    except OSError:
-        pass
-    return False
-
-
-def _expand_inputs(paths: list[Path]) -> list[tuple[Path, str]]:
-    """Возвращает [(5_2_run_dir, parent_stem)]."""
-    runs: list[tuple[Path, str]] = []
-    for p in paths:
-        if not p.exists():
-            print(f"  [!] Не найдено: {p}", file=sys.stderr)
-            continue
-        if _has_crops(p):
-            runs.append((p, ""))
-        else:
-            subs = sorted(c for c in p.iterdir()
-                          if c.is_dir() and c.name.startswith("run_") and _has_crops(c))
-            if subs:
-                for s in subs:
-                    runs.append((s, p.name))
-            else:
-                print(f"  [!] Нет run_* с crops/ в: {p}", file=sys.stderr)
-    return runs
 
 
 def _find_crops(run_dir: Path) -> dict[str, dict[str, list[Path]]]:
-    """Возвращает {sub_run_name: {cam_name: [crop_path, ...]}}."""
+    """Возвращает {sub_run_name: {cam_name: [crop_path, ...]}}.
+
+    Перебирает все jpg-файлы в run_dir рекурсивно без фильтров по именам каталогов.
+    Группировка: первый уровень вложенности → sub_run, второй → cam.
+    """
     result: dict[str, dict[str, list[Path]]] = {}
     try:
-        for sub_run_dir in sorted(run_dir.iterdir()):
-            if not sub_run_dir.is_dir() or not sub_run_dir.name.startswith("run_"):
-                continue
-            cams: dict[str, list[Path]] = {}
-            for cam_dir in sorted(sub_run_dir.iterdir()):
-                if not cam_dir.is_dir():
-                    continue
-                crops_dir = cam_dir / "crops"
-                if crops_dir.is_dir():
-                    crops = sorted(
-                        p for p in crops_dir.iterdir() if p.suffix.lower() == ".jpg"
-                    )
-                    if crops:
-                        cams[cam_dir.name] = crops
-            if cams:
-                result[sub_run_dir.name] = cams
+        for img in sorted(run_dir.rglob("*.jpg")):
+            rel = img.relative_to(run_dir)
+            parts = rel.parts
+            if len(parts) >= 3:
+                sub_run, cam = parts[0], parts[1]
+            elif len(parts) == 2:
+                sub_run, cam = parts[0], "_"
+            else:
+                sub_run, cam = "_", "_"
+            result.setdefault(sub_run, {}).setdefault(cam, []).append(img)
     except OSError:
         pass
     return result
@@ -303,8 +266,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Офлайн классификация кропов по группам (Модель 1)"
     )
-    parser.add_argument("inputs", nargs="+", type=Path,
-                        help="Каталоги прогонов 5_2 или их родительский каталог")
+    parser.add_argument("input_dir", type=Path,
+                        help="Конкретный run-каталог 2_yolo_boxes_files")
     parser.add_argument("--config",        type=Path, default=DEFAULT_CONFIG,
                         help="config.yaml с путями к ML-моделям")
     parser.add_argument("--classify-conf", type=float, default=0.65, metavar="CONF",
@@ -339,10 +302,10 @@ def main() -> int:
     else:
         print("  [ML] Классификатор не загружен — все кропы → unknown/")
 
-    run_pairs = _expand_inputs(args.inputs)
-    if not run_pairs:
-        print("Нет каталогов 5_2 для обработки.", file=sys.stderr)
+    if not args.input_dir.is_dir():
+        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
         return 1
+    run_pairs = [(args.input_dir, "")]
 
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -406,7 +369,7 @@ def main() -> int:
 
     run_params = {
         "script":        "6_2_classify_groups_files",
-        "inputs":        [str(p) for p in args.inputs],
+        "inputs":        [str(args.input_dir)],
         "config":        str(args.config),
         "ml_active":     clf is not None,
         "classify_conf": args.classify_conf,

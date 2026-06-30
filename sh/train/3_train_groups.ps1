@@ -5,12 +5,14 @@
 #   .\sh\train\2_train_groups.ps1 -Data ".output\training\export_dir" -Epochs 30
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]  $Data,
-    [int]     $Epochs    = 20,
-    [int]     $BatchSize = 32,
-    [float]   $Lr        = 1e-3,
-    [float]   $ValSplit  = 0.2,
+    [Parameter(Mandatory=$false)]
+    [string]  $Data             = "E:\_Home\Tony\pet projects\video\.data\groups\v1",
+    [int]     $Epochs           = 20,
+    [int]     $BatchSize        = 32,
+    [float]   $Lr               = 1e-3,
+    [float]   $ValSplit         = 0.2,
+    [bool]    $ClassWeights      = $true,   # взвешенная функция потерь
+    [bool]    $WeightedSampling = $true,   # WeightedRandomSampler
     [string[]] $ExtraArgs = @()
 )
 
@@ -50,6 +52,8 @@ $AllArgs = @(
     "--lr", "$Lr",
     "--val-split", "$ValSplit"
 )
+if ($ClassWeights)      { $AllArgs += "--class-weights" }
+if ($WeightedSampling)  { $AllArgs += "--weighted-sampling" }
 $AllArgs += $ExtraArgs
 
 Write-Host "Args:" ($AllArgs -join " ")

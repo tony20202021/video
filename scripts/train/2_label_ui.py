@@ -216,11 +216,12 @@ _GALLERY_HTML = """<!DOCTYPE html>
   .section { padding: 12px 16px 4px; }
   .section-title { font-size: 13px; font-weight: bold; margin-bottom: 8px;
                    padding: 4px 10px; border-radius: 4px; display: inline-block; }
+  :root { --tw: 120px; }
   .grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
-  .tile { width: 120px; cursor: pointer; border: 2px solid #2a2a4a; border-radius: 4px;
+  .tile { width: var(--tw); cursor: pointer; border: 2px solid #2a2a4a; border-radius: 4px;
           overflow: hidden; background: #111120; transition: border-color .15s; }
   .tile:hover { border-color: #7ec8e3; }
-  .tile img { width: 120px; height: 90px; object-fit: contain; display: block;
+  .tile img { width: var(--tw); height: calc(var(--tw) * 0.75); object-fit: contain; display: block;
               background: #0a0a18; }
   .tile .tile-label { font-size: 9px; color: #777; padding: 3px 4px;
                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -236,10 +237,18 @@ _GALLERY_HTML = """<!DOCTYPE html>
   #modal .btn-class.active { border-left-color: #f9ca24; background: #0f3460; color: #f9ca24; }
   #modal .btn-go { background: #0f3460; color: #7ec8e3; }
   #modal .btn-close { background: #2a2a4a; color: #aaa; }
+  .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
+              cursor: pointer; font-size: 14px; padding: 2px 8px; font-family: monospace; }
+  .zoom-btn:hover { background: #3a3a6a; color: #eee; }
 </style>
 </head>
 <body>
-<h2>Галерея сессии <a href="/">← Разметка</a> <a href="/gallery/dataset">⊞ Датасет</a> <span class="stats" id="stats"></span></h2>
+<h2>Галерея сессии <a href="/">← Разметка</a> <a href="/gallery/dataset">⊞ Датасет</a>
+  <span style="display:flex;gap:4px;align-items:center">
+    <button class="zoom-btn" onclick="zoom(-1)">−</button>
+    <button class="zoom-btn" onclick="zoom(+1)">+</button>
+  </span>
+  <span class="stats" id="stats"></span></h2>
 <div id="gallery"></div>
 
 <div id="modal">
@@ -253,6 +262,12 @@ const CLASS_COLORS = ["#27ae60","#e67e22","#9b59b6","#95a5a6","#3498db",
                       "#e74c3c","#1abc9c","#f39c12","#8e44ad"];
 let crops = [], labels = {}, classes = [];
 let modalFile = '', modalIdx = 0;
+const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
+let zoomIdx = 2;
+function zoom(d) {
+  zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
+  document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
+}
 
 async function loadState() {
   const d = await (await fetch('/api/state')).json();
@@ -284,7 +299,7 @@ function render() {
     const color = cidx >= 0 ? CLASS_COLORS[cidx] : (cls === '—' ? '#444' : '#888');
     const tiles = groups[cls].map(i => {
       const f = crops[i];
-      const name = f.split(/[/\\]/).pop();
+      const name = f.split('/').pop();
       return `<div class="tile" onclick="openModal(${i})" title="${name}">
         <img src="/image/${encodeURIComponent(f)}" loading="lazy">
         <div class="tile-label">${name}</div>
@@ -304,7 +319,7 @@ function openModal(i) {
   modalFile = crops[i];
   const lbl = labels[modalFile] || '';
   document.getElementById('modal-img').src = '/image/' + encodeURIComponent(modalFile);
-  document.getElementById('modal-fname').textContent = modalFile.split(/[/\\]/).pop();
+  document.getElementById('modal-fname').textContent = modalFile.split('/').pop();
   const btns = classes.map((cls, ci) => {
     const color = CLASS_COLORS[ci] || '#888';
     const active = lbl === cls;
@@ -367,11 +382,12 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   .section { padding: 12px 16px 4px; }
   .section-title { font-size: 13px; font-weight: bold; margin-bottom: 8px;
                    padding: 4px 10px; border-radius: 4px; display: inline-block; }
+  :root { --tw: 120px; }
   .grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
-  .tile { width: 120px; cursor: pointer; border: 2px solid #2a2a4a; border-radius: 4px;
+  .tile { width: var(--tw); cursor: pointer; border: 2px solid #2a2a4a; border-radius: 4px;
           overflow: hidden; background: #111120; transition: border-color .15s; }
   .tile:hover { border-color: #7ec8e3; }
-  .tile img { width: 120px; height: 90px; object-fit: contain; display: block; background: #0a0a18; }
+  .tile img { width: var(--tw); height: calc(var(--tw) * 0.75); object-fit: contain; display: block; background: #0a0a18; }
   .tile .tile-label { font-size: 9px; color: #777; padding: 3px 4px;
                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85);
@@ -387,12 +403,19 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   #modal .btn-class.active { border-left-color: #f9ca24; background: #0f3460; color: #f9ca24; }
   #modal .btn-close { background: #2a2a4a; color: #aaa; }
   #modal .moving { opacity: 0.5; pointer-events: none; }
+  .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
+              cursor: pointer; font-size: 14px; padding: 2px 8px; font-family: monospace; }
+  .zoom-btn:hover { background: #3a3a6a; color: #eee; }
 </style>
 </head>
 <body>
 <h2>Датасет
   <a href="/">← Разметка</a>
   <a href="/gallery">⊞ Галерея сессии</a>
+  <span style="display:flex;gap:4px;align-items:center">
+    <button class="zoom-btn" onclick="zoom(-1)">−</button>
+    <button class="zoom-btn" onclick="zoom(+1)">+</button>
+  </span>
   <span class="stats" id="stats"></span>
 </h2>
 <div id="gallery"></div>
@@ -409,6 +432,12 @@ const CLASS_COLORS = ["#27ae60","#e67e22","#9b59b6","#95a5a6","#3498db",
                       "#e74c3c","#1abc9c","#f39c12","#8e44ad"];
 let groups = {}, classes = [];
 let modalFile = '', modalCls = '';
+const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
+let zoomIdx = 2;
+function zoom(d) {
+  zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
+  document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
+}
 
 async function loadState() {
   const d = await (await fetch('/api/dataset')).json();
@@ -426,7 +455,7 @@ function render() {
       const cidx = classes.indexOf(cls);
       const color = CLASS_COLORS[cidx] || '#888';
       const tiles = groups[cls].map(f => {
-        const name = f.split(/[/\\]/).pop();
+        const name = f.split('/').pop();
         return `<div class="tile" onclick="openModal('${f}','${cls}')" title="${name}">
           <img src="/image/${encodeURIComponent(f)}" loading="lazy">
           <div class="tile-label">${name}</div>
@@ -445,7 +474,7 @@ function openModal(f, cls) {
   modalFile = f; modalCls = cls;
   document.getElementById('modal-img').src = '/image/' + encodeURIComponent(f);
   document.getElementById('modal-cls').textContent = cls;
-  document.getElementById('modal-fname').textContent = f.split(/[/\\]/).pop();
+  document.getElementById('modal-fname').textContent = f.split('/').pop();
   buildModalBtns();
   document.getElementById('modal').classList.add('open');
 }

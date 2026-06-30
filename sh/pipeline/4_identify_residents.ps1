@@ -38,14 +38,13 @@ $Script = "$Repo\scripts\pipeline\4_identify_residents.py"
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
 
-# Входные данные — выход скрипта 6_2
+# Выход скрипта 3_classify_groups — конкретные run_*
 $S3Dir = "$Repo\.output\pipeline\3_classify_groups"
 
-# Обрабатываем все прогоны 3_classify_groups разом (или укажи конкретные ниже)
 $InputDirs = @(
-    $S3Dir
-    # Или конкретные прогоны:
-    # "$S3Dir\run_20260628_202843_msk"
+    "$S3Dir\run_20260629_210753_msk"
+    # Добавляй нужные прогоны:
+    # "$S3Dir\run_20260630_120000_msk"
 )
 
 Write-Host "=== 4_identify_residents ===" -ForegroundColor Magenta
@@ -64,12 +63,15 @@ if ($Missing.Count -gt 0) {
     exit 1
 }
 
-$AllArgs = [System.Collections.Generic.List[string]]$InputDirs
-$AllArgs.Add("--identify-conf"); $AllArgs.Add("$IdentifyConf")
-if ($Model) { $AllArgs.Add("--model"); $AllArgs.Add($Model) }
-$AllArgs.AddRange($ExtraArgs)
+$ExtraFlags = @("--identify-conf", "$IdentifyConf")
+if ($Model) { $ExtraFlags += @("--model", $Model) }
+$ExtraFlags += $ExtraArgs
 
-Write-Host "Args:" ($AllArgs -join " ")
-Write-Host ""
-
-& $Python $Script @AllArgs
+foreach ($InputDir in $InputDirs) {
+    Write-Host "--- $($InputDir | Split-Path -Leaf) ---" -ForegroundColor DarkCyan
+    $AllArgs = @($InputDir) + $ExtraFlags
+    Write-Host "Args:" ($AllArgs -join " ")
+    Write-Host ""
+    & $Python $Script @AllArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}

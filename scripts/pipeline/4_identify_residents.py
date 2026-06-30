@@ -5,9 +5,7 @@
 прогоняет PersonIdentifier. GroupClassifier не используется.
 
 Входные данные:
-  - Каталог прогона 6_2:   .output/cameras/6_2_classify_groups_files/run_<ts>
-  - Родительский каталог:  .output/cameras/6_2_classify_groups_files/  (все run_*)
-  Можно смешивать.
+  - Каталог прогона 3_classify_groups:  .output/pipeline/3_classify_groups/run_<ts>
 
 Выход:
   .output/cameras/6_3_identify_residents_files/run_<ts>/
@@ -22,8 +20,7 @@
     run.log
 
 Usage:
-    python scripts/cameras/6_3_identify_residents_files.py .output/cameras/6_2_classify_groups_files
-    python scripts/cameras/6_3_identify_residents_files.py run_dir1 run_dir2
+    python scripts/pipeline/4_identify_residents.py .output/pipeline/3_classify_groups/run_20260629_210753_msk
 """
 
 from __future__ import annotations
@@ -60,38 +57,6 @@ DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 UNKNOWN_CLASS  = "unknown_resident"
 
 
-# ─── Input discovery ─────────────────────────────────────────────────────────
-
-def _has_resident_crops(d: Path) -> bool:
-    """Проверяет что d — это 6_2 run (содержит .../classified/resident/)."""
-    try:
-        for p in d.rglob("classified/resident"):
-            if p.is_dir():
-                return True
-    except OSError:
-        pass
-    return False
-
-
-def _expand_inputs(paths: list[Path]) -> list[tuple[Path, str]]:
-    """Возвращает [(6_2_run_dir, parent_stem)]."""
-    runs: list[tuple[Path, str]] = []
-    for p in paths:
-        if not p.exists():
-            print(f"  [!] Не найдено: {p}", file=sys.stderr)
-            continue
-        if _has_resident_crops(p):
-            runs.append((p, ""))
-        else:
-            subs = sorted(c for c in p.iterdir()
-                          if c.is_dir() and c.name.startswith("run_")
-                          and _has_resident_crops(c))
-            if subs:
-                for s in subs:
-                    runs.append((s, p.name))
-            else:
-                print(f"  [!] Нет run_* с classified/resident/ в: {p}", file=sys.stderr)
-    return runs
 
 
 def _find_resident_crops(run_dir: Path) -> list[tuple[Path, Path]]:
@@ -277,8 +242,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Офлайн идентификация жителей из кропов 6_2 (Модель 2)"
     )
-    parser.add_argument("inputs", nargs="+", type=Path,
-                        help="Каталоги прогонов 6_2 или их родительский каталог")
+    parser.add_argument("input_dir", type=Path,
+                        help="Конкретный run-каталог 3_classify_groups")
     parser.add_argument("--model",          type=Path, default=None,
                         help="Явный путь к ONNX PersonIdentifier (иначе из config.yaml)")
     parser.add_argument("--config",         type=Path, default=DEFAULT_CONFIG,
@@ -319,16 +284,10 @@ def main() -> int:
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    run_pairs = _expand_inputs(args.inputs)
-    if not run_pairs:
-        (out_dir / "run_stats.json").write_text(
-            _json.dumps({"inputs": [str(p) for p in args.inputs],
-                         "crops_total": 0, "note": "no classified/resident/ dirs found"},
-                        ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"Нет кропов-жителей для обработки. Вывод: {out_dir}", file=sys.stderr)
-        return 0
+    if not args.input_dir.is_dir():
+        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
+        return 1
+    run_pairs = [(args.input_dir, "")]
 
     _log_raw = open(out_dir / "run.log", "w", encoding="utf-8", errors="replace")
     _log_fd  = _log_raw.fileno()
@@ -389,7 +348,7 @@ def main() -> int:
 
     run_params = {
         "script":        "6_3_identify_residents_files",
-        "inputs":        [str(p) for p in args.inputs],
+        "inputs":        [str(args.input_dir)],
         "model":         str(args.model) if args.model else None,
         "config":        str(args.config),
         "ml_active":     ident is not None,

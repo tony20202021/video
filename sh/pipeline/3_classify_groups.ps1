@@ -36,14 +36,13 @@ $Script = "$Repo\scripts\pipeline\3_classify_groups.py"
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
 
-# Входные данные — выход скрипта 5_2 (кропы уже вырезаны)
+# Выход скрипта 2_yolo_boxes_files — конкретные run_*
 $S2Dir = "$Repo\.output\pipeline\2_yolo_boxes_files"
 
-# Обрабатываем все прогоны 2_yolo_boxes_files разом (или укажи конкретные ниже)
 $InputDirs = @(
-    $S2Dir
-    # Или конкретные прогоны:
-    # "$S2Dir\run_20260628_202843_msk"
+    "$S2Dir\run_20260629_210753_msk"
+    # Добавляй нужные прогоны:
+    # "$S2Dir\run_20260630_120000_msk"
 )
 
 Write-Host "=== 3_classify_groups ===" -ForegroundColor Magenta
@@ -61,11 +60,13 @@ if ($Missing.Count -gt 0) {
     exit 1
 }
 
-$AllArgs = [System.Collections.Generic.List[string]]$InputDirs
-$AllArgs.Add("--classify-conf"); $AllArgs.Add("$ClassifyConf")
-$AllArgs.AddRange($ExtraArgs)
+$ExtraFlags = @("--classify-conf", "$ClassifyConf") + $ExtraArgs
 
-Write-Host "Args:" ($AllArgs -join " ")
-Write-Host ""
-
-& $Python $Script @AllArgs
+foreach ($InputDir in $InputDirs) {
+    Write-Host "--- $($InputDir | Split-Path -Leaf) ---" -ForegroundColor DarkCyan
+    $AllArgs = @($InputDir) + $ExtraFlags
+    Write-Host "Args:" ($AllArgs -join " ")
+    Write-Host ""
+    & $Python $Script @AllArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}

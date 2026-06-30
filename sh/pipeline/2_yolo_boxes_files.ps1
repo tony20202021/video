@@ -51,7 +51,8 @@ $S1Dir   = "$Repo\.output\pipeline\1_motion_diff"
 # $S1Dir
 # Или конкретные прогоны:
 $InputDirs = @(
-    "$S1Dir\run_20260629_210753_msk"    
+    "$S1Dir\run_20260630_073847_msk",
+    "$S1Dir\run_20260630_084142_msk"
 )
 
 Write-Host "=== 2_yolo_boxes_files ===" -ForegroundColor Cyan
@@ -68,8 +69,13 @@ if ($Missing.Count -gt 0) {
     exit 1
 }
 
-$AllArgs = $InputDirs + @("--yolo-max-fps", "$YoloMaxFps", "--conf", "$Conf", "--nms", "$Nms") + $ExtraArgs
-Write-Host "Args:" ($AllArgs -join " ")
-Write-Host ""
+$ExtraFlags = @("--yolo-max-fps", "$YoloMaxFps", "--conf", "$Conf", "--nms", "$Nms") + $ExtraArgs
 
-& $Python $Script @AllArgs
+foreach ($InputDir in $InputDirs) {
+    Write-Host "--- $($InputDir | Split-Path -Leaf) ---" -ForegroundColor DarkCyan
+    $AllArgs = @($InputDir) + $ExtraFlags
+    Write-Host "Args:" ($AllArgs -join " ")
+    Write-Host ""
+    & $Python $Script @AllArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}

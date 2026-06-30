@@ -7,7 +7,6 @@
     1_resident/         ← файлы по классу
     2_delivery/
     3_utilities/
-    99_other/
     skip/               ← намеренно пропущены при разметке
     unknown/            ← неизвестный класс
     new/                ← новые кропы без разметки (→ 2_label_ui → apply)
@@ -55,7 +54,7 @@ DEFAULT_DATA = REPO_ROOT / ".data" / "groups"
 DEFAULT_LABELS = REPO_ROOT / ".output" / "train" / "2_label_ui" / "labels.json"
 MSK = timezone(timedelta(hours=3))
 
-MAIN_CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
+MAIN_CLASSES = ["1_resident", "2_delivery", "3_utilities"]
 EXTRA_CLASSES = ["skip", "unknown", "new"]
 ALL_CLASSES = MAIN_CLASSES + EXTRA_CLASSES
 
@@ -72,7 +71,7 @@ CLASS_MIGRATIONS = {
     "resident":  "1_resident",
     "delivery":  "2_delivery",
     "utilities": "3_utilities",
-    "other":     "99_other",
+    "other":     None,   # удалён — перенести в unknown
     "courier":   None,   # удалён — перенести в unknown
 }
 

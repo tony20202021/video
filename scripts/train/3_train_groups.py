@@ -29,21 +29,24 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
+CLASSES = ["1_resident", "2_delivery", "3_utilities"]
 NUM_CLASSES = len(CLASSES)
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
+
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
     """Распаковывает zip если нужно, возвращает (images_dir, labels).
 
-    Поддерживает два формата labels.json:
-      1. Стандартный (из 1_export_data / /training/export):
-           {"labels": [{"image": "img_001.jpg", "class": "resident"}]}
-         images_dir = data_path/images/
-      2. Формат 4_label_ui:
-           {"labels": {"relative/path/to/crop.jpg": "resident"}}
-         images_dir = REPO_ROOT (пути хранятся относительно корня репо)
+    Форматы:
+      1. Folder-based (папки = классы, рекомендуется):
+           data_path/1_resident/img.jpg  →  class = "1_resident"
+      2. Стандартный labels.json (из 1_export_data):
+           {"labels": [{"image": "img.jpg", "class": "resident"}]}
+      3. Формат 2_label_ui:
+           {"labels": {"relative/path.jpg": "class"}}
     """
     if data_path.suffix == ".zip":
         extract_dir = data_path.parent / data_path.stem
@@ -51,18 +54,33 @@ def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
             zf.extractall(extract_dir)
         data_path = extract_dir
 
+    # Folder-based: если есть хотя бы одна подпапка с именем из CLASSES
+    if data_path.is_dir():
+        class_dirs = [d for d in data_path.iterdir()
+                      if d.is_dir() and d.name in CLASS_TO_IDX]
+        if class_dirs:
+            labels = []
+            for cls_dir in sorted(class_dirs):
+                for f in sorted(cls_dir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                        labels.append({"image": str(f.relative_to(data_path)), "class": cls_dir.name})
+            return data_path, labels
+
     if data_path.is_file() and data_path.name == "labels.json":
         labels_file = data_path
     else:
         labels_file = data_path / "labels.json"
     if not labels_file.is_file():
-        raise FileNotFoundError(f"labels.json не найден в {data_path}")
+        raise FileNotFoundError(
+            f"labels.json не найден в {data_path}. "
+            f"Передайте папку с подпапками по классам ({', '.join(CLASSES)})"
+        )
 
     raw = json.loads(labels_file.read_text(encoding="utf-8"))
     raw_labels = raw["labels"]
 
     if isinstance(raw_labels, dict):
-        # Формат 4_label_ui: ключ — путь относительно REPO_ROOT
+        # Формат 2_label_ui: ключ — путь относительно REPO_ROOT
         labels = [{"image": path, "class": cls}
                   for path, cls in raw_labels.items()]
         return REPO_ROOT, labels
@@ -94,13 +112,15 @@ def train(
     batch_size: int = 32,
     lr: float = 1e-3,
     val_split: float = 0.2,
+    class_weights: bool = False,
+    weighted_sampling: bool = False,
     output_dir: Path,
 ) -> dict:
     try:
         import torch
         import torch.nn as nn
         import torch.optim as optim
-        from torch.utils.data import DataLoader, Dataset, random_split
+        from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
         from torchvision import transforms
         from PIL import Image
     except ImportError:
@@ -125,13 +145,19 @@ def train(
     for cls, cnt in sorted(class_counts.items()):
         print(f"  {cls}: {cnt}")
 
+    counts_arr = np.array([class_counts.get(c, 0) for c in CLASSES], dtype=np.float32)
+    total = counts_arr.sum()
+
     _train_tf = transforms.Compose([
         transforms.Resize(256),
         transforms.RandomCrop(224),
         transforms.RandomHorizontalFlip(),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+        transforms.RandomRotation(10),
+        transforms.RandomPerspective(distortion_scale=0.2, p=0.5),
+        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.2)),
     ])
     _val_tf = transforms.Compose([
         transforms.Resize(256),
@@ -153,13 +179,29 @@ def train(
             img = Image.open(images_dir / item["image"]).convert("RGB")
             return self.transform(img), CLASS_TO_IDX[item["class"]]
 
-    n_val = max(1, int(len(valid) * val_split))
-    n_train = len(valid) - n_val
-    train_items, val_items = valid[:n_train], valid[n_train:]
+    # Стратифицированное разбиение: val_split % от каждого класса
+    by_class: dict[str, list] = {}
+    for lb in valid:
+        by_class.setdefault(lb["class"], []).append(lb)
+    train_items, val_items = [], []
+    for cls, items in by_class.items():
+        n_v = max(1, int(len(items) * val_split))
+        val_items.extend(items[:n_v])
+        train_items.extend(items[n_v:])
+    n_train, n_val = len(train_items), len(val_items)
 
-    train_loader = DataLoader(
-        CropDataset(train_items, _train_tf), batch_size=batch_size, shuffle=True
-    )
+    train_ds = CropDataset(train_items, _train_tf)
+
+    if weighted_sampling:
+        # каждый класс представлен равномерно в каждом батче
+        w_per_class = total / (NUM_CLASSES * np.where(counts_arr > 0, counts_arr, 1))
+        sample_weights = [float(w_per_class[CLASS_TO_IDX[lb["class"]]]) for lb in train_items]
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_items), replacement=True)
+        print(f"WeightedRandomSampler включён")
+        train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler)
+    else:
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+
     val_loader = DataLoader(
         CropDataset(val_items, _val_tf), batch_size=batch_size
     )
@@ -178,7 +220,14 @@ def train(
 
     optimizer = optim.Adam(model.classifier.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
-    criterion = nn.CrossEntropyLoss()
+
+    if class_weights:
+        w = torch.tensor(total / (NUM_CLASSES * np.where(counts_arr > 0, counts_arr, 1)),
+                         dtype=torch.float32, device=device)
+        print(f"class_weights: { {c: round(float(w[i]), 2) for i, c in enumerate(CLASSES)} }")
+        criterion = nn.CrossEntropyLoss(weight=w)
+    else:
+        criterion = nn.CrossEntropyLoss()
 
     best_val_acc = 0.0
     history = []
@@ -278,6 +327,10 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-split", type=float, default=0.2)
+    ap.add_argument("--class-weights", action="store_true",
+                    help="Взвешенная функция потерь (рекомендуется при дисбалансе классов)")
+    ap.add_argument("--weighted-sampling", action="store_true",
+                    help="WeightedRandomSampler: равномерная выборка классов в каждом батче")
     ap.add_argument("--output", type=Path,
                     default=REPO_ROOT / ".output" / "train" / "3_train_groups" / "run")
     args = ap.parse_args()
@@ -290,6 +343,8 @@ def main() -> int:
         batch_size=args.batch_size,
         lr=args.lr,
         val_split=args.val_split,
+        class_weights=args.class_weights,
+        weighted_sampling=args.weighted_sampling,
         output_dir=args.output,
     )
     if result:

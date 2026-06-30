@@ -170,58 +170,21 @@ def draw_boxes(bgr: np.ndarray, detections) -> np.ndarray:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _expand_inputs(paths: list[Path]) -> list[tuple[Path, str]]:
-    """Expand parent dirs to run_* subdirs.
-
-    Returns list of (run_dir, parent_stem) where parent_stem is the name of the
-    containing script-output dir (e.g. '4_motion_diff_low'), or '' if the path
-    was itself a run dir passed directly.
-    """
-    def _is_run(d: Path) -> bool:
-        return (d / "frames.csv").exists() or (d / "saves.csv").exists()
-
-    runs: list[tuple[Path, str]] = []
-    for p in paths:
-        if not p.exists():
-            print(f"  [!] Не найдено: {p}", file=sys.stderr)
-            continue
-        if _is_run(p):
-            runs.append((p, ""))
-        else:
-            subs = sorted(c for c in p.iterdir() if c.is_dir() and c.name.startswith("run_") and _is_run(c))
-            if subs:
-                for s in subs:
-                    runs.append((s, p.name))
-            else:
-                print(f"  [!] Нет run_* с frames.csv/saves.csv в: {p}", file=sys.stderr)
-    return runs
 
 
 def _find_images(run_dir: Path) -> dict[str, list[Path]]:
-    """Returns {cam_stem: [jpg_paths]} — only motion-event images.
+    """Returns {group_key: [jpg_paths]} — all jpg files in run_dir recursively.
 
-    For runs with cam subdirs (S5/S6 style):
-      - If cam/diff/ exists and has images → use only those (motion-diff frames).
-      - Otherwise → all direct .jpg in the cam dir.
-    For flat runs (S4 style, no cam subdirs): all .jpg in images/ directly.
+    Files directly in run_dir → grouped under run_dir.name.
+    Files in a subdir → grouped under that subdir's name.
+    No assumptions about "images/" or "diff/" subdirectory structure.
     """
-    images_dir = run_dir / "images"
-    if not images_dir.exists():
-        return {}
-    cam_dirs = [d for d in sorted(images_dir.iterdir()) if d.is_dir()]
-    if cam_dirs:
-        result: dict[str, list[Path]] = {}
-        for d in cam_dirs:
-            diff_dir = d / "diff"
-            if diff_dir.is_dir():
-                imgs = sorted(p for p in diff_dir.iterdir() if p.suffix.lower() == ".jpg")
-            else:
-                imgs = sorted(p for p in d.iterdir() if p.suffix.lower() == ".jpg")
-            if imgs:
-                result[d.name] = imgs
-        return result
-    imgs = sorted(p for p in images_dir.iterdir() if p.suffix.lower() == ".jpg")
-    return {"cam": imgs} if imgs else {}
+    by_group: dict[str, list[Path]] = {}
+    for img in sorted(run_dir.rglob("*.jpg")):
+        rel = img.relative_to(run_dir)
+        key = rel.parts[0] if len(rel.parts) > 1 else run_dir.name
+        by_group.setdefault(key, []).append(img)
+    return by_group
 
 
 def _load_csv(path: Path, min_cols: int) -> list[list]:
@@ -446,8 +409,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="YOLO re-detection on saved camera run images"
     )
-    parser.add_argument("inputs", nargs="+", type=Path,
-                        help="Run dirs or parent dirs (with run_* subdirs)")
+    parser.add_argument("input_dir", type=Path,
+                        help="Конкретный run-каталог 1_motion_diff")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--conf", type=float, default=None,
                         help="Порог confidence (env: YOLO_CONF, default: 0.35)")
@@ -518,10 +481,10 @@ def main() -> int:
     _ADAPT_LOW         = _ef("YOLO_ADAPT_LOW",    0.40)
     _ADAPT_FACTOR      = _ef("YOLO_ADAPT_FACTOR", 2.0)
 
-    run_pairs = _expand_inputs(args.inputs)
-    if not run_pairs:
-        print("Нет run-каталогов для обработки.", file=sys.stderr)
+    if not args.input_dir.is_dir():
+        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
         return 1
+    run_pairs = [(args.input_dir, "")]
 
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -589,7 +552,7 @@ def main() -> int:
     # Save launch params immediately so the run is identifiable even if it crashes
     run_params = {
         "script":             "5_2_yolo_boxes_files",
-        "inputs":             [str(p) for p in args.inputs],
+        "inputs":             [str(args.input_dir)],
         "model":              str(args.model),
         "conf":               args.conf,
         "nms":                args.nms,
@@ -694,7 +657,7 @@ def main() -> int:
 
         images_by_cam = _find_images(run_dir)
         if not images_by_cam:
-            print(f"  [!] Нет изображений в {run_dir / 'images'}")
+            print(f"  [!] Нет изображений в {run_dir}")
             continue
 
         yolo_new: list[list] = []  # [cam_stem, img_stem, n_people, mono_approx]
