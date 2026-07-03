@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import tarfile
 import io
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -149,21 +149,102 @@ def test_path_traversal_rejected(app_client, tmp_path):
     assert r.status_code == 400  # path traversal отклонён
 
 
-# ─── Client: pack / step detection ───────────────────────────────────────────
+# ─── Server: POST /file ──────────────────────────────────────────────────────
 
-def test_pack_creates_valid_tarball(run_dir, tmp_path):
-    from scripts.transfer.client import _pack
+def _file_headers(rel_path: str, key: str = "testkey") -> dict:
+    return {
+        "X-Api-Key": key,
+        "X-Step": "1_motion_diff",
+        "X-Run": "run_20260101_120000_msk",
+        "X-Rel-Path": rel_path,
+        "Content-Type": "application/octet-stream",
+    }
 
-    tmp = _pack(run_dir)
-    try:
-        assert tmp.is_file()
-        assert tmp.stat().st_size > 0
-        with tarfile.open(tmp, "r:gz") as tf:
-            names = tf.getnames()
-        assert any(n.startswith(run_dir.name) for n in names)
-    finally:
-        tmp.unlink(missing_ok=True)
 
+def test_receive_file_ok(app_client, output_dir):
+    data = b"\xff\xd8\xff" + b"\x00" * 20
+    r = app_client.post("/file", content=data, headers=_file_headers("images/20260101/cam/diff/frame.jpg"))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    dest = output_dir / "1_motion_diff" / "run_20260101_120000_msk" / "images" / "20260101" / "cam" / "diff" / "frame.jpg"
+    assert dest.is_file()
+    assert dest.read_bytes() == data
+
+
+def test_receive_file_wrong_key(app_client):
+    r = app_client.post("/file", content=b"data", headers=_file_headers("img.jpg", key="bad"))
+    assert r.status_code == 401
+
+
+def test_receive_file_missing_step(app_client):
+    headers = _file_headers("img.jpg")
+    del headers["X-Step"]
+    r = app_client.post("/file", content=b"data", headers=headers)
+    assert r.status_code == 400
+
+
+def test_receive_file_missing_run(app_client):
+    headers = _file_headers("img.jpg")
+    del headers["X-Run"]
+    r = app_client.post("/file", content=b"data", headers=headers)
+    assert r.status_code == 400
+
+
+def test_receive_file_missing_rel_path(app_client):
+    headers = _file_headers("img.jpg")
+    del headers["X-Rel-Path"]
+    r = app_client.post("/file", content=b"data", headers=headers)
+    assert r.status_code == 400
+
+
+def test_receive_file_path_traversal_rel_path(app_client):
+    """X-Rel-Path с ../evil не должен выйти за пределы run_dir."""
+    r = app_client.post("/file", content=b"pwned", headers=_file_headers("../../evil.txt"))
+    assert r.status_code == 400
+
+
+def test_receive_file_path_traversal_step(app_client):
+    """X-Step с .. отклоняется."""
+    headers = _file_headers("img.jpg")
+    headers["X-Step"] = "../etc"
+    r = app_client.post("/file", content=b"pwned", headers=headers)
+    assert r.status_code == 400
+
+
+def test_receive_file_path_traversal_run(app_client):
+    """X-Run с / отклоняется."""
+    headers = _file_headers("img.jpg")
+    headers["X-Run"] = "run/../../etc"
+    r = app_client.post("/file", content=b"pwned", headers=headers)
+    assert r.status_code == 400
+
+
+def test_receive_file_idempotent(app_client, output_dir):
+    """Повторная отправка того же файла перезаписывает, не падает."""
+    data = b"version1"
+    r = app_client.post("/file", content=data, headers=_file_headers("img.jpg"))
+    assert r.status_code == 200
+
+    data2 = b"version2"
+    r2 = app_client.post("/file", content=data2, headers=_file_headers("img.jpg"))
+    assert r2.status_code == 200
+
+    dest = output_dir / "1_motion_diff" / "run_20260101_120000_msk" / "img.jpg"
+    assert dest.read_bytes() == data2
+
+
+def test_receive_file_preserves_subdir_structure(app_client, output_dir):
+    """Вложенный rel_path воссоздаётся на сервере."""
+    rel = "images/20260702/cam_01_9_d/diff/frame001.jpg"
+    data = b"\xff\xd8\xff"
+    r = app_client.post("/file", content=data, headers=_file_headers(rel))
+    assert r.status_code == 200
+    dest = output_dir / "1_motion_diff" / "run_20260101_120000_msk" / rel.replace("/", "/")
+    assert dest.is_file()
+
+
+# ─── Client: step detection ───────────────────────────────────────────────────
 
 def test_step_inferred_from_parent(run_dir):
     """Шаг определяется из имени родительского каталога run_*."""

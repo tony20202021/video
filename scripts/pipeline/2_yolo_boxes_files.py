@@ -53,6 +53,7 @@ from common.utils.camera_run import (
     parse_img_filename as _parse_img_filename,
     save_cpu_csv as _save_cpu_csv,
 )
+from common.utils.adaptive_rate import AdaptiveRateLimiter
 from common.utils.time_msk import ts_for_dir
 
 MSK = timezone(timedelta(hours=3))
@@ -425,6 +426,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None,
                         help="Override output dir (default: .output/cameras/5_2_yolo_boxes_files/run_<ts>)")
     parser.add_argument("--cpu-interval", type=float, default=2.0)
+    parser.add_argument("--save-annotated", action="store_true", default=False,
+                        help="Сохранять кадры с нарисованными YOLO-рамками (*_yolo.jpg)")
     args = parser.parse_args()
 
     # ── Single-instance guard ──────────────────────────────────────────────────
@@ -464,7 +467,7 @@ def main() -> int:
         _raw_mfps = (os.environ.get("YOLO_MAX_FPS") or "").strip()
         args.yolo_max_fps = float(_raw_mfps) if _raw_mfps else 2.0
 
-    _yolo_interval = (1.0 / args.yolo_max_fps) if args.yolo_max_fps > 0 else 0.0
+    _yolo_interval_min = (1.0 / args.yolo_max_fps) if args.yolo_max_fps > 0 else 0.0
 
     def _ef(key: str, default: float) -> float:
         _v = (os.environ.get(key) or "").strip()
@@ -473,13 +476,23 @@ def main() -> int:
         except ValueError:
             return default
 
-    _yolo_interval_min = _yolo_interval
     _yolo_min_fps      = _ef("YOLO_MIN_FPS",      0.033)
     _yolo_interval_max = (1.0 / _yolo_min_fps) if _yolo_min_fps > 0 else 30.0
     _ADAPT_WINDOW      = int(_ef("YOLO_ADAPT_WINDOW", 10))
     _ADAPT_HIGH        = _ef("YOLO_ADAPT_HIGH",   0.90)
     _ADAPT_LOW         = _ef("YOLO_ADAPT_LOW",    0.40)
     _ADAPT_FACTOR      = _ef("YOLO_ADAPT_FACTOR", 2.0)
+
+    _yolo_limiter = AdaptiveRateLimiter(
+        min_interval=_yolo_interval_min,
+        max_interval=_yolo_interval_max,
+        factor=_ADAPT_FACTOR,
+        high=_ADAPT_HIGH,
+        low=_ADAPT_LOW,
+        window=_ADAPT_WINDOW,
+        label="adaptive",
+        unit=" fps",
+    )
 
     if not args.input_dir.is_dir():
         print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
@@ -570,8 +583,8 @@ def main() -> int:
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    yolo_rate = (f"≤{args.yolo_max_fps} fps (интервал {_yolo_interval:.2f}s)"
-                 if _yolo_interval > 0 else "без ограничений")
+    yolo_rate = (f"≤{args.yolo_max_fps} fps (интервал {_yolo_limiter.interval:.2f}s)"
+                 if _yolo_limiter.interval > 0 else "без ограничений")
     print(f"Модель:       {args.model}")
     print(f"Conf / NMS:   {args.conf} / {args.nms}")
     print(f"YOLO rate:    {yolo_rate}  min={_yolo_min_fps} fps")
@@ -669,7 +682,7 @@ def main() -> int:
             crops_dir = cam_out / "crops"
 
             print(f"  {cam_stem}: {len(img_paths)} изображений")
-            for img_path in img_paths:
+            for img_idx, img_path in enumerate(img_paths, 1):
                 n_total += 1
                 frame = cv2.imread(str(img_path))
                 if frame is None:
@@ -682,29 +695,12 @@ def main() -> int:
                                            nms_threshold=args.nms)
                 _inference_ms = (time.monotonic() - _t_yolo_start) * 1000
 
-                _slept_ms = 0.0
-                if _yolo_interval > 0:
-                    _remaining = _yolo_interval - (time.monotonic() - _t_yolo_start)
-                    if _remaining > 0:
-                        _slept_ms = _remaining * 1000
-                        time.sleep(_remaining)
-
+                _slept_ms = _yolo_limiter.sleep(_t_yolo_start)
                 timing_log.append([round(_t_yolo_start - t_start, 3),
                                     round(_inference_ms, 1), round(_slept_ms, 1)])
-
-                # Адаптивный FPS: корректируем интервал по соотношению работа/сон
-                if _yolo_interval_min > 0 and len(timing_log) >= _ADAPT_WINDOW:
-                    _w = timing_log[-_ADAPT_WINDOW:]
-                    _work  = sum(r[1] for r in _w)
-                    _total = sum(r[1] + r[2] for r in _w)
-                    if _total > 0:
-                        _ratio = _work / _total
-                        if _ratio > _ADAPT_HIGH and _yolo_interval < _yolo_interval_max:
-                            _yolo_interval = min(_yolo_interval * _ADAPT_FACTOR, _yolo_interval_max)
-                            print(f"  [adaptive] {_ratio:.0%} работы → {1/_yolo_interval:.2f} fps")
-                        elif _ratio < _ADAPT_LOW and _yolo_interval > _yolo_interval_min:
-                            _yolo_interval = max(_yolo_interval / _ADAPT_FACTOR, _yolo_interval_min)
-                            print(f"  [adaptive] {_ratio:.0%} работы → {1/_yolo_interval:.2f} fps")
+                _msg = _yolo_limiter.adapt(_inference_ms, _slept_ms)
+                if _msg:
+                    print(_msg)
 
                 if not detections:
                     continue
@@ -714,8 +710,9 @@ def main() -> int:
                 cam_out.mkdir(exist_ok=True)
                 crops_dir.mkdir(exist_ok=True)
 
-                annotated = draw_boxes(frame, detections)
-                cv2.imwrite(str(cam_out / (img_path.stem + "_yolo.jpg")), annotated)
+                if args.save_annotated:
+                    annotated = draw_boxes(frame, detections)
+                    cv2.imwrite(str(cam_out / (img_path.stem + "_yolo.jpg")), annotated)
 
                 # Crops (recalculated from scratch)
                 h, w = frame.shape[:2]
@@ -741,7 +738,7 @@ def main() -> int:
                         img_path.stem, run_name, cam_stem, img_path.name,
                         x1, y1, x2, y2, round(conf, 4),
                     ])
-                print(f"    {img_path.name}  →  {len(detections)} чел.")
+                print(f"    [{img_idx}/{len(img_paths)}] {img_path.name}  →  {len(detections)} чел.")
 
         grand_total_checked  += n_total
         grand_total_detected += n_detected

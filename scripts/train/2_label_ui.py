@@ -532,30 +532,21 @@ loadState();
 def run_server(input_dir: Path, port: int, labels_path: Path,
                unlabeled_only: bool = False,
                classes: list[str] | None = None,
-               dataset_dir: Path | None = None) -> None:
+               dataset_dir: Path | None = None,
+               image_exts: set[str] | None = None) -> None:
     from flask import Flask, jsonify, request, send_file, Response
     import shutil as _shutil
 
     app = Flask(__name__)
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
-    # Собираем кропы: сначала ищем подпапки crops/, если нет — берём картинки прямо из input_dir
-    crops: list[str] = []
-    crops_subdirs = [input_dir / "crops"] if (input_dir / "crops").is_dir() \
-                    else sorted(input_dir.rglob("crops"))
+    _exts = image_exts if image_exts is not None else IMAGE_EXTS
 
-    if crops_subdirs:
-        for d in crops_subdirs:
-            if not d.is_dir():
-                continue
-            for f in sorted(d.iterdir()):
-                if f.suffix.lower() in IMAGE_EXTS:
-                    crops.append(f.relative_to(REPO_ROOT).as_posix())
-    else:
-        # Плоская папка с картинками (например unique/ после check)
-        for f in sorted(input_dir.rglob("*")):
-            if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
-                crops.append(f.relative_to(REPO_ROOT).as_posix())
+    # Собираем картинки рекурсивно из input_dir, фильтруя по расширению
+    crops: list[str] = []
+    for f in sorted(input_dir.rglob("*")):
+        if f.is_file() and f.suffix.lower() in _exts:
+            crops.append(f.resolve().as_posix())
 
     # Загружаем существующую разметку
     labels: dict[str, str] = {}
@@ -595,7 +586,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
             if not subdir.is_dir():
                 continue
             files = sorted(
-                f.relative_to(REPO_ROOT).as_posix()
+                f.resolve().as_posix()
                 for f in subdir.iterdir()
                 if f.is_file() and f.suffix.lower() in IMAGE_EXTS
             )
@@ -615,7 +606,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         dst = dst_dir / src.name
         if src.exists() and not dst.exists():
             _shutil.move(str(src), dst)
-        return jsonify({"ok": True, "new_path": str(dst.relative_to(REPO_ROOT)).replace("\\", "/")})
+        return jsonify({"ok": True, "new_path": dst.resolve().as_posix()})
 
     @app.route("/api/label", methods=["POST"])
     def label():
@@ -666,6 +657,8 @@ def main() -> int:
     parser.add_argument("--port",           type=int, default=5050)
     parser.add_argument("--unlabeled-only", action="store_true",
                         help="Показывать только ещё не размеченные кропы")
+    parser.add_argument("--ext", default="jpg",
+                        help="Расширения файлов через запятую (default: jpg)")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -676,10 +669,12 @@ def main() -> int:
     print(f"Классы ({len(classes)}): {', '.join(classes)}")
 
     labels_path = args.labels or (DEFAULT_LABELS / "labels.json")
+    image_exts = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
     run_server(args.input, args.port, labels_path,
                unlabeled_only=args.unlabeled_only,
                classes=classes,
-               dataset_dir=resolved_dataset)
+               dataset_dir=resolved_dataset,
+               image_exts=image_exts)
     return 0
 
 

@@ -17,7 +17,7 @@ param(
 $CONDA_ENV  = "conda_video"
 $PY         = "$env:USERPROFILE\miniconda3\envs\$CONDA_ENV\python.exe"
 $PROJECT    = "E:\_Home\Tony\pet projects\video"
-$SCRIPT     = "scripts\pipeline\1_motion_diff.py"
+$SCRIPT     = "$PROJECT\scripts\pipeline\1_motion_diff.py"
 
 # ─── Текущие значения из .env (для справки; менять в .env, не здесь) ──────────
 #   MOTION_DIFF_THRESHOLD = 3.3      # порог motion diff
@@ -33,7 +33,6 @@ $EXTRA = @(
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-Set-Location $PROJECT
 
 $py_args = [System.Collections.Generic.List[string]]::new()
 $py_args.Add($SCRIPT)

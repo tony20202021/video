@@ -157,19 +157,10 @@ def _regen_csv_from_images(run_dir: Path) -> None:
 
     # entries: (ts_human, ts_msk, cam, img_type)
     entries = []
-    for cam_dir in sorted(images_dir.iterdir()):
-        if not cam_dir.is_dir():
-            continue
-        diff_dir = cam_dir / "diff"
-        if diff_dir.exists():
-            for p in sorted(diff_dir.glob("*.jpg")):
-                r = _parse_stem(p.stem)
-                if r:
-                    entries.append(r)
-        for p in sorted(cam_dir.glob("*.jpg")):
-            r = _parse_stem(p.stem)
-            if r:
-                entries.append(r)
+    for p in sorted(images_dir.rglob("*.jpg")):
+        r = _parse_stem(p.stem)
+        if r:
+            entries.append(r)
 
     if not entries:
         print("  [!] Картинок не найдено — восстановление невозможно")
@@ -321,6 +312,10 @@ def main() -> int:
         help="Интервал замера загрузки ЦПУ (сек). Требует psutil. 0 = не замерять.",
     )
     parser.add_argument(
+        "--csv-save-interval", type=float, default=60.0, metavar="SEC",
+        help="Интервал периодического сохранения cpu.csv (сек). 0 = только в конце.",
+    )
+    parser.add_argument(
         "--regen-from", type=Path, default=None, metavar="RUN_DIR",
         help="Перегенерировать графики из существующей директории прогона без захвата.",
     )
@@ -422,15 +417,17 @@ def main() -> int:
             w.start()
             rtcp_workers[url] = w
 
-    cam_dirs: dict[str, Path] = {}
+    cam_dirs: dict[tuple[str, str], Path] = {}
 
     def _cam_dir(vn: str) -> Path:
-        if vn not in cam_dirs:
-            d = images_dir / _stem_from_env_var(vn)
-            d.mkdir(exist_ok=True)
+        today = ts_for_file()[:8]  # YYYYMMDD in MSK
+        key = (today, vn)
+        if key not in cam_dirs:
+            d = images_dir / today / _stem_from_env_var(vn)
+            d.mkdir(parents=True, exist_ok=True)
             (d / "diff").mkdir(exist_ok=True)
-            cam_dirs[vn] = d
-        return cam_dirs[vn]
+            cam_dirs[key] = d
+        return cam_dirs[key]
 
     prev_gray: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
     last_good_frame: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
@@ -520,13 +517,41 @@ def main() -> int:
             print(f"  {bname}")
     print()
 
+    _current_date = ts_for_file()[:8]  # YYYYMMDD MSK при старте
+
+    def _flush_day_stats(date_str: str) -> None:
+        """Сохранить логи за date_str в images_dir/date_str/ и обнулить их."""
+        if not date_str or not (saves_log or frame_log or diffs_log or pts_log):
+            return
+        day_dir = images_dir / date_str
+        day_dir.mkdir(parents=True, exist_ok=True)
+        for _name, _hdr, _log in [
+            ("frames.csv", ["mono_s", "ts_msk", "url_id", "ok", "plausible", "event"], frame_log),
+            ("saves.csv",  ["mono_s", "ts_msk", "cam", "type"],                         saves_log),
+            ("diffs.csv",  ["mono_s", "ts_msk", "cam", "diff"],                         diffs_log),
+            ("pts.csv",    ["mono_s", "ts_msk", "url_id", "pts_ms"],                    pts_log),
+        ]:
+            if _log:
+                with open(day_dir / _name, "w", newline="", encoding="utf-8") as _f:
+                    _w = csv.writer(_f)
+                    _w.writerow(_hdr)
+                    _w.writerows(_log)
+                _log.clear()
+        print(f"  [день] {date_str} → статистика → {day_dir}", flush=True)
+
     deadline = (time.monotonic() + args.duration) if args.duration > 0 else None
+    _last_csv_save = t_start
 
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
                 print(f"\nДлительность {args.duration:.0f} сек истекла — останов.")
                 break
+
+            _today = ts_for_file()[:8]
+            if _today != _current_date:
+                _flush_day_stats(_current_date)
+                _current_date = _today
 
             for low_u, var_list in vars_by_low.items():
                 reader = readers.get(low_u)
@@ -601,6 +626,12 @@ def main() -> int:
                     frame_log[-1][5] = "heartbeat"
                     saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "heartbeat"])
                     print(f"  пульс {hb_name}")
+
+            if args.csv_save_interval > 0:
+                _now = time.monotonic()
+                if _now - _last_csv_save >= args.csv_save_interval:
+                    _save_cpu_csv(cpu_monitor.snapshot(), out_dir)
+                    _last_csv_save = _now
 
     except KeyboardInterrupt:
         print("\nОстанов по Ctrl+C")

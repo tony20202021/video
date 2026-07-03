@@ -701,10 +701,31 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
                         if _tick_range / s <= 20), 1800)
     _tick_positions = list(range(int(_x_left), int(t_max * 1.02) + _tick_step, _tick_step))
 
-    def _x_time_fmt(x, _pos):
-        total = int(_t0_abs + x)
-        hh, mm, ss = total // 3600, (total % 3600) // 60, total % 60
-        return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    # Метка даты появляется только на первом тике нового дня
+    from datetime import date as _date, timedelta as _tdelta
+    _t0_date = None
+    try:
+        _d = _t0_ts.split("_")[0]  # "20260630"
+        _t0_date = _date(int(_d[:4]), int(_d[4:6]), int(_d[6:8]))
+    except Exception:
+        pass
+
+    _tick_labels: list[str] = []
+    _last_day_label = -1
+    for _tp in _tick_positions:
+        _total = int(_t0_abs + _tp)
+        _day   = _total // 86400          # 0 = день старта, 1 = следующий, …
+        _hh    = (_total % 86400) // 3600
+        _mm    = (_total % 3600) // 60
+        _ss    = _total % 60
+        _lbl   = f"{_hh:02d}:{_mm:02d}:{_ss:02d}"
+        if _day > _last_day_label and _day > 0 and _t0_date is not None:
+            _lbl = f"{(_t0_date + _tdelta(days=_day)).strftime('%d.%m')}\n{_lbl}"
+            _last_day_label = _day
+        _tick_labels.append(_lbl)
+
+    _x_fmt = _ticker.FixedFormatter(_tick_labels)
+    _x_loc = _ticker.FixedLocator(_tick_positions)
 
     for ax_idx, (uid, rows) in enumerate(by_url.items()):
         ax    = axes[ax_idx][0]
@@ -744,8 +765,8 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         y_lim_top = max(intervals_ms) * 1.2 if intervals_ms else 1
         ax.set_ylim(0, y_lim_top)
         ax.grid(True, linestyle="--", alpha=0.35)
-        ax.xaxis.set_major_formatter(_ticker.FuncFormatter(_x_time_fmt))
-        ax.xaxis.set_major_locator(_ticker.FixedLocator(_tick_positions))
+        ax.xaxis.set_major_formatter(_x_fmt)
+        ax.xaxis.set_major_locator(_x_loc)
 
         if event_type == "yolo":
             for i, row in enumerate(ev_list):
@@ -861,8 +882,8 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         ax.set_xlim(_x_left, t_max * 1.02)
 
     for _ax in [axes[i][0] for i in range(len(axes))]:
-        _ax.xaxis.set_major_formatter(_ticker.FuncFormatter(_x_time_fmt))
-        _ax.xaxis.set_major_locator(_ticker.FixedLocator(_tick_positions))
+        _ax.xaxis.set_major_formatter(_x_fmt)
+        _ax.xaxis.set_major_locator(_x_loc)
     axes[-1][0].set_xlabel("время МСК")
 
     plt.tight_layout()

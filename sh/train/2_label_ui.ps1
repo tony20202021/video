@@ -10,7 +10,8 @@ param(
     [string] $Labels        = "",   # файл меток; по умолчанию .output\train\2_label_ui\labels.json
     [string] $Dataset       = "E:\_Home\Tony\pet projects\video\.data\groups\v1",   # каталог датасета для чтения классов; по умолчанию .data\groups\последняя версия
     [int]    $Port          = 5050,
-    [bool]   $UnlabeledOnly = $true         # показывать только неразмеченные; -UnlabeledOnly $false — все
+    [bool]   $UnlabeledOnly = $true,        # показывать только неразмеченные; -UnlabeledOnly $false — все
+    [string] $Ext           = "jpg"         # расширения файлов через запятую
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,5 +64,6 @@ if ($Dataset -and -not [System.IO.Path]::IsPathRooted($Dataset)) { $Dataset = "$
 $AllArgs = @("--input", $InputDir, "--labels", $Labels, "--port", "$Port")
 if ($Dataset)       { $AllArgs += @("--dataset", $Dataset) }
 if ($UnlabeledOnly) { $AllArgs += "--unlabeled-only" }
+if ($Ext)           { $AllArgs += @("--ext", $Ext) }
 
 & $Python $Script @AllArgs

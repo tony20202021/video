@@ -27,7 +27,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-API_KEY: str = os.environ.get("TRANSFER_API_KEY", "")
+def _load_env() -> dict[str, str]:
+    env_file = REPO_ROOT / ".env"
+    result: dict[str, str] = {}
+    if not env_file.is_file():
+        return result
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            result[k.strip()] = v.strip()
+    return result
+
+
+_SERVER_ENV = _load_env()
+API_KEY: str = os.environ.get("TRANSFER_API_KEY") or _SERVER_ENV.get("TRANSFER_API_KEY", "")
 OUTPUT_DIR: Path = REPO_ROOT / ".output" / "pipeline"
 
 app = FastAPI(title="Transfer Server", version="1.0")
@@ -90,6 +106,42 @@ async def receive_run(
     return JSONResponse({"ok": True, "step": step, "run": run_name, "dest": dest})
 
 
+@app.post("/file")
+async def receive_file(
+    request: Request,
+    x_api_key: str = Header(default=""),
+    x_step: str = Header(default=""),
+    x_run: str = Header(default=""),
+    x_rel_path: str = Header(default=""),
+) -> JSONResponse:
+    """Принять один файл, сохранить в OUTPUT_DIR/{step}/{run}/{rel_path}."""
+    _check_key(x_api_key)
+
+    if not x_step or not x_run or not x_rel_path:
+        raise HTTPException(400, "X-Step, X-Run, X-Rel-Path headers required")
+
+    for part in (x_step, x_run):
+        if ".." in part or "/" in part or "\\" in part:
+            raise HTTPException(400, f"Invalid path component: {part!r}")
+
+    run_dir   = (OUTPUT_DIR / x_step / x_run).resolve()
+    dest_file = (run_dir / x_rel_path).resolve()
+    try:
+        dest_file.relative_to(run_dir)
+    except ValueError:
+        raise HTTPException(400, "Path traversal detected")
+
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(dest_file, "wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+
+    size = dest_file.stat().st_size
+    print(f"  [recv] {x_step}/{x_run}/{x_rel_path}  ({size / 1024:.1f} КБ)")
+    return JSONResponse({"ok": True, "dest": str(dest_file)})
+
+
 @app.get("/runs")
 def list_runs() -> dict:
     """Список всех принятых run_* по шагам."""
@@ -107,8 +159,8 @@ def main() -> None:
     import uvicorn
 
     ap = argparse.ArgumentParser(description="Transfer server")
-    ap.add_argument("--host",   default="0.0.0.0")
-    ap.add_argument("--port",   type=int, default=8765)
+    ap.add_argument("--host",   default=_SERVER_ENV.get("TRANSFER_HOST", "0.0.0.0"))
+    ap.add_argument("--port",   type=int, default=int(_SERVER_ENV.get("TRANSFER_PORT", "8765")))
     ap.add_argument("--output", type=Path, default=None,
                     help="Корень для распаковки (default: .output/pipeline)")
     args = ap.parse_args()

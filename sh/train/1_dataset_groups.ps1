@@ -26,7 +26,8 @@ param(
     [string] $Out     = "",   # build: явный output dir
     [switch] $Move    = $true,       # apply: переместить вместо копирования
     [string] $Src     = "E:\_Home\Tony\pet projects\video\.data\groups\new",   # check/add: каталог источника
-    [string] $Dataset = "E:\_Home\Tony\pet projects\video\.data\groups\v1"    # apply/check/add/status: каталог датасета
+    [string] $Dataset = "E:\_Home\Tony\pet projects\video\.data\groups\v1",    # apply/check/add/status: каталог датасета
+    [string] $Ext     = "jpg"        # check/add: расширения файлов через запятую
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,13 +66,13 @@ switch ($Cmd) {
         # Проверить дубли: сравнить Src с датасетом → unique/ и double/
         if (-not $Src)     { Write-Host "[!] -Src required" -ForegroundColor Red; exit 1 }
         if (-not $Dataset) { Write-Host "[!] -Dataset required" -ForegroundColor Red; exit 1 }
-        $AllArgs += @("--src", (Abs $Src), "--dataset", (Abs $Dataset))
+        $AllArgs += @("--src", (Abs $Src), "--dataset", (Abs $Dataset), "--ext", $Ext)
     }
     "add" {
         # Добавить новые кропы из Src в new/ датасета (для последующей разметки)
         if (-not $Src)     { Write-Host "[!] -Src required" -ForegroundColor Red; exit 1 }
         if (-not $Dataset) { Write-Host "[!] -Dataset required" -ForegroundColor Red; exit 1 }
-        $AllArgs += @("--src", (Abs $Src), "--dataset", (Abs $Dataset))
+        $AllArgs += @("--src", (Abs $Src), "--dataset", (Abs $Dataset), "--ext", $Ext)
     }
     "status" {
         # Показать статистику датасета: кол-во изображений по классам

@@ -152,6 +152,7 @@ for r in results:
 3. Проверить на дубли с уже размеченным:
    .\sh\train\1_dataset_groups.ps1 check -Src .data\groups\v1\new -Dataset .data\groups\v1
    → уникальные → new/unique/, дубли → new/double/
+   → пустые подкаталоги Src удаляются автоматически
 
 4. Разметить:
    .\sh\train\2_label_ui.ps1
@@ -160,6 +161,7 @@ for r in results:
 5. Применить разметку в датасет:
    .\sh\train\1_dataset_groups.ps1 apply -Move
    → файлы перемещаются из new/ в 1_resident/, 2_delivery/, 3_utilities/
+   → если new/ стала пустой — удаляется автоматически
 
 6. Обучить:
    .\sh\train\3_train_groups.ps1

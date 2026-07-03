@@ -51,8 +51,8 @@ $S1Dir   = "$Repo\.output\pipeline\1_motion_diff"
 # $S1Dir
 # Или конкретные прогоны:
 $InputDirs = @(
-    "$S1Dir\run_20260630_073847_msk",
-    "$S1Dir\run_20260630_084142_msk"
+    "$S1Dir\run_20260702_200143_msk\images\cam_01_9_d\diff",
+    "$S1Dir\run_20260702_200143_msk\images\cam_01_9_u\diff"
 )
 
 Write-Host "=== 2_yolo_boxes_files ===" -ForegroundColor Cyan

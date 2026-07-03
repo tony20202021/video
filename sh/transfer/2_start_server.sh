@@ -1,9 +1,9 @@
 #!/bin/bash
-# start_server.sh — запуск Transfer Server на Linux-сервере
+# 2_start_server.sh — запуск Transfer Server на Linux-сервере
 #
 # Usage:
-#   ./sh/transfer/start_server.sh
-#   TRANSFER_API_KEY=secret ./sh/transfer/start_server.sh --port 8765
+#   ./sh/transfer/2_start_server.sh
+#   ./sh/transfer/2_start_server.sh --port 8765
 
 set -euo pipefail
 
@@ -23,9 +23,17 @@ if [[ -z "${TRANSFER_API_KEY:-}" ]]; then
     echo "[!] TRANSFER_API_KEY не задан — сервер открыт без аутентификации" >&2
 fi
 
-echo "=== Transfer Server ==="
+_HOST="${TRANSFER_HOST:-0.0.0.0}"
+_PORT="${TRANSFER_PORT:-8765}"
+
+echo "=== Transfer Server (Linux) ==="
 echo "Repo:   $REPO"
 echo "Python: $PYTHON"
+echo "Host:   $_HOST"
+echo "Port:   $_PORT"
 echo ""
 
-exec "$PYTHON" "$REPO/scripts/transfer/server.py" "$@"
+exec "$PYTHON" "$REPO/scripts/transfer/server.py" \
+    --host "$_HOST" \
+    --port "$_PORT" \
+    "$@"

@@ -101,6 +101,16 @@ def _collect_existing_names(dataset_dir: Path) -> set[str]:
     return names
 
 
+def _prune_empty(dirs: set[Path]) -> None:
+    """Удаляет каталоги из набора, если они пустые после переноса файлов."""
+    for d in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
+        if d.is_dir():
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+
+
 def cmd_build(args) -> int:
     labels_path = Path(args.labels)
     if not labels_path.is_absolute():
@@ -195,6 +205,7 @@ def cmd_apply(args) -> int:
 
     counts: dict[str, int] = {}
     missing = 0
+    moved_dirs: set[Path] = set()
 
     for rel_path, cls in labels.items():
         src = REPO_ROOT / rel_path
@@ -214,9 +225,13 @@ def cmd_apply(args) -> int:
         if not dst.exists():
             if args.move:
                 shutil.move(str(src), dst)
+                moved_dirs.add(src.parent)
             else:
                 shutil.copy2(src, dst)
         counts[cls_dir] = counts.get(cls_dir, 0) + 1
+
+    if moved_dirs:
+        _prune_empty(moved_dirs)
 
     # Обновляем dataset.json
     meta_path = dataset_dir / "dataset.json"
@@ -268,7 +283,7 @@ def cmd_check(args) -> int:
             if f.is_file():
                 dataset_names.setdefault(f.name, []).append(subdir.name)
 
-    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    IMAGE_EXTS = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
     # Ищем только в корне и подпапках, исключая unique/ и double/
     src_files: list[Path] = []
     for f in sorted(src_dir.rglob("*")):
@@ -287,6 +302,7 @@ def cmd_check(args) -> int:
 
     n_unique = 0
     n_double = 0
+    moved_dirs: set[Path] = set()
 
     for f in src_files:
         rel = f.relative_to(src_dir)
@@ -301,17 +317,10 @@ def cmd_check(args) -> int:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(f), dst)
             n_unique += 1
+        if f.parent != src_dir:
+            moved_dirs.add(f.parent)
 
-    # Удаляем пустые папки в src_dir (кроме unique/ и double/)
-    for subdir in sorted(src_dir.iterdir(), reverse=True):
-        if not subdir.is_dir():
-            continue
-        if subdir.name in ("unique", "double"):
-            continue
-        try:
-            subdir.rmdir()  # удаляет только если пустая
-        except OSError:
-            pass
+    _prune_empty(moved_dirs)
 
     print(f"Источник:  {src_dir}  ({len(src_files)} файлов)")
     print(f"Датасет:   {dataset_dir}  ({len(dataset_names)} файлов во всех классах)")
@@ -343,11 +352,12 @@ def cmd_add(args) -> int:
 
     existing = _collect_existing_names(dataset_dir)
 
-    crops = list(src_dir.rglob("*.jpg")) + list(src_dir.rglob("*.png"))
+    exts = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
+    crops = sorted(f for f in src_dir.rglob("*") if f.is_file() and f.suffix.lower() in exts)
     copied = 0
     skipped_dupe = 0
 
-    for crop in sorted(crops):
+    for crop in crops:
         if crop.name in existing:
             skipped_dupe += 1
             continue
@@ -418,10 +428,14 @@ def main() -> int:
     p_check = sub.add_parser("check", help="Проверить файлы на дубли с датасетом (без копирования)")
     p_check.add_argument("--src",     required=True, help="Каталог новых файлов")
     p_check.add_argument("--dataset", required=True, help="Каталог датасета (.data/groups/v1)")
+    p_check.add_argument("--ext", default="jpg",
+                         help="Расширения файлов через запятую (default: jpg)")
 
     p_add = sub.add_parser("add", help="Добавить новые кропы в new/")
     p_add.add_argument("--src", required=True, help="Каталог прогона 2_yolo_boxes_files")
     p_add.add_argument("--dataset", required=True, help="Каталог датасета (.data/groups/v1)")
+    p_add.add_argument("--ext", default="jpg",
+                       help="Расширения файлов через запятую (default: jpg)")
 
     p_status = sub.add_parser("status", help="Показать состояние датасета")
     p_status.add_argument("--dataset", required=True)

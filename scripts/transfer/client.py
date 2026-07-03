@@ -1,16 +1,21 @@
-"""Клиент передачи run_*-каталогов на сервер.
+"""Клиент передачи файлов на Transfer Server.
 
-Упаковывает run_*-каталог в tar.gz и отправляет на Transfer Server.
-Шаг пайплайна (step) определяется автоматически по имени родительского каталога.
+Все команды отправляют файлы поштучно (не tar.gz) через POST /file.
+Адаптивное ограничение CPU: замедляет/ускоряет передачу по соотношению
+работа/пауза аналогично YOLO-инференсу.
+
+send  — разово отправить все файлы из каталога run_*.
+watch — постоянно следить за каталогом, отправлять появившиеся файлы,
+        дожидаться подтверждения и удалять локально.
 
 URL и API-ключ берутся из .env (TRANSFER_SERVER, TRANSFER_API_KEY)
 или передаются явно через аргументы.
 
 Usage:
-    python scripts/transfer/client.py send .output/pipeline/1_motion_diff/run_20260629_XXX
-    python scripts/transfer/client.py send run_XXX --server http://1.2.3.4:8765 --key SECRET
-    python scripts/transfer/client.py runs                   # список принятых run на сервере
-    python scripts/transfer/client.py health                 # проверка сервера
+    python scripts/transfer/client.py send .output/pipeline/1_motion_diff/run_XXX
+    python scripts/transfer/client.py watch .output/pipeline/1_motion_diff/run_XXX/images
+    python scripts/transfer/client.py health
+    python scripts/transfer/client.py runs
 """
 
 from __future__ import annotations
@@ -18,11 +23,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import tarfile
-import tempfile
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from common.utils.adaptive_rate import AdaptiveRateLimiter
 
 
 def _load_env() -> dict[str, str]:
@@ -50,59 +57,205 @@ def _get_server_and_key(args) -> tuple[str, str]:
     return server.rstrip("/"), key
 
 
-def _pack(src: Path) -> Path:
-    """Упаковать src в tar.gz во временный файл. Возвращает путь к файлу."""
-    tmp = Path(tempfile.mktemp(suffix=".tar.gz"))
-    with tarfile.open(tmp, "w:gz") as tar:
-        tar.add(src, arcname=src.name)
-    return tmp
+def _make_limiter(env: dict[str, str]) -> AdaptiveRateLimiter:
+    def _ef(k: str, d: float) -> float:
+        v = env.get(k, "")
+        try:
+            return float(v) if v else d
+        except ValueError:
+            return d
+
+    max_rate = _ef("TRANSFER_MAX_RATE",    5.0)
+    min_rate = _ef("TRANSFER_MIN_RATE",    0.1)
+    return AdaptiveRateLimiter(
+        min_interval=(1.0 / max_rate) if max_rate > 0 else 0.0,
+        max_interval=(1.0 / min_rate) if min_rate > 0 else 30.0,
+        factor=_ef("TRANSFER_ADAPT_FACTOR", 2.0),
+        high=_ef("TRANSFER_ADAPT_HIGH",     0.90),
+        low=_ef("TRANSFER_ADAPT_LOW",       0.40),
+        window=int(_ef("TRANSFER_ADAPT_WINDOW", 10)),
+        label="transfer",
+        unit="/с",
+    )
 
 
-def _upload(server: str, step: str, tmp: Path, key: str) -> dict:
-    import httpx
-
-    size = tmp.stat().st_size
-    print(f"  Размер архива: {size / 1_048_576:.1f} МБ")
-
-    def _gen():
-        done = 0
-        with open(tmp, "rb") as f:
-            while chunk := f.read(1 << 20):  # 1 МБ
-                done += len(chunk)
-                pct = done * 100 // size
-                print(f"\r  Отправка: {pct:3d}%  ({done / 1_048_576:.1f} / {size / 1_048_576:.1f} МБ)",
-                      end="", flush=True)
-                yield chunk
-        print()
-
-    headers = {"X-Api-Key": key, "Content-Type": "application/octet-stream"}
-    with httpx.Client(timeout=None) as client:
-        resp = client.post(f"{server}/pipeline/{step}", content=_gen(), headers=headers)
-    resp.raise_for_status()
-    return resp.json()
+def _send_file(http, server: str, headers: dict, f: Path, run_root: Path) -> tuple[bool, float]:
+    """Отправить один файл. Возвращает (ok, work_ms)."""
+    try:
+        rel = f.relative_to(run_root).as_posix()
+    except ValueError:
+        rel = f.name
+    t0 = time.monotonic()
+    try:
+        data = f.read_bytes()
+        if not data:
+            return True, 0.0
+        headers["X-Rel-Path"] = rel
+        resp = http.post(f"{server}/file", content=data, headers=headers)
+        resp.raise_for_status()
+        ok = resp.json().get("ok", False)
+        return ok, (time.monotonic() - t0) * 1000
+    except FileNotFoundError:
+        return True, (time.monotonic() - t0) * 1000  # удалён между сканом и чтением — нормально
+    except Exception as e:
+        print(f"  [!] {rel}: {e}", file=sys.stderr)
+        return False, (time.monotonic() - t0) * 1000
 
 
 def cmd_send(args) -> int:
+    """Разово отправить все файлы из run_*-каталога на сервер (поштучно)."""
+    import httpx
+
     src = Path(args.src).resolve()
     if not src.is_dir():
         print(f"[!] Не найдено: {src}", file=sys.stderr)
         return 1
 
-    step = src.parent.name  # 1_motion_diff / 2_yolo_boxes_files / ...
+    step   = src.parent.name
+    run    = src.name
     server, key = _get_server_and_key(args)
+    env    = _load_env()
+
+    exts  = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
+    files = sorted(f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in exts)
+
+    if not files:
+        print(f"  Нет файлов с расширениями {exts} в {src}")
+        return 0
+
+    headers = {"X-Api-Key": key, "X-Step": step, "X-Run": run,
+               "Content-Type": "application/octet-stream"}
 
     print(f"  Источник: {src}")
-    print(f"  Шаг:      {step}")
-    print(f"  Сервер:   {server}")
+    print(f"  Шаг:     {step}  Прогон: {run}")
+    print(f"  Сервер:  {server}")
+    print(f"  Файлов:  {len(files)}")
+    print()
 
-    tmp = _pack(src)
-    try:
-        result = _upload(server, step, tmp, key)
-    finally:
-        tmp.unlink(missing_ok=True)
+    limiter = _make_limiter(env)
+    n_ok = n_fail = 0
 
-    print(f"  OK → {result.get('dest', '?')}")
-    return 0
+    with httpx.Client(timeout=60.0) as http:
+        for i, f in enumerate(files, 1):
+            rel = f.relative_to(src).as_posix()
+            t0 = time.monotonic()
+            ok, work_ms = _send_file(http, server, headers, f, src)
+            if ok:
+                n_ok += 1
+                print(f"  [{i}/{len(files)}] ↑ {rel}  ({work_ms:.0f}мс)")
+            else:
+                n_fail += 1
+            sleep_ms = limiter.sleep(t0)
+            msg = limiter.adapt(work_ms, sleep_ms)
+            if msg:
+                print(msg)
+
+    print(f"\nИтого: {n_ok} отправлено, {n_fail} ошибок")
+    return 0 if n_fail == 0 else 1
+
+
+def cmd_watch(args) -> int:
+    """Постоянно следит за каталогом; новые файлы — отправляет, подтверждённые — удаляет."""
+    import httpx
+
+    watch_dir = Path(args.watch_dir).resolve()
+    run_root  = Path(args.run_root).resolve() if args.run_root else watch_dir.parent
+    step      = args.step or run_root.parent.name
+    run       = args.run  or run_root.name
+    server, key = _get_server_and_key(args)
+
+    env     = _load_env()
+    limiter = _make_limiter(env)
+
+    def _ef(k: str, d: float) -> float:
+        v = env.get(k, "")
+        try:
+            return float(v) if v else d
+        except ValueError:
+            return d
+
+    poll_sec = _ef("TRANSFER_POLL_SEC", 1.0)
+    exts     = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
+    headers  = {"X-Api-Key": key, "X-Step": step, "X-Run": run,
+                "Content-Type": "application/octet-stream"}
+
+    print("=== transfer watch ===")
+    print(f"  Каталог: {watch_dir}")
+    print(f"  Шаг:     {step}  Прогон: {run}")
+    print(f"  Сервер:  {server}")
+    print(f"  Расш.:   {', '.join(sorted(exts))}")
+    _max_r = f"{1/limiter.min_interval:.1f}" if limiter.min_interval > 0 else "∞"
+    _min_r = f"{1/limiter.max_interval:.2f}" if limiter.max_interval > 0 else "0"
+    print(f"  Скор.:   max={_max_r}/с  min={_min_r}/с  poll={poll_sec}с")
+    print()
+
+    n_sent = n_failed = 0
+    _fail_count: dict[Path, int] = {}   # consecutive failures per file
+    _retry_after: dict[Path, float] = {}  # monotonic time to retry
+
+    with httpx.Client(timeout=60.0) as http:
+        while True:
+            if not watch_dir.is_dir():
+                time.sleep(poll_sec)
+                continue
+
+            try:
+                new_files = sorted(
+                    f for f in watch_dir.rglob("*")
+                    if f.is_file() and f.suffix.lower() in exts
+                )
+            except Exception as e:
+                print(f"[!] scan: {e}", file=sys.stderr)
+                time.sleep(poll_sec)
+                continue
+
+            now = time.monotonic()
+            for f in new_files:
+                if now < _retry_after.get(f, 0):
+                    continue  # backoff not expired yet
+
+                rel = f.relative_to(run_root).as_posix() if f.is_relative_to(run_root) else f.name
+                t0 = time.monotonic()
+                try:
+                    data = f.read_bytes()
+                    if not data:
+                        continue
+                    headers["X-Rel-Path"] = rel
+                    resp = http.post(f"{server}/file", content=data, headers=headers)
+                    resp.raise_for_status()
+                    result = resp.json()
+                    work_ms = (time.monotonic() - t0) * 1000
+                    if result.get("ok"):
+                        f.unlink(missing_ok=True)
+                        _fail_count.pop(f, None)
+                        _retry_after.pop(f, None)
+                        n_sent += 1
+                        print(f"  ↑ {rel}  ({len(data)/1024:.1f} КБ  {work_ms:.0f}мс)  "
+                              f"всего={n_sent}")
+                    else:
+                        n_failed += 1
+                        work_ms = (time.monotonic() - t0) * 1000
+                        print(f"  [!] нет подтверждения: {rel}", file=sys.stderr)
+                except FileNotFoundError:
+                    work_ms = (time.monotonic() - t0) * 1000
+                    _fail_count.pop(f, None)
+                    _retry_after.pop(f, None)
+                except Exception as e:
+                    n_failed += 1
+                    work_ms = (time.monotonic() - t0) * 1000
+                    cnt = _fail_count.get(f, 0) + 1
+                    _fail_count[f] = cnt
+                    delay = min(2.0 ** cnt, 60.0)  # 2s, 4s, 8s, …, 60s
+                    _retry_after[f] = time.monotonic() + delay
+                    print(f"  [!] {rel}: {e}  (retry in {delay:.0f}s)", file=sys.stderr)
+
+                sleep_ms = limiter.sleep(t0)
+                msg = limiter.adapt(work_ms, sleep_ms)
+                if msg:
+                    print(msg)
+
+            if not new_files:
+                time.sleep(poll_sec)
 
 
 def cmd_health(args) -> int:
@@ -135,14 +288,27 @@ def cmd_runs(args) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Transfer client")
+    ap = argparse.ArgumentParser(description="Transfer client (per-file)")
     ap.add_argument("--server", default=None, help="URL сервера (или TRANSFER_SERVER в .env)")
     ap.add_argument("--key",    default=None, help="API-ключ (или TRANSFER_API_KEY в .env)")
 
     sub = ap.add_subparsers(dest="cmd")
 
-    p_send = sub.add_parser("send", help="Отправить run_*-каталог на сервер")
+    p_send = sub.add_parser("send", help="Отправить все файлы из run_*-каталога (разово)")
     p_send.add_argument("src", help="Путь к run_*-каталогу")
+    p_send.add_argument("--ext", default="jpg", metavar="EXTS",
+                        help="Расширения файлов через запятую (default: jpg)")
+
+    p_watch = sub.add_parser("watch", help="Следить за каталогом и отправлять новые файлы")
+    p_watch.add_argument("watch_dir", help="Каталог для наблюдения (напр. run_XXX/images)")
+    p_watch.add_argument("--run-root", default="",
+                         help="Корень прогона (default: parent watch_dir = run_XXX)")
+    p_watch.add_argument("--step",     default="",
+                         help="Имя шага (default: parent run_root)")
+    p_watch.add_argument("--run",      default="",
+                         help="Имя прогона (default: run_root.name)")
+    p_watch.add_argument("--ext",      default="jpg", metavar="EXTS",
+                         help="Расширения файлов через запятую (default: jpg)")
 
     sub.add_parser("health", help="Проверить доступность сервера")
     sub.add_parser("runs",   help="Список принятых прогонов на сервере")
@@ -154,6 +320,8 @@ def main() -> int:
 
     if args.cmd == "send":
         return cmd_send(args)
+    if args.cmd == "watch":
+        return cmd_watch(args)
     if args.cmd == "health":
         return cmd_health(args)
     if args.cmd == "runs":
