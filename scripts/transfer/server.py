@@ -186,6 +186,16 @@ def list_runs() -> dict:
     return result
 
 
+def _log_config() -> dict:
+    """Uvicorn log config extended to route app-level logs through the default handler."""
+    import copy
+    from uvicorn.config import LOGGING_CONFIG
+    cfg = copy.deepcopy(LOGGING_CONFIG)
+    # Root logger → default handler so our logger.info/warning() appear alongside uvicorn lines
+    cfg["loggers"][""] = {"handlers": ["default"], "level": "INFO"}
+    return cfg
+
+
 def main() -> None:
     import uvicorn
 
@@ -206,7 +216,7 @@ def main() -> None:
 
     print(f"Transfer server: http://{args.host}:{args.port}")
     print(f"Output dir:      {OUTPUT_DIR}")
-    uvicorn.run(app, host=args.host, port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port, log_config=_log_config())
 
 
 if __name__ == "__main__":
