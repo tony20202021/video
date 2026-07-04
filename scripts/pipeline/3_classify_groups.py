@@ -55,11 +55,14 @@ if str(_SRC) not in sys.path:
 
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
-    Tee as _Tee,
     save_cpu_csv as _save_cpu_csv,
     draw_cpu_on_ax as _draw_cpu_on_ax,
 )
 from common.utils.time_msk import ts_for_dir
+import logging
+from common.utils.log_setup import setup_logging, add_file_handler
+
+logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
 
@@ -109,27 +112,27 @@ def _load_classifier(config_path: Path):
     try:
         import yaml
     except ImportError:
-        print("  [ML] Нужен pyyaml: pip install pyyaml", file=sys.stderr)
+        logger.warning("  [ML] Нужен pyyaml: pip install pyyaml")
         return None
     try:
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"  [ML] Ошибка чтения {config_path}: {e}", file=sys.stderr)
+        logger.warning(f"  [ML] Ошибка чтения {config_path}: {e}")
         return None
     models = cfg.get("models", {})
     classify_path = models.get("classify")
     if not classify_path:
-        print("  [ML] config.yaml: нет models.classify", file=sys.stderr)
+        logger.warning("  [ML] config.yaml: нет models.classify")
         return None
     try:
         from ml.classify import GroupClassifier
         clf = GroupClassifier()
         if not clf.load(Path(classify_path)):
-            print(f"  [ML] Не удалось загрузить: {classify_path}", file=sys.stderr)
+            logger.warning(f"  [ML] Не удалось загрузить: {classify_path}")
             return None
         return clf
     except Exception as e:
-        print(f"  [ML] Ошибка инициализации: {e}", file=sys.stderr)
+        logger.warning(f"  [ML] Ошибка инициализации: {e}")
         return None
 
 
@@ -217,7 +220,7 @@ def _save_timeline_chart(class_log: list[dict], out_path: Path) -> None:
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
-    print(f"  timeline_chart.png → {out_path}")
+    logger.info(f"  timeline_chart.png → {out_path}")
 
 
 def _save_cpu_chart(cpu_log: list, out_path: Path,
@@ -257,12 +260,13 @@ def _save_cpu_chart(cpu_log: list, out_path: Path,
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
-    print(f"  cpu_chart.png → {out_path}")
+    logger.info(f"  cpu_chart.png → {out_path}")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    setup_logging()
     parser = argparse.ArgumentParser(
         description="Офлайн классификация кропов по группам (Модель 1)"
     )
@@ -290,56 +294,27 @@ def main() -> int:
             and not any("conda" in (c or "").lower() for c in (p.info.get("cmdline") or []))
         ]
         if _others:
-            print(f"[!] {_this_name} уже запущен (PID: {_others}). Завершение.",
-                  file=sys.stderr)
+            logger.warning("[!] %s уже запущен (PID: %s). Завершение.", _this_name, _others)
             return 1
     except ImportError:
         pass
 
     clf = _load_classifier(args.config)
     if clf is not None:
-        print(f"  [ML] GroupClassifier: {'готов' if clf.ready else 'не загружен'}")
+        logger.info(f"  [ML] GroupClassifier: {'готов' if clf.ready else 'не загружен'}")
     else:
-        print("  [ML] Классификатор не загружен — все кропы → unknown/")
+        logger.info("  [ML] Классификатор не загружен — все кропы → unknown/")
 
     if not args.input_dir.is_dir():
-        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
+        logger.warning(f"[!] Не найдено: {args.input_dir}")
         return 1
     run_pairs = [(args.input_dir, "")]
 
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _log_raw = open(out_dir / "run.log", "w", encoding="utf-8", errors="replace")
-    _log_fd  = _log_raw.fileno()
-    _log_last_sync = [time.monotonic()]
 
-    class _SyncFile:
-        def write(self, data: str) -> None:
-            _log_raw.write(data)
-            _log_raw.flush()
-            now = time.monotonic()
-            if now - _log_last_sync[0] >= 1.0:
-                try:
-                    os.fsync(_log_fd)
-                except OSError:
-                    pass
-                _log_last_sync[0] = now
-        def flush(self) -> None:
-            _log_raw.flush()
-        def close(self) -> None:
-            _log_raw.flush()
-            try:
-                os.fsync(_log_fd)
-            except OSError:
-                pass
-            _log_raw.close()
-
-    _log_file = _SyncFile()
-    _orig_out = sys.stdout
-    _orig_err = sys.stderr
-    sys.stdout = _Tee(_orig_out, _log_file)
-    sys.stderr = _Tee(_orig_err, _log_file)
+    add_file_handler(out_dir / 'run.log')
 
     t_start     = time.monotonic()
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
@@ -380,16 +355,16 @@ def main() -> int:
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    print(f"ML:        {'GroupClassifier готов' if clf and clf.ready else 'не загружен (unknown/)'}")
-    print(f"Порог M1:  {args.classify_conf}")
-    print(f"Вывод:     {out_dir}")
-    print(f"Прогонов:  {len(run_pairs)}")
+    logger.info(f"ML:        {'GroupClassifier готов' if clf and clf.ready else 'не загружен (unknown/)'}")
+    logger.info(f"Порог M1:  {args.classify_conf}")
+    logger.info(f"Вывод:     {out_dir}")
+    logger.info(f"Прогонов:  {len(run_pairs)}")
     for rd, ps in run_pairs:
         prefix = f"{ps}/" if ps else ""
         crops_by_subrun = _find_crops(rd)
         total = sum(len(cs) for cams in crops_by_subrun.values() for cs in cams.values())
-        print(f"  {prefix}{rd.name}  [{total} кропов]")
-    print()
+        logger.info(f"  {prefix}{rd.name}  [{total} кропов]")
+    logger.info('')
 
     grand_total = 0
     grand_classified = defaultdict(int)
@@ -400,21 +375,21 @@ def main() -> int:
         run_name = run_dir.name
         _ps = parent_stem or run_dir.parent.name
         label = f"{_ps}/{run_name}"
-        print(f"── {label} ──────────────────────────────────────")
+        logger.info(f"── {label} ──────────────────────────────────────")
 
         crops_by_subrun = _find_crops(run_dir)
         if not crops_by_subrun:
-            print(f"  [!] Нет кропов в {run_dir}")
+            logger.info(f"  [!] Нет кропов в {run_dir}")
             continue
 
         for sub_run_name, cams in sorted(crops_by_subrun.items()):
-            print(f"  {sub_run_name}")
+            logger.info(f"  {sub_run_name}")
             for cam_name, crop_paths in sorted(cams.items()):
                 classified_base = (
                     out_dir / run_name / sub_run_name / cam_name / "classified"
                 )
                 n_cam = 0
-                print(f"    {cam_name}: {len(crop_paths)} кропов")
+                logger.info(f"    {cam_name}: {len(crop_paths)} кропов")
 
                 for crop_path in crop_paths:
                     bgr = cv2.imread(str(crop_path))
@@ -449,9 +424,9 @@ def main() -> int:
                     n_cam += 1
 
                 grand_total += n_cam
-                print(f"    → классифицировано: {n_cam}")
+                logger.info(f"    → классифицировано: {n_cam}")
 
-        print()
+        logger.info('')
 
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
@@ -465,9 +440,9 @@ def main() -> int:
             ])
             w.writeheader()
             w.writerows(class_log)
-        print(f"classifications.csv: {len(class_log)} записей → {csv_path}")
+        logger.info(f"classifications.csv: {len(class_log)} записей → {csv_path}")
     else:
-        print("Классификаций не найдено.")
+        logger.info("Классификаций не найдено.")
 
     _save_cpu_csv(cpu_log, out_dir)
 
@@ -491,14 +466,11 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    sys.stdout = _orig_out
-    sys.stderr = _orig_err
-    _log_file.close()
 
-    print(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
     summary = "  ".join(f"{cls}: {n}" for cls, n in sorted(grand_classified.items()))
     if summary:
-        print(f"Итог: {summary}")
+        logger.info(f"Итог: {summary}")
     return 0
 
 

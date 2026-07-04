@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -20,6 +21,9 @@ from scripts.pipeline.track_direction import (
     DIRECTION_HOME, DIRECTION_AWAY, DIRECTION_UNKNOWN,
     run_tracking,
 )
+from common.utils.log_setup import setup_logging
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "pipeline" / "5_track_direction"
@@ -35,32 +39,33 @@ def main() -> int:
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
 
+    setup_logging()
+
     if not args.input_dir.is_dir():
-        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
+        logger.warning("[!] Не найдено: %s", args.input_dir)
         return 1
 
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{args.input_dir.name}")
 
-    print(f"Вход:   {args.input_dir}")
-    print(f"Вывод:  {out_dir}")
-    print()
+    logger.info("Вход:   %s", args.input_dir)
+    logger.info("Вывод:  %s", out_dir)
 
     results = run_tracking(args.input_dir, args.config, out_dir)
 
     if not results:
-        print("Треков не найдено.")
+        logger.info("Треков не найдено.")
         return 0
 
     by_dir: dict[str, int] = defaultdict(int)
     for r in results:
         by_dir[r["direction"]] += 1
 
-    print(f"\nИтого треков: {len(results)}")
+    logger.info("\nИтого треков: %s", len(results))
     labels = {DIRECTION_HOME: "→ домой", DIRECTION_AWAY: "← из дома",
               DIRECTION_UNKNOWN: "неизвестно"}
     for d, n in sorted(by_dir.items()):
-        print(f"  {labels.get(d, d)}: {n}")
-    print(f"Вывод: {out_dir}")
+        logger.info("  %s: %s", labels.get(d, d), n)
+    logger.info("Вывод: %s", out_dir)
     return 0
 
 

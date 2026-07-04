@@ -56,7 +56,6 @@ from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.camera_run import (
     CapReader as _CapReader,
     CpuMonitor as _CpuMonitor,
-    Tee as _Tee,
     parse_img_filename as _parse_img_filename,
     regen_osd_from_images as _regen_osd_from_images,
     save_charts as _save_charts_base,
@@ -76,6 +75,10 @@ from common.utils.motion_utils import (
     stem_from_var as _stem_from_env_var,
 )
 from common.utils.time_msk import ts_cam_for_file, ts_for_dir, ts_for_file
+import logging
+from common.utils.log_setup import setup_logging, add_file_handler
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ENV = REPO_ROOT / ".env"
 DEFAULT_OUTPUT_PARENT = REPO_ROOT / ".output" / "pipeline" / "1_motion_diff"
@@ -137,7 +140,7 @@ def _regen_csv_from_images(run_dir: Path) -> None:
 
     images_dir = run_dir / "images"
     if not images_dir.exists():
-        print("  [!] images/ не найден — восстановление невозможно")
+        logger.info("  [!] images/ не найден — восстановление невозможно")
         return
 
     def _parse_stem(stem: str):
@@ -163,7 +166,7 @@ def _regen_csv_from_images(run_dir: Path) -> None:
             entries.append(r)
 
     if not entries:
-        print("  [!] Картинок не найдено — восстановление невозможно")
+        logger.info("  [!] Картинок не найдено — восстановление невозможно")
         return
 
     entries.sort(key=lambda x: x[0])
@@ -195,13 +198,13 @@ def _regen_csv_from_images(run_dir: Path) -> None:
             w = csv.writer(f)
             w.writerow(["mono_s", "ts_msk", "cam", "type"])
             w.writerows(saves_rows)
-        print(f"  saves.csv:  {len(saves_rows)} записей (из картинок)")
+        logger.info(f"  saves.csv:  {len(saves_rows)} записей (из картинок)")
     if diffs_rows:
         with open(run_dir / "diffs.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["mono_s", "ts_msk", "cam", "diff"])
             w.writerows(diffs_rows)
-        print(f"  diffs.csv:  {len(diffs_rows)} записей (из картинок)")
+        logger.info(f"  diffs.csv:  {len(diffs_rows)} записей (из картинок)")
 
 
 def _regen_charts(run_dir: Path) -> None:
@@ -212,7 +215,7 @@ def _regen_charts(run_dir: Path) -> None:
     def _load(name: str) -> list:
         p = run_dir / name
         if not p.exists():
-            print(f"  [!] {name} не найден — пропущено")
+            logger.info(f"  [!] {name} не найден — пропущено")
             return []
         with open(p, encoding="utf-8") as f:
             rows = list(_csv.reader(f))
@@ -230,10 +233,10 @@ def _regen_charts(run_dir: Path) -> None:
         except (ValueError, TypeError):
             return default
 
-    print(f"Перегенерация графиков из: {run_dir}")
+    logger.info(f"Перегенерация графиков из: {run_dir}")
 
     if not (run_dir / "saves.csv").exists():
-        print("CSV-файлы не найдены — восстанавливаю из картинок…")
+        logger.info("CSV-файлы не найдены — восстанавливаю из картинок…")
         _regen_csv_from_images(run_dir)
 
     frame_log = [[_f(r[0]), r[1], r[2], _i(r[3]), _i(r[4]), r[5] if len(r) > 5 else ""]
@@ -267,6 +270,7 @@ def _regen_charts(run_dir: Path) -> None:
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    setup_logging()
     parser = argparse.ArgumentParser(
         description="Детекция движения по LOW-потоку CAM_*_URL, сохранение LOW-кадра при срабатывании"
     )
@@ -326,13 +330,13 @@ def main() -> int:
         return 0
 
     if not args.env.is_file():
-        print(f"Файл .env не найден: {args.env}", file=sys.stderr)
+        logger.warning(f"Файл .env не найден: {args.env}")
         return 1
 
     try:
         from dotenv import load_dotenv
     except ImportError:
-        print("Нужен пакет python-dotenv: pip install python-dotenv", file=sys.stderr)
+        logger.warning("Нужен пакет python-dotenv: pip install python-dotenv")
         return 1
 
     load_dotenv(args.env, override=True)
@@ -364,11 +368,7 @@ def main() -> int:
     images_dir = out_dir / "images"
     images_dir.mkdir(exist_ok=True)
 
-    # Лог в файл (tee stdout+stderr → run.log)
-    _log_file = open(out_dir / "run.log", "w", encoding="utf-8")
-    _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
-    sys.stdout = _Tee(sys.stdout, _log_file)
-    sys.stderr = _Tee(sys.stderr, _log_file)
+    add_file_handler(out_dir / 'run.log')
 
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _ffmpeg_capture_options(
         use_tcp=args.tcp, stimeout_us=args.stimeout_us,
@@ -377,7 +377,7 @@ def main() -> int:
     cameras = _collect_cam_urls()
     active: list[tuple[str, str]] = [(k, v) for k, v in cameras if not _skip_url(v)]
     if not active:
-        print("Нет активных rtsp:// URL (CAM_<stem>_URL без плейсхолдеров).", file=sys.stderr)
+        logger.warning("Нет активных rtsp:// URL (CAM_<stem>_URL без плейсхолдеров).")
         return 1
 
     crop_cli = (args.crop_rel or "").strip() or None
@@ -393,13 +393,13 @@ def main() -> int:
     for url in low_unique:
         cap = _open_cap(url, open_timeout_ms=args.open_timeout_ms, read_timeout_ms=args.read_timeout_ms)
         if cap is None:
-            print(f"  [!] LOW не удалось открыть: {redact_url(url)[:80]}…", file=sys.stderr)
+            logger.warning(f"  [!] LOW не удалось открыть: {redact_url(url)[:80]}…")
         else:
             readers[url] = _CapReader(url, cap, args.open_timeout_ms, args.read_timeout_ms)
 
     opened_vars: list[tuple[str, str]] = [(vn, url) for vn, url in active if url in readers]
     if not opened_vars:
-        print("Ни одна камера не открылась (проверьте URL и сеть).", file=sys.stderr)
+        logger.warning("Ни одна камера не открылась (проверьте URL и сеть).")
         for r in readers.values():
             r.stop()
         return 1
@@ -472,26 +472,26 @@ def main() -> int:
         return pc
 
     duration_desc = f"{args.duration:.0f} сек" if args.duration > 0 else "бесконечно"
-    print(f"Порог:     {threshold}  [{threshold_from}]")
-    print(f"Пульс:     {heartbeat_sec} сек  [{heartbeat_from}]")
-    print(f"Длит.:     {duration_desc}")
-    print(f"Вывод:     {out_dir}")
-    print(f"Камеры ({len(opened_vars)}): {', '.join(vn for vn, _ in opened_vars)}")
-    print(f"Обрезка:   {global_crop!r}  [{global_crop_from}]")
+    logger.info(f"Порог:     {threshold}  [{threshold_from}]")
+    logger.info(f"Пульс:     {heartbeat_sec} сек  [{heartbeat_from}]")
+    logger.info(f"Длит.:     {duration_desc}")
+    logger.info(f"Вывод:     {out_dir}")
+    logger.info(f"Камеры ({len(opened_vars)}): {', '.join(vn for vn, _ in opened_vars)}")
+    logger.info(f"Обрезка:   {global_crop!r}  [{global_crop_from}]")
     for vn, _ in opened_vars:
         c = crop_by_cam[vn]
         cr = (f"x,y,w,h={c}" if c is not None else "полный кадр")
-        print(f"  └ {vn}: {cr}")
-    print("Останов: Ctrl+C\n")
+        logger.info(f"  └ {vn}: {cr}")
+    logger.info("Останов: Ctrl+C\n")
 
     t_start = time.monotonic()
 
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
     cpu_active = args.cpu_interval > 0 and cpu_monitor.start(t_start)
     if args.cpu_interval > 0 and not cpu_active:
-        print("  [!] psutil не установлен — мониторинг ЦПУ недоступен (pip install psutil)")
+        logger.info("  [!] psutil не установлен — мониторинг ЦПУ недоступен (pip install psutil)")
 
-    print("Базовый кадр…")
+    logger.info("Базовый кадр…")
     for low_u, var_list in vars_by_low.items():
         reader_bl = readers[low_u]
         frame_l = None
@@ -503,7 +503,7 @@ def main() -> int:
                 break
         if frame_l is None:
             for vn in var_list:
-                print(f"  [!] {vn}: нет годного кадра для baseline", file=sys.stderr)
+                logger.warning(f"  [!] {vn}: нет годного кадра для baseline")
             continue
         for vn in var_list:
             fl = apply_crop_optional(frame_l, crop_by_cam[vn])
@@ -514,8 +514,8 @@ def main() -> int:
             bname = f"{stem}_{_ts(calib0)}_baseline.jpg"
             cv2.imwrite(str(_cam_dir(vn) / bname), fl)
             saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "baseline"])
-            print(f"  {bname}")
-    print()
+            logger.info(f"  {bname}")
+    logger.info('')
 
     _current_date = ts_for_file()[:8]  # YYYYMMDD MSK при старте
 
@@ -537,7 +537,7 @@ def main() -> int:
                     _w.writerow(_hdr)
                     _w.writerows(_log)
                 _log.clear()
-        print(f"  [день] {date_str} → статистика → {day_dir}", flush=True)
+        logger.info(f"  [день] {date_str} → статистика → {day_dir}")
 
     deadline = (time.monotonic() + args.duration) if args.duration > 0 else None
     _last_csv_save = t_start
@@ -545,7 +545,7 @@ def main() -> int:
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
-                print(f"\nДлительность {args.duration:.0f} сек истекла — останов.")
+                logger.info(f"\nДлительность {args.duration:.0f} сек истекла — останов.")
                 break
 
             _today = ts_for_file()[:8]
@@ -577,7 +577,7 @@ def main() -> int:
                 if not _plausible:
                     _low_implausible[low_u] += 1
                     if _low_implausible[low_u] >= _MAX_LOW_IMPLAUSIBLE:
-                        print(f"  [!] {_MAX_LOW_IMPLAUSIBLE} битых кадров — переподключение", file=sys.stderr)
+                        logger.warning(f"  [!] {_MAX_LOW_IMPLAUSIBLE} битых кадров — переподключение")
                         reader.request_reconnect()
                         _low_implausible[low_u] = 0
                         for vn in var_list:
@@ -607,7 +607,7 @@ def main() -> int:
                         cv2.imwrite(str(_cam_dir(vn) / "diff" / fname), frame_u)
                         frame_log[-1][5] = "diff"
                         saves_log.append([round(_now - t_start, 4), _ts_str, vn, "diff"])
-                        print(f"  {fname}  diff={diff:.2f}")
+                        logger.info(f"  {fname}  diff={diff:.2f}")
 
                 for vn in var_list:
                     if heartbeat_sec <= 0:
@@ -625,7 +625,7 @@ def main() -> int:
                     cv2.imwrite(str(_cam_dir(vn) / hb_name), hb)
                     frame_log[-1][5] = "heartbeat"
                     saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "heartbeat"])
-                    print(f"  пульс {hb_name}")
+                    logger.info(f"  пульс {hb_name}")
 
             if args.csv_save_interval > 0:
                 _now = time.monotonic()
@@ -634,8 +634,8 @@ def main() -> int:
                     _last_csv_save = _now
 
     except KeyboardInterrupt:
-        print("\nОстанов по Ctrl+C")
-        print("Сохранение статистики — не нажимайте Ctrl+C повторно…", flush=True)
+        logger.info("\nОстанов по Ctrl+C")
+        logger.info("Сохранение статистики — не нажимайте Ctrl+C повторно…")
     finally:
         for r in readers.values():
             try:
@@ -652,35 +652,35 @@ def main() -> int:
         except KeyboardInterrupt:
             cpu_log = cpu_monitor.snapshot()
 
-        print("\nСохранение результатов…")
+        logger.info("\nСохранение результатов…")
 
         if frame_log:
             with open(out_dir / "frames.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "url_id", "ok", "plausible", "event"])
                 writer.writerows(frame_log)
-            print(f"  frames.csv: {len(frame_log)} строк")
+            logger.info(f"  frames.csv: {len(frame_log)} строк")
 
         if saves_log:
             with open(out_dir / "saves.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "cam", "type"])
                 writer.writerows(saves_log)
-            print(f"  saves.csv:  {len(saves_log)} записей")
+            logger.info(f"  saves.csv:  {len(saves_log)} записей")
 
         if diffs_log:
             with open(out_dir / "diffs.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "cam", "diff"])
                 writer.writerows(diffs_log)
-            print(f"  diffs.csv:  {len(diffs_log)} записей")
+            logger.info(f"  diffs.csv:  {len(diffs_log)} записей")
 
         if pts_log:
             with open(out_dir / "pts.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "url_id", "pts_ms"])
                 writer.writerows(pts_log)
-            print(f"  pts.csv:    {len(pts_log)} записей")
+            logger.info(f"  pts.csv:    {len(pts_log)} записей")
 
         _save_cpu_csv(cpu_log, out_dir)
 
@@ -688,9 +688,6 @@ def main() -> int:
         _save_pts_chart(pts_log, cpu_log, out_dir)
         _save_run_stats(frame_log, pts_log, saves_log, diffs_log, out_dir)
 
-        sys.stdout = _orig_stdout
-        sys.stderr = _orig_stderr
-        _log_file.close()
 
     return 0
 

@@ -44,11 +44,14 @@ if str(_SRC) not in sys.path:
 
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
-    Tee as _Tee,
     save_cpu_csv as _save_cpu_csv,
     draw_cpu_on_ax as _draw_cpu_on_ax,
 )
 from common.utils.time_msk import ts_for_dir
+import logging
+from common.utils.log_setup import setup_logging, add_file_handler
+
+logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
 
@@ -97,22 +100,22 @@ def _load_identifier(model_path: Path | None, config_path: Path):
             cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
             identify_path = cfg.get("models", {}).get("identify")
             if not identify_path:
-                print("  [ML] config.yaml: нет models.identify", file=sys.stderr)
+                logger.warning("  [ML] config.yaml: нет models.identify")
                 return None
             path = Path(identify_path)
         except Exception as e:
-            print(f"  [ML] Ошибка чтения {config_path}: {e}", file=sys.stderr)
+            logger.warning(f"  [ML] Ошибка чтения {config_path}: {e}")
             return None
 
     try:
         from ml.identify import PersonIdentifier
         ident = PersonIdentifier()
         if not ident.load(path):
-            print(f"  [ML] Не удалось загрузить: {path}", file=sys.stderr)
+            logger.warning(f"  [ML] Не удалось загрузить: {path}")
             return None
         return ident
     except Exception as e:
-        print(f"  [ML] Ошибка инициализации PersonIdentifier: {e}", file=sys.stderr)
+        logger.warning(f"  [ML] Ошибка инициализации PersonIdentifier: {e}")
         return None
 
 
@@ -193,7 +196,7 @@ def _save_timeline_chart(id_log: list[dict], out_path: Path) -> None:
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
-    print(f"  timeline_chart.png → {out_path}")
+    logger.info(f"  timeline_chart.png → {out_path}")
 
 
 def _save_cpu_chart(cpu_log: list, out_path: Path,
@@ -233,12 +236,13 @@ def _save_cpu_chart(cpu_log: list, out_path: Path,
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
-    print(f"  cpu_chart.png → {out_path}")
+    logger.info(f"  cpu_chart.png → {out_path}")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    setup_logging()
     parser = argparse.ArgumentParser(
         description="Офлайн идентификация жителей из кропов 6_2 (Модель 2)"
     )
@@ -268,8 +272,7 @@ def main() -> int:
             and not any("conda" in (c or "").lower() for c in (p.info.get("cmdline") or []))
         ]
         if _others:
-            print(f"[!] {_this_name} уже запущен (PID: {_others}). Завершение.",
-                  file=sys.stderr)
+            logger.warning("[!] %s уже запущен (PID: %s). Завершение.", _this_name, _others)
             return 1
     except ImportError:
         pass
@@ -277,48 +280,20 @@ def main() -> int:
     ident = _load_identifier(args.model, args.config)
     if ident is not None:
         status = f"готов, классов: {ident.person_count}" if ident.ready else "не загружен"
-        print(f"  [ML] PersonIdentifier: {status}")
+        logger.info(f"  [ML] PersonIdentifier: {status}")
     else:
-        print(f"  [ML] Идентификатор не загружен — все кропы → {UNKNOWN_CLASS}/")
+        logger.info(f"  [ML] Идентификатор не загружен — все кропы → {UNKNOWN_CLASS}/")
 
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if not args.input_dir.is_dir():
-        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
+        logger.warning(f"[!] Не найдено: {args.input_dir}")
         return 1
     run_pairs = [(args.input_dir, "")]
 
-    _log_raw = open(out_dir / "run.log", "w", encoding="utf-8", errors="replace")
-    _log_fd  = _log_raw.fileno()
-    _log_last_sync = [time.monotonic()]
 
-    class _SyncFile:
-        def write(self, data: str) -> None:
-            _log_raw.write(data)
-            _log_raw.flush()
-            now = time.monotonic()
-            if now - _log_last_sync[0] >= 1.0:
-                try:
-                    os.fsync(_log_fd)
-                except OSError:
-                    pass
-                _log_last_sync[0] = now
-        def flush(self) -> None:
-            _log_raw.flush()
-        def close(self) -> None:
-            _log_raw.flush()
-            try:
-                os.fsync(_log_fd)
-            except OSError:
-                pass
-            _log_raw.close()
-
-    _log_file = _SyncFile()
-    _orig_out = sys.stdout
-    _orig_err = sys.stderr
-    sys.stdout = _Tee(_orig_out, _log_file)
-    sys.stderr = _Tee(_orig_err, _log_file)
+    add_file_handler(out_dir / 'run.log')
 
     t_start     = time.monotonic()
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
@@ -360,15 +335,15 @@ def main() -> int:
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    print(f"ML:        {'PersonIdentifier готов' if ident and ident.ready else 'не загружен (unknown_resident/)'}")
-    print(f"Порог M2:  {args.identify_conf}")
-    print(f"Вывод:     {out_dir}")
-    print(f"Прогонов:  {len(run_pairs)}")
+    logger.info(f"ML:        {'PersonIdentifier готов' if ident and ident.ready else 'не загружен (unknown_resident/)'}")
+    logger.info(f"Порог M2:  {args.identify_conf}")
+    logger.info(f"Вывод:     {out_dir}")
+    logger.info(f"Прогонов:  {len(run_pairs)}")
     for rd, ps in run_pairs:
         prefix = f"{ps}/" if ps else ""
         resident_crops = _find_resident_crops(rd)
-        print(f"  {prefix}{rd.name}  [{len(resident_crops)} кропов-жителей]")
-    print()
+        logger.info(f"  {prefix}{rd.name}  [{len(resident_crops)} кропов-жителей]")
+    logger.info('')
 
     grand_total = 0
     grand_identified = defaultdict(int)
@@ -379,14 +354,14 @@ def main() -> int:
         run_name = run_dir.name
         _ps = parent_stem or run_dir.parent.name
         label = f"{_ps}/{run_name}"
-        print(f"── {label} ──────────────────────────────────────")
+        logger.info(f"── {label} ──────────────────────────────────────")
 
         resident_crops = _find_resident_crops(run_dir)
         if not resident_crops:
-            print(f"  [!] Нет кропов жителей в {run_dir}")
+            logger.info(f"  [!] Нет кропов жителей в {run_dir}")
             continue
 
-        print(f"  Кропов жителей: {len(resident_crops)}")
+        logger.info(f"  Кропов жителей: {len(resident_crops)}")
 
         for crop_path, rel_cam in resident_crops:
             bgr = cv2.imread(str(crop_path))
@@ -417,8 +392,8 @@ def main() -> int:
             grand_identified[out_class] += 1
             grand_total += 1
 
-        print(f"  → обработано: {len(resident_crops)}")
-        print()
+        logger.info(f"  → обработано: {len(resident_crops)}")
+        logger.info('')
 
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
@@ -432,9 +407,9 @@ def main() -> int:
             ])
             w.writeheader()
             w.writerows(id_log)
-        print(f"identifications.csv: {len(id_log)} записей → {csv_path}")
+        logger.info(f"identifications.csv: {len(id_log)} записей → {csv_path}")
     else:
-        print("Идентификаций не найдено.")
+        logger.info("Идентификаций не найдено.")
 
     _save_cpu_csv(cpu_log, out_dir)
 
@@ -458,14 +433,11 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    sys.stdout = _orig_out
-    sys.stderr = _orig_err
-    _log_file.close()
 
-    print(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
     summary = "  ".join(f"{p}: {n}" for p, n in sorted(grand_identified.items()))
     if summary:
-        print(f"Итог: {summary}")
+        logger.info(f"Итог: {summary}")
     return 0
 
 

@@ -48,13 +48,16 @@ if str(_SRC) not in sys.path:
 
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
-    Tee as _Tee,
     draw_cpu_on_ax as _draw_cpu_on_ax,
     parse_img_filename as _parse_img_filename,
     save_cpu_csv as _save_cpu_csv,
 )
 from common.utils.adaptive_rate import AdaptiveRateLimiter
 from common.utils.time_msk import ts_for_dir
+import logging
+from common.utils.log_setup import setup_logging, add_file_handler
+
+logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
 
@@ -83,14 +86,13 @@ def _load_model(model_path: Path):
     try:
         import onnxruntime as ort
     except ImportError:
-        print("Нужен onnxruntime: pip install onnxruntime", file=sys.stderr)
+        logger.warning("Нужен onnxruntime: pip install onnxruntime")
         return None
     if not model_path.is_file():
-        print(
-            f"Модель не найдена: {model_path}\n"
-            f"  Скачать: wget -P models/ "
-            f"https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx",
-            file=sys.stderr,
+        logger.warning(
+            "Модель не найдена: %s\n  Скачать: wget -P models/ "
+            "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.onnx",
+            model_path,
         )
         return None
     return ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
@@ -242,7 +244,7 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
         import numpy as _np
         import matplotlib.lines as _mlines
     except ImportError:
-        print("  [!] matplotlib не найден — график не сохранён")
+        logger.info("  [!] matplotlib не найден — график не сохранён")
         return
     if not run_data:
         return
@@ -347,7 +349,7 @@ def _save_combined_chart(run_data: list[dict], out_path: Path) -> None:
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
-    print(f"  timeline_chart.png → {out_path}")
+    logger.info(f"  timeline_chart.png → {out_path}")
 
 
 def _save_cpu_chart(cpu_log: list, out_path: Path,
@@ -401,12 +403,13 @@ def _save_cpu_chart(cpu_log: list, out_path: Path,
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
-    print(f"  cpu_chart.png → {out_path}")
+    logger.info(f"  cpu_chart.png → {out_path}")
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    setup_logging()
     parser = argparse.ArgumentParser(
         description="YOLO re-detection on saved camera run images"
     )
@@ -445,8 +448,7 @@ def main() -> int:
             and not any("conda" in (c or "").lower() for c in (p.info.get("cmdline") or []))
         ]
         if _others:
-            print(f"[!] {_this_name} уже запущен (PID: {_others}). Завершение.",
-                  file=sys.stderr)
+            logger.warning("[!] %s уже запущен (PID: %s). Завершение.", _this_name, _others)
             return 1
     except ImportError:
         pass  # psutil not available — skip check
@@ -495,44 +497,15 @@ def main() -> int:
     )
 
     if not args.input_dir.is_dir():
-        print(f"[!] Не найдено: {args.input_dir}", file=sys.stderr)
+        logger.warning(f"[!] Не найдено: {args.input_dir}")
         return 1
     run_pairs = [(args.input_dir, "")]
 
     out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    _log_raw    = open(out_dir / "run.log", "w", encoding="utf-8", errors="replace")
-    _log_fd     = _log_raw.fileno()
-    _log_last_sync = [time.monotonic()]
 
-    class _SyncFile:
-        """Wraps a text file: flush + periodic os.fsync so viewers see updates promptly."""
-        def write(self, data: str) -> None:
-            _log_raw.write(data)
-            _log_raw.flush()
-            now = time.monotonic()
-            if now - _log_last_sync[0] >= 1.0:
-                try:
-                    os.fsync(_log_fd)
-                except OSError:
-                    pass
-                _log_last_sync[0] = now
-        def flush(self) -> None:
-            _log_raw.flush()
-        def close(self) -> None:
-            _log_raw.flush()
-            try:
-                os.fsync(_log_fd)
-            except OSError:
-                pass
-            _log_raw.close()
-
-    _log_file   = _SyncFile()
-    _orig_out   = sys.stdout
-    _orig_err   = sys.stderr
-    sys.stdout  = _Tee(_orig_out, _log_file)
-    sys.stderr  = _Tee(_orig_err, _log_file)
+    add_file_handler(out_dir / 'run.log')
 
     t_start     = time.monotonic()
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
@@ -585,22 +558,22 @@ def main() -> int:
 
     yolo_rate = (f"≤{args.yolo_max_fps} fps (интервал {_yolo_limiter.interval:.2f}s)"
                  if _yolo_limiter.interval > 0 else "без ограничений")
-    print(f"Модель:       {args.model}")
-    print(f"Conf / NMS:   {args.conf} / {args.nms}")
-    print(f"YOLO rate:    {yolo_rate}  min={_yolo_min_fps} fps")
-    print(f"Адаптация:    window={_ADAPT_WINDOW}  high={_ADAPT_HIGH}  low={_ADAPT_LOW}  factor=×{_ADAPT_FACTOR}")
-    print(f"Вывод:        {out_dir}")
-    print(f"Прогонов:     {len(run_pairs)}")
+    logger.info(f"Модель:       {args.model}")
+    logger.info(f"Conf / NMS:   {args.conf} / {args.nms}")
+    logger.info(f"YOLO rate:    {yolo_rate}  min={_yolo_min_fps} fps")
+    logger.info(f"Адаптация:    window={_ADAPT_WINDOW}  high={_ADAPT_HIGH}  low={_ADAPT_LOW}  factor=×{_ADAPT_FACTOR}")
+    logger.info(f"Вывод:        {out_dir}")
+    logger.info(f"Прогонов:     {len(run_pairs)}")
     for rd, parent_stem in run_pairs:
         prefix = f"{parent_stem}/" if parent_stem else ""
         _imgs_by_cam = _find_images(rd)
         if _imgs_by_cam:
             _total = sum(len(v) for v in _imgs_by_cam.values())
             _cam_counts = ", ".join(f"{c}: {len(v)}" for c, v in _imgs_by_cam.items())
-            print(f"  {prefix}{rd.name}  [{_cam_counts}  →  {_total} всего]")
+            logger.info(f"  {prefix}{rd.name}  [{_cam_counts}  →  {_total} всего]")
         else:
-            print(f"  {prefix}{rd.name}  [нет diff-изображений]")
-    print()
+            logger.info(f"  {prefix}{rd.name}  [нет diff-изображений]")
+    logger.info('')
 
     all_detections:       list[list] = []
     run_data:             list[dict] = []
@@ -612,7 +585,7 @@ def main() -> int:
         run_name = run_dir.name
         _ps = parent_stem or run_dir.parent.name
         label    = f"{_ps}/{run_name}"
-        print(f"── {label} ──────────────────────────────────────")
+        logger.info(f"── {label} ──────────────────────────────────────")
 
         # Output goes into parent_stem subdir if the source had one.
         # Created lazily — only when the first detection is actually written.
@@ -670,7 +643,7 @@ def main() -> int:
 
         images_by_cam = _find_images(run_dir)
         if not images_by_cam:
-            print(f"  [!] Нет изображений в {run_dir}")
+            logger.info(f"  [!] Нет изображений в {run_dir}")
             continue
 
         yolo_new: list[list] = []  # [cam_stem, img_stem, n_people, mono_approx]
@@ -681,7 +654,7 @@ def main() -> int:
             cam_out   = run_out / cam_stem
             crops_dir = cam_out / "crops"
 
-            print(f"  {cam_stem}: {len(img_paths)} изображений")
+            logger.info(f"  {cam_stem}: {len(img_paths)} изображений")
             for img_idx, img_path in enumerate(img_paths, 1):
                 n_total += 1
                 frame = cv2.imread(str(img_path))
@@ -700,7 +673,7 @@ def main() -> int:
                                     round(_inference_ms, 1), round(_slept_ms, 1)])
                 _msg = _yolo_limiter.adapt(_inference_ms, _slept_ms)
                 if _msg:
-                    print(_msg)
+                    logger.info(_msg)
 
                 if not detections:
                     continue
@@ -738,14 +711,14 @@ def main() -> int:
                         img_path.stem, run_name, cam_stem, img_path.name,
                         x1, y1, x2, y2, round(conf, 4),
                     ])
-                print(f"    [{img_idx}/{len(img_paths)}] {img_path.name}  →  {len(detections)} чел.")
+                logger.info(f"    [{img_idx}/{len(img_paths)}] {img_path.name}  →  {len(detections)} чел.")
 
         grand_total_checked  += n_total
         grand_total_detected += n_detected
-        print(f"  Итого: {n_detected} с людьми / {n_total} проверено")
+        logger.info(f"  Итого: {n_detected} с людьми / {n_total} проверено")
         if n_detected == 0:
-            print("  (нет детекций YOLO)")
-        print()
+            logger.info("  (нет детекций YOLO)")
+        logger.info('')
 
         run_data.append({
             "label":        label,
@@ -780,9 +753,9 @@ def main() -> int:
             w = csv.writer(f)
             w.writerow(["image_ts", "run_name", "cam", "filename", "x1", "y1", "x2", "y2", "conf"])
             w.writerows(all_detections)
-        print(f"detections.csv: {len(all_detections)} записей → {det_path}")
+        logger.info(f"detections.csv: {len(all_detections)} записей → {det_path}")
     else:
-        print("Детекций не найдено.")
+        logger.info("Детекций не найдено.")
 
     _save_cpu_csv(cpu_log, out_dir)
 
@@ -812,10 +785,7 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    sys.stdout = _orig_out
-    sys.stderr = _orig_err
-    _log_file.close()
-    print(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
     return 0
 
 
