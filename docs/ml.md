@@ -155,8 +155,9 @@ for r in results:
    → пустые подкаталоги Src удаляются автоматически
 
 4. Разметить:
-   .\sh\train\2_label_ui.ps1
-   Открывает http://127.0.0.1:5050 — веб-разметчик с галереей
+   .\sh\train\2_label_ui.ps1          # Windows
+   ./sh/train/2_label_ui.sh           # Linux (сервер)
+   Порт — `LABEL_UI_PORT` в `.env` (по умолчанию 5050). На сервере обычно 87xx.
 
 5. Применить разметку в датасет:
    .\sh\train\1_dataset_groups.ps1 apply -Move
@@ -178,7 +179,8 @@ for r in results:
 | Скрипт | Назначение |
 |--------|-----------|
 | `sh/train/1_dataset_groups.ps1` | Управление датасетом: `build / apply / check / add / status` |
-| `sh/train/2_label_ui.ps1` | Запуск веб-разметчика кропов |
+| `sh/train/2_label_ui.ps1` | Запуск веб-разметчика кропов (Windows) |
+| `sh/train/2_label_ui.sh` | То же на Linux-сервере |
 | `sh/train/3_train_groups.ps1` | Обучение Модели 1 |
 | `sh/train/5_train_residents.ps1` | Обучение Модели 2 |
 
@@ -187,15 +189,28 @@ for r in results:
 ## Веб-разметчик (2_label_ui)
 
 ```powershell
+# Windows
 .\sh\train\2_label_ui.ps1
 .\sh\train\2_label_ui.ps1 -InputDir ".output\pipeline\2_yolo_boxes_files\run_XXX"
 .\sh\train\2_label_ui.ps1 -UnlabeledOnly $true   # только неразмеченные
 ```
 
-Открывает три URL:
-- `http://127.0.0.1:5050` — разметчик (одиночный кроп + кнопки)
-- `http://127.0.0.1:5050/gallery` — галерея сессии (все кропы, сгруппированы по метке)
-- `http://127.0.0.1:5050/gallery/dataset` — галерея датасета (файлы из папок датасета, перемещение между классами)
+```bash
+# Linux (сервер)
+./sh/train/2_label_ui.sh
+./sh/train/2_label_ui.sh --input .output/pipeline/2_yolo_boxes_files/run_XXX
+./sh/train/2_label_ui.sh --port 8789   # переопределяет LABEL_UI_PORT
+```
+
+**Порт:** `LABEL_UI_PORT` в `.env` (дефолт в коде — `5050`; на публичном сервере задайте фиксированный порт из диапазона `87**`, напр. `8789`).
+
+**Доступ с сервера:** процесс слушает `0.0.0.0`. Если задан `ALLOWED_IPS` — те же правила, что у Transfer (отдельные IP и CIDR; localhost всегда разрешён). Без `ALLOWED_IPS` — предупреждение при старте, открыт для всех.
+
+Открывает три URL (подставьте хост и порт; локально — `127.0.0.1`, с домашней машины — `<публичный-IP-сервера>`):
+
+- `http://<host>:<port>/` — разметчик (одиночный кроп + кнопки)
+- `http://<host>:<port>/gallery` — галерея сессии (все кропы, сгруппированы по метке)
+- `http://<host>:<port>/gallery/dataset` — галерея датасета (файлы из папок датасета, перемещение между классами)
 
 **Горячие клавиши:**
 

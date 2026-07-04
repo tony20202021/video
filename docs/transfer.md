@@ -94,7 +94,18 @@ uvicorn scripts.transfer.server:app --host 0.0.0.0 --port 8765
 | `POST` | `/pipeline/{step}` | Принять tar.gz run_* (устаревший) |
 | `GET`  | `/runs` | Список всех принятых прогонов |
 
-**Аутентификация:** заголовок `X-Api-Key`. Если `TRANSFER_API_KEY` не задан — сервер открыт.
+**Доступ:** два слоя — IP-фильтр (`ALLOWED_IPS`) и API-ключ (`X-Api-Key`).
+
+| Слой | Переменная | Если не задана |
+|------|------------|----------------|
+| IP | `ALLOWED_IPS` | любой IP (предупреждение при старте) |
+| Ключ | `TRANSFER_API_KEY` | любой запрос без ключа |
+
+Сервер слушает `0.0.0.0`, но запросы с IP вне whitelist получают **403 Forbidden** до проверки ключа.
+`127.0.0.1` / `::1` разрешены всегда (health с самого сервера).
+
+Если ключ **верный**, но IP не в списке — в терминале и логе появится подсказка с `/24`-подсетью
+(типичная смена домашнего IP провайдера). Обновите `ALLOWED_IPS` в `.env` и перезапустите сервер.
 
 ### POST /file — заголовки
 
@@ -135,6 +146,10 @@ TRANSFER_SERVER=http://<server-ip>:8765
 TRANSFER_API_KEY=mysecretkey
 TRANSFER_HOST=0.0.0.0
 TRANSFER_PORT=8765
+
+# IP-доступ к Transfer и Label UI (сервер). Через запятую: один IP или CIDR.
+# Пример: домашняя подсеть провайдера — переживает смену последнего октета.
+ALLOWED_IPS=109.252.161.0/24
 
 # Параметры режима watch
 TRANSFER_POLL_SEC=1.0        # интервал проверки новых файлов, сек
@@ -179,5 +194,5 @@ TRANSFER_ADAPT_FACTOR=2.0    # коэффициент изменения ско�
 ## Тесты
 
 ```bash
-pytest tests/test_transfer.py tests/test_adaptive_rate.py -v
+pytest tests/test_access.py tests/test_transfer.py tests/test_adaptive_rate.py -v
 ```
