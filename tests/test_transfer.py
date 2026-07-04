@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def app_client(output_dir: Path, monkeypatch):
 @pytest.fixture()
 def run_dir(tmp_path: Path) -> Path:
     """Минимальный run_*-каталог для тестов."""
-    step_dir = tmp_path / "1_motion_diff"
+    step_dir = tmp_path / "pipeline" / "1_motion_diff"
     run = step_dir / "run_20260101_120000_msk"
     (run / "images").mkdir(parents=True)
     (run / "frames.csv").write_text("ts,path\n0,img.jpg\n", encoding="utf-8")
@@ -152,14 +153,17 @@ def test_path_traversal_rejected(app_client, tmp_path):
 
 # ─── Server: POST /file ──────────────────────────────────────────────────────
 
-def _file_headers(rel_path: str, key: str = "testkey") -> dict:
-    return {
+def _file_headers(rel_path: str, key: str = "testkey", **extra: str) -> dict:
+    headers = {
         "X-Api-Key": key,
+        "X-Parent": "pipeline",
         "X-Step": "1_motion_diff",
         "X-Run": "run_20260101_120000_msk",
         "X-Rel-Path": rel_path,
         "Content-Type": "application/octet-stream",
     }
+    headers.update(extra)
+    return headers
 
 
 def test_receive_file_ok(app_client, output_dir):
@@ -171,6 +175,42 @@ def test_receive_file_ok(app_client, output_dir):
     dest = output_dir / "1_motion_diff" / "run_20260101_120000_msk" / "images" / "20260101" / "cam" / "diff" / "frame.jpg"
     assert dest.is_file()
     assert dest.read_bytes() == data
+    meta = output_dir / "meta" / "_legacy" / "1_motion_diff" / "run_20260101_120000_msk" / "frame.json"
+    assert meta.is_file()
+    meta_body = json.loads(meta.read_text(encoding="utf-8"))
+    assert meta_body["parent"] == "pipeline"
+    assert meta_body["step"] == "1_motion_diff"
+    assert meta_body["received_at"].endswith("+03:00")
+
+
+def test_receive_file_diff_with_meta_sidecar(app_client, output_dir):
+    fname = "cam_01_9_d_20260704_140301_456789_msk_diff11.0.jpg"
+    data = b"\xff\xd8\xff" + b"\x00" * 20
+    headers = _file_headers(
+        f"run_20260704_002002_msk/images/20260704/cam_01_9_d/diff/{fname}",
+        **{
+            "X-Cam": "cam_01_9_d",
+            "X-Date": "20260704",
+            "X-Time": "140301_456789",
+            "X-Type": "diff",
+        },
+    )
+    r = app_client.post("/file", content=data, headers=headers)
+    assert r.status_code == 200
+
+    img = output_dir / "diff" / "20260704" / "cam_01_9_d" / fname
+    meta = output_dir / "meta" / "20260704" / "cam_01_9_d" / "cam_01_9_d_20260704_140301_456789_msk_diff11.0.json"
+    assert img.is_file()
+    assert img.read_bytes() == data
+    assert meta.is_file()
+
+    meta_body = json.loads(meta.read_text(encoding="utf-8"))
+    assert meta_body["parent"] == "pipeline"
+    assert meta_body["run"] == "run_20260101_120000_msk"
+    assert meta_body["timezone"] == "Europe/Moscow"
+    assert meta_body["captured_at"] == "2026-07-04T14:03:01.456789+03:00"
+    assert meta_body["received_at"].endswith("+03:00")
+    assert meta_body["size_bytes"] == len(data)
 
 
 def test_receive_file_wrong_key(app_client):
@@ -245,9 +285,32 @@ def test_receive_file_preserves_subdir_structure(app_client, output_dir):
     assert dest.is_file()
 
 
-# ─── Client: step detection ───────────────────────────────────────────────────
+# ─── Client: routing ──────────────────────────────────────────────────────────
 
 def test_step_inferred_from_parent(run_dir):
     """Шаг определяется из имени родительского каталога run_*."""
     step = run_dir.parent.name
     assert step == "1_motion_diff"
+
+
+def test_resolve_routing_from_images_dir(run_dir):
+    from scripts.transfer.client import _resolve_routing
+
+    images = run_dir / "images"
+    f = images / "20260704" / "cam_01_9_d" / "diff" / "cam_01_9_d_20260704_120000_000000_msk_diff1.0.jpg"
+    routing = _resolve_routing(f, watch_dir=images)
+    assert routing["parent"] == "pipeline"
+    assert routing["step"] == "1_motion_diff"
+    assert routing["run"] == run_dir.name
+
+
+def test_resolve_routing_from_step_dir(run_dir):
+    from scripts.transfer.client import _resolve_routing
+
+    step_dir = run_dir.parent
+    f = run_dir / "images" / "20260704" / "cam_01_9_d" / "diff" / "file.jpg"
+    routing = _resolve_routing(f, watch_dir=step_dir)
+    assert routing["parent"] == "pipeline"
+    assert routing["step"] == "1_motion_diff"
+    assert routing["run"] == run_dir.name
+    assert routing["rel_path"].startswith(run_dir.name)

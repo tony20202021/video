@@ -1,14 +1,14 @@
 # 2_send.ps1 — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
 #
 # Usage:
+#   .\sh\transfer\2_send.ps1
+#   .\sh\transfer\2_send.ps1 -WatchDir .output\pipeline\1_motion_diff\
 #   .\sh\transfer\2_send.ps1 -WatchDir .output\pipeline\1_motion_diff\run_XXX\images
 #   .\sh\transfer\2_send.ps1 -WatchDir <path> -Server http://1.2.3.4:8765 -Key SECRET
-#   .\sh\transfer\2_send.ps1 -WatchDir <path> -Ext "jpg,png"
 #
-# Параметры (RunRoot, Step, Run) по умолчанию выводятся из пути:
-#   WatchDir → RunRoot = parent(WatchDir) = run_XXX
-#   Step = parent(RunRoot) = 1_motion_diff
-#   Run  = RunRoot.Name   = run_XXX
+# Маршрутизация (client.py, per-file):
+#   WatchDir = 1_motion_diff/  → parent=pipeline, step=1_motion_diff, run из пути файла
+#   WatchDir = run_XXX/images   → parent=pipeline, step=1_motion_diff, run=run_XXX
 #
 # Настройки адаптивной скорости берутся из .env:
 #   TRANSFER_POLL_SEC, TRANSFER_MAX_RATE, TRANSFER_MIN_RATE,
@@ -16,7 +16,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string] $WatchDir = "E:\_Home\Tony\pet projects\video\.output\pipeline\1_motion_diff\run_20260704_002002_msk",
+    [string] $WatchDir = "E:\_Home\Tony\pet projects\video\.output\pipeline\1_motion_diff\",
     [string] $RunRoot   = "",   # default: parent of WatchDir
     [string] $Step      = "",   # default: parent of RunRoot
     [string] $Run       = "",   # default: RunRoot.Name

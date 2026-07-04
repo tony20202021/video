@@ -12,10 +12,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import tarfile
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +29,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 
 from common.utils.access import is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
+from common.utils.time_msk import MSK, ts_iso
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +125,79 @@ def _validate_path_component(value: str, name: str) -> None:
         raise HTTPException(400, f"Invalid header {name}: {value!r}")
 
 
+def _captured_at_iso(date: str, time_str: str) -> str | None:
+    """Собрать ISO 8601 из date=YYYYMMDD и time=HHMMSS[_ffffff] (MSK)."""
+    if not date or len(date) != 8 or not date.isdigit():
+        return None
+    if not time_str:
+        return None
+    parts = time_str.split("_")
+    hms = parts[0]
+    micro = parts[1] if len(parts) > 1 else "000000"
+    if len(hms) != 6 or not hms.isdigit():
+        return None
+    try:
+        dt = datetime(
+            int(date[:4]), int(date[4:6]), int(date[6:8]),
+            int(hms[:2]), int(hms[2:4]), int(hms[4:6]),
+            int(micro[:6].ljust(6, "0")[:6]),
+            tzinfo=MSK,
+        )
+        return dt.isoformat()
+    except ValueError:
+        return None
+
+
+def _write_meta_sidecar(
+    dest_file: Path,
+    *,
+    parent: str,
+    step: str,
+    run: str,
+    rel_path: str,
+    cam: str,
+    date: str,
+    time_str: str,
+    img_type: str,
+    size_bytes: int,
+    meta_layout: str,
+) -> Path:
+    """Записать sidecar JSON рядом с diff/service или в legacy-ветке meta/."""
+    captured_at = _captured_at_iso(date, time_str)
+    payload = {
+        "parent": parent,
+        "step": step,
+        "run": run,
+        "cam": cam,
+        "date": date,
+        "time": time_str,
+        "timezone": "Europe/Moscow",
+        "captured_at": captured_at,
+        "type": img_type,
+        "rel_path": rel_path,
+        "received_at": ts_iso(),
+        "size_bytes": size_bytes,
+        "dest_image": str(dest_file),
+    }
+
+    stem = dest_file.stem
+    if meta_layout == "dated":
+        meta_file = (OUTPUT_DIR / "meta" / date / cam / f"{stem}.json").resolve()
+    else:
+        meta_file = (
+            OUTPUT_DIR / "meta" / "_legacy" / step / run / f"{stem}.json"
+        ).resolve()
+
+    meta_file.parent.mkdir(parents=True, exist_ok=True)
+    meta_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return meta_file
+
+
 @app.post("/file")
 async def receive_file(
     request: Request,
     x_api_key: str = Header(default=""),
+    x_parent: str = Header(default=""),
     x_step: str = Header(default=""),
     x_run: str = Header(default=""),
     x_rel_path: str = Header(default=""),
@@ -139,12 +211,14 @@ async def receive_file(
     Если переданы X-Cam / X-Date / X-Type — раскладывает по структуре:
       diff/YYYYMMDD/<cam>/   — тип diff
       service/YYYYMMDD/<cam>/ — baseline, heartbeat и прочие
+      meta/YYYYMMDD/<cam>/ — sidecar JSON с parent/step/run и временами
 
-    Иначе (legacy) — OUTPUT_DIR/{step}/{run}/{rel_path}.
+    Иначе (legacy) — OUTPUT_DIR/{step}/{run}/{rel_path} + meta/_legacy/{step}/{run}/.
     """
     _check_key(x_api_key)
 
     filename = Path(x_rel_path).name if x_rel_path else ""
+    meta_layout = "legacy"
 
     if x_cam and x_date and filename:
         _validate_path_component(x_cam, "X-Cam")
@@ -160,6 +234,7 @@ async def receive_file(
         except ValueError:
             raise HTTPException(400, "Path traversal detected")
         log_tag = f"{subdir}/{x_date}/{x_cam}/{filename}"
+        meta_layout = "dated"
     else:
         if not x_step or not x_run or not x_rel_path:
             raise HTTPException(400, "X-Cam+X-Date or X-Step+X-Run+X-Rel-Path headers required")
@@ -175,13 +250,28 @@ async def receive_file(
 
     dest_file.parent.mkdir(parents=True, exist_ok=True)
 
+    size = 0
     with open(dest_file, "wb") as fh:
         async for chunk in request.stream():
             fh.write(chunk)
+            size += len(chunk)
 
-    size = dest_file.stat().st_size
-    logger.info("[recv] %s  (%.1f КБ)", log_tag, size / 1024)
-    return JSONResponse({"ok": True, "dest": str(dest_file)})
+    meta_file = _write_meta_sidecar(
+        dest_file,
+        parent=x_parent,
+        step=x_step,
+        run=x_run,
+        rel_path=x_rel_path,
+        cam=x_cam,
+        date=x_date,
+        time_str=x_time,
+        img_type=x_type,
+        size_bytes=size,
+        meta_layout=meta_layout,
+    )
+
+    logger.info("[recv] %s  (%.1f КБ)  meta=%s", log_tag, size / 1024, meta_file.name)
+    return JSONResponse({"ok": True, "dest": str(dest_file), "meta": str(meta_file)})
 
 
 @app.get("/runs")

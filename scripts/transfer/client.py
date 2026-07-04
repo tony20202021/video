@@ -79,6 +79,73 @@ def _make_limiter(env: dict[str, str]) -> AdaptiveRateLimiter:
     )
 
 
+def _find_run_name(parts: tuple[str, ...]) -> str:
+    for p in parts:
+        if p.startswith("run_"):
+            return p
+    return ""
+
+
+def _resolve_routing(
+    file_path: Path,
+    *,
+    watch_dir: Path | None = None,
+    run_root: Path | None = None,
+    parent: str = "",
+    step: str = "",
+    run: str = "",
+) -> dict[str, str]:
+    """parent/step/run/rel_path для одного файла.
+
+    WatchDir = .../run_XXX/images  → run фиксирован из каталога.
+    WatchDir = .../1_motion_diff/  → run из сегмента run_* в пути файла.
+    """
+    file_path = file_path.resolve()
+
+    if watch_dir is not None:
+        watch_dir = watch_dir.resolve()
+        if watch_dir.name == "images":
+            run_dir = watch_dir.parent
+            step_dir = run_dir.parent
+            resolved_parent = parent or step_dir.parent.name
+            resolved_step = step or step_dir.name
+            resolved_run = run or run_dir.name
+            rel_base = watch_dir
+        else:
+            resolved_parent = parent or watch_dir.parent.name
+            resolved_step = step or watch_dir.name
+            rel_parts = (
+                file_path.relative_to(watch_dir).parts
+                if file_path.is_relative_to(watch_dir)
+                else ()
+            )
+            resolved_run = run or _find_run_name(rel_parts)
+            rel_base = watch_dir
+    elif run_root is not None:
+        run_root = run_root.resolve()
+        resolved_parent = parent or run_root.parent.parent.name
+        resolved_step = step or run_root.parent.name
+        resolved_run = run or run_root.name
+        rel_base = run_root
+    else:
+        resolved_parent = parent
+        resolved_step = step
+        resolved_run = run
+        rel_base = file_path.parent
+
+    try:
+        rel_path = file_path.relative_to(rel_base).as_posix()
+    except ValueError:
+        rel_path = file_path.name
+
+    return {
+        "parent": resolved_parent,
+        "step": resolved_step,
+        "run": resolved_run,
+        "rel_path": rel_path,
+    }
+
+
 def _parse_img_meta(f: Path) -> dict[str, str]:
     """Parse cam, date, time, type from image filename.
 
@@ -113,23 +180,36 @@ def _parse_img_meta(f: Path) -> dict[str, str]:
     return {"cam": cam, "date": date, "time": time_str, "type": img_type}
 
 
-def _send_file(http, server: str, headers: dict, f: Path, run_root: Path) -> tuple[bool, float]:
+def _file_headers(base: dict[str, str], f: Path, routing: dict[str, str]) -> dict[str, str]:
+    meta = _parse_img_meta(f)
+    return {
+        **base,
+        "X-Parent": routing["parent"],
+        "X-Step": routing["step"],
+        "X-Run": routing["run"],
+        "X-Rel-Path": routing["rel_path"],
+        "X-Cam": meta["cam"],
+        "X-Date": meta["date"],
+        "X-Time": meta["time"],
+        "X-Type": meta["type"],
+    }
+
+
+def _send_file(
+    http,
+    server: str,
+    base_headers: dict[str, str],
+    f: Path,
+    routing: dict[str, str],
+) -> tuple[bool, float]:
     """Отправить один файл. Возвращает (ok, work_ms)."""
-    try:
-        rel = f.relative_to(run_root).as_posix()
-    except ValueError:
-        rel = f.name
+    rel = routing["rel_path"]
     t0 = time.monotonic()
     try:
         data = f.read_bytes()
         if not data:
             return True, 0.0
-        meta = _parse_img_meta(f)
-        headers["X-Rel-Path"] = rel
-        headers["X-Cam"]  = meta["cam"]
-        headers["X-Date"] = meta["date"]
-        headers["X-Time"] = meta["time"]
-        headers["X-Type"] = meta["type"]
+        headers = _file_headers(base_headers, f, routing)
         resp = http.post(f"{server}/file", content=data, headers=headers)
         resp.raise_for_status()
         ok = resp.json().get("ok", False)
@@ -152,6 +232,7 @@ def cmd_send(args) -> int:
 
     step   = src.parent.name
     run    = src.name
+    parent = src.parent.parent.name
     server, key = _get_server_and_key(args)
     env    = _load_env()
 
@@ -162,11 +243,10 @@ def cmd_send(args) -> int:
         print(f"  Нет файлов с расширениями {exts} в {src}")
         return 0
 
-    headers = {"X-Api-Key": key, "X-Step": step, "X-Run": run,
-               "Content-Type": "application/octet-stream"}
+    base_headers = {"X-Api-Key": key, "Content-Type": "application/octet-stream"}
 
     print(f"  Источник: {src}")
-    print(f"  Шаг:     {step}  Прогон: {run}")
+    print(f"  Parent:  {parent}  Шаг: {step}  Прогон: {run}")
     print(f"  Сервер:  {server}")
     print(f"  Файлов:  {len(files)}")
     print()
@@ -176,9 +256,10 @@ def cmd_send(args) -> int:
 
     with httpx.Client(timeout=60.0) as http:
         for i, f in enumerate(files, 1):
-            rel = f.relative_to(src).as_posix()
+            routing = _resolve_routing(f, run_root=src, parent=parent, step=step, run=run)
+            rel = routing["rel_path"]
             t0 = time.monotonic()
-            ok, work_ms = _send_file(http, server, headers, f, src)
+            ok, work_ms = _send_file(http, server, base_headers, f, routing)
             if ok:
                 n_ok += 1
                 print(f"  [{i}/{len(files)}] ↑ {rel}  ({work_ms:.0f}мс)")
@@ -198,9 +279,6 @@ def cmd_watch(args) -> int:
     import httpx
 
     watch_dir = Path(args.watch_dir).resolve()
-    run_root  = Path(args.run_root).resolve() if args.run_root else watch_dir.parent
-    step      = args.step or run_root.parent.name
-    run       = args.run  or run_root.name
     server, key = _get_server_and_key(args)
 
     env     = _load_env()
@@ -215,12 +293,20 @@ def cmd_watch(args) -> int:
 
     poll_sec = _ef("TRANSFER_POLL_SEC", 1.0)
     exts     = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
-    headers  = {"X-Api-Key": key, "X-Step": step, "X-Run": run,
-                "Content-Type": "application/octet-stream"}
+    base_headers = {"X-Api-Key": key, "Content-Type": "application/octet-stream"}
+
+    if watch_dir.name == "images":
+        run_hint = watch_dir.parent.name
+        scope_parent = watch_dir.parent.parent.parent.name
+        scope_step = watch_dir.parent.parent.name
+    else:
+        run_hint = "(из пути каждого файла)"
+        scope_parent = args.parent or watch_dir.parent.name
+        scope_step = args.step or watch_dir.name
 
     print("=== transfer watch ===")
     print(f"  Каталог: {watch_dir}")
-    print(f"  Шаг:     {step}  Прогон: {run}")
+    print(f"  Parent:  {scope_parent}  Шаг: {scope_step}  Run: {run_hint}")
     print(f"  Сервер:  {server}")
     print(f"  Расш.:   {', '.join(sorted(exts))}")
     _max_r = f"{1/limiter.min_interval:.1f}" if limiter.min_interval > 0 else "∞"
@@ -248,13 +334,6 @@ def cmd_watch(args) -> int:
                 time.sleep(poll_sec)
                 continue
 
-            # date dirs present in watch_dir right now (YYYYMMDD subdirs)
-            _date_dirs = sorted(
-                d.name for d in watch_dir.iterdir()
-                if d.is_dir() and d.name.isdigit() and len(d.name) == 8
-            ) if watch_dir.is_dir() else []
-            _n_dates = len(_date_dirs)
-
             if new_files:
                 print(f"  новый батч: {len(new_files)} файлов")
 
@@ -263,21 +342,26 @@ def cmd_watch(args) -> int:
                 if now < _retry_after.get(f, 0):
                     continue  # backoff not expired yet
 
-                rel = f.relative_to(run_root).as_posix() if f.is_relative_to(run_root) else f.name
+                routing = _resolve_routing(
+                    f,
+                    watch_dir=watch_dir,
+                    parent=args.parent,
+                    step=args.step,
+                    run=args.run,
+                )
+                rel = routing["rel_path"]
                 _rel_parts = f.relative_to(watch_dir).parts if f.is_relative_to(watch_dir) else ()
-                _date_part = _rel_parts[0] if len(_rel_parts) > 1 and _rel_parts[0] in _date_dirs else ""
+                _date_part = next(
+                    (p for p in _rel_parts if len(p) == 8 and p.isdigit()),
+                    "",
+                )
 
                 t0 = time.monotonic()
                 try:
                     data = f.read_bytes()
                     if not data:
                         continue
-                    _meta = _parse_img_meta(f)
-                    headers["X-Rel-Path"] = rel
-                    headers["X-Cam"]  = _meta["cam"]
-                    headers["X-Date"] = _meta["date"]
-                    headers["X-Time"] = _meta["time"]
-                    headers["X-Type"] = _meta["type"]
+                    headers = _file_headers(base_headers, f, routing)
                     resp = http.post(f"{server}/file", content=data, headers=headers)
                     resp.raise_for_status()
                     result = resp.json()
@@ -287,10 +371,11 @@ def cmd_watch(args) -> int:
                         _fail_count.pop(f, None)
                         _retry_after.pop(f, None)
                         n_sent += 1
-                        _date_tag = f"  [дата {_date_part} / всего: {_n_dates}]" if _date_part else ""
+                        _run_tag = f"  run={routing['run']}" if routing["run"] else ""
+                        _date_tag = f"  [дата {_date_part}]" if _date_part else ""
                         print(f"  [в батче {_file_idx}/{len(new_files)}] ↑ {rel}"
                               f"  ({len(data)/1024:.1f} КБ  {work_ms:.0f}мс)"
-                              f"  всего={n_sent}{_date_tag}")
+                              f"  всего={n_sent}{_run_tag}{_date_tag}")
                     else:
                         n_failed += 1
                         work_ms = (time.monotonic() - t0) * 1000
@@ -359,13 +444,15 @@ def main() -> int:
                         help="Расширения файлов через запятую (default: jpg)")
 
     p_watch = sub.add_parser("watch", help="Следить за каталогом и отправлять новые файлы")
-    p_watch.add_argument("watch_dir", help="Каталог для наблюдения (напр. run_XXX/images)")
+    p_watch.add_argument("watch_dir", help="Каталог наблюдения (run_XXX/images или 1_motion_diff/)")
     p_watch.add_argument("--run-root", default="",
-                         help="Корень прогона (default: parent watch_dir = run_XXX)")
+                         help="(устар.) не используется — см. --parent/--step/--run")
+    p_watch.add_argument("--parent",   default="",
+                         help="Parent (default: parent каталога watch_dir, напр. pipeline)")
     p_watch.add_argument("--step",     default="",
-                         help="Имя шага (default: parent run_root)")
+                         help="Шаг (default: имя watch_dir или 1_motion_diff)")
     p_watch.add_argument("--run",      default="",
-                         help="Имя прогона (default: run_root.name)")
+                         help="Прогон (default: run_XXX из пути или каталога images)")
     p_watch.add_argument("--ext",      default="jpg", metavar="EXTS",
                          help="Расширения файлов через запятую (default: jpg)")
 

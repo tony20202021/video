@@ -11,8 +11,11 @@
 1_motion_diff → images/YYYYMMDD/cam/diff/
         │
         │  watch: POST /file per file
-        │  X-Step / X-Run / X-Rel-Path
-        └───────────────────────────────►  .output/pipeline/<step>/<run>/<rel_path>
+        │  X-Parent / X-Step / X-Run / X-Cam / X-Date / …
+        └───────────────────────────────►  .output/transfer/
+                                               diff/YYYYMMDD/<cam>/file.jpg
+                                               service/YYYYMMDD/<cam>/file.jpg
+                                               meta/YYYYMMDD/<cam>/file.json
                                                      │
                                              2_yolo_boxes_files
                                              3_classify_groups
@@ -112,18 +115,68 @@ uvicorn scripts.transfer.server:app --host 0.0.0.0 --port 8765
 | Заголовок | Обязателен | Описание |
 |-----------|-----------|----------|
 | `X-Api-Key` | если ключ задан | API-ключ аутентификации |
-| `X-Step` | да | Имя шага (напр. `1_motion_diff`) |
-| `X-Run` | да | Имя прогона (напр. `run_20260702_200143_msk`) |
-| `X-Rel-Path` | да | Путь файла относительно run_* (напр. `images/20260702/cam/diff/file.jpg`) |
+| `X-Parent` | рекомендуется | Родитель шага (напр. `pipeline`) |
+| `X-Step` | да* | Шаг пайплайна (напр. `1_motion_diff`) |
+| `X-Run` | да* | Прогон (напр. `run_20260702_200143_msk`) |
+| `X-Rel-Path` | да* | Путь файла относительно `WatchDir` |
+| `X-Cam` | для diff/service | Камера (из имени файла) |
+| `X-Date` | для diff/service | Дата `YYYYMMDD` (из имени файла) |
+| `X-Time` | нет | Время `HHMMSS_micro` (из имени файла) |
+| `X-Type` | нет | `diff` / `baseline` / `heartbeat` / … |
+
+\* Для jpg с `X-Cam`+`X-Date` картинка кладётся в `diff/` или `service/`; без них — legacy `{step}/{run}/{rel_path}`.
 
 Тело запроса — сырые байты файла.
+
+### Маршрутизация на клиенте (parent / step / run)
+
+| `WatchDir` | parent | step | run |
+|------------|--------|------|-----|
+| `.../1_motion_diff/` | `pipeline` | `1_motion_diff` | из пути каждого файла (`run_*`) |
+| `.../run_XXX/images` | `pipeline` | `1_motion_diff` | `run_XXX` |
+
+### Sidecar meta/
+
+Параллельно с `diff/` и `service/` сервер пишет JSON с тем же `YYYYMMDD/<cam>/`:
+
+```
+.output/transfer/
+  diff/20260704/cam_01_9_d/cam_01_9_d_20260704_140301_456789_msk_diff11.0.jpg
+  meta/20260704/cam_01_9_d/cam_01_9_d_20260704_140301_456789_msk_diff11.0.json
+```
+
+Пример sidecar:
+
+```json
+{
+  "parent": "pipeline",
+  "step": "1_motion_diff",
+  "run": "run_20260704_002002_msk",
+  "cam": "cam_01_9_d",
+  "date": "20260704",
+  "time": "140301_456789",
+  "timezone": "Europe/Moscow",
+  "captured_at": "2026-07-04T14:03:01.456789+03:00",
+  "type": "diff",
+  "rel_path": "run_.../images/20260704/cam_01_9_d/diff/....jpg",
+  "received_at": "2026-07-04T20:15:03.123456+03:00",
+  "size_bytes": 40832,
+  "dest_image": "/path/to/diff/.../file.jpg"
+}
+```
+
+- `captured_at` — из имени файла (MSK, `+03:00`)
+- `received_at` — момент записи на сервер (MSK, `+03:00`)
 
 ---
 
 ## Клиент
 
 ```bash
-# Следить за каталогом и передавать новые файлы (основной режим)
+# Следить за каталогом (рекомендуется — весь шаг, новые run_* подхватываются автоматически)
+python scripts/transfer/client.py watch .output/pipeline/1_motion_diff
+
+# Или один прогон
 python scripts/transfer/client.py watch .output/pipeline/1_motion_diff/run_XXX/images
 
 # Разово отправить все файлы из run_*-каталога
@@ -180,7 +233,7 @@ TRANSFER_ADAPT_FACTOR=2.0    # коэффициент изменения ско�
 ```
 Клиент (подъезд/дом):
   .\sh\pipeline\1_motion_diff.ps1         # записывает images/YYYYMMDD/...
-  .\sh\transfer\2_send.ps1 .output\pipeline\1_motion_diff\run_XXX\images  # параллельно
+  .\sh\transfer\2_send.ps1                  # watch .output/pipeline/1_motion_diff/
 
 Сервер:
   ./sh/transfer/1_start_server.sh         # запущен постоянно
