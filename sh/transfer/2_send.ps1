@@ -1,9 +1,9 @@
-# 1_send.ps1 — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
+# 2_send.ps1 — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
 #
 # Usage:
-#   .\sh\transfer\1_send.ps1 -WatchDir .output\pipeline\1_motion_diff\run_XXX\images
-#   .\sh\transfer\1_send.ps1 -WatchDir <path> -Server http://1.2.3.4:8765 -Key SECRET
-#   .\sh\transfer\1_send.ps1 -WatchDir <path> -Ext "jpg,png"
+#   .\sh\transfer\2_send.ps1 -WatchDir .output\pipeline\1_motion_diff\run_XXX\images
+#   .\sh\transfer\2_send.ps1 -WatchDir <path> -Server http://1.2.3.4:8765 -Key SECRET
+#   .\sh\transfer\2_send.ps1 -WatchDir <path> -Ext "jpg,png"
 #
 # Параметры (RunRoot, Step, Run) по умолчанию выводятся из пути:
 #   WatchDir → RunRoot = parent(WatchDir) = run_XXX
@@ -42,7 +42,7 @@ if ($RunRoot -and -not [System.IO.Path]::IsPathRooted($RunRoot)) {
     $RunRoot = "$Repo\$RunRoot"
 }
 
-Write-Host "=== 1_send (transfer watch) ===" -ForegroundColor Cyan
+Write-Host "=== 2_send (transfer watch) ===" -ForegroundColor Cyan
 Write-Host "WatchDir: $WatchDir"
 
 $AllArgs = @("watch", $WatchDir)

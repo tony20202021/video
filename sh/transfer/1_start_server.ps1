@@ -1,9 +1,9 @@
-# 2_start_server.ps1 — запуск Transfer Server на Windows
+# 1_start_server.ps1 — запуск Transfer Server на Windows
 #
 # Usage:
-#   .\sh\transfer\2_start_server.ps1
-#   .\sh\transfer\2_start_server.ps1 -Port 8765
-#   .\sh\transfer\2_start_server.ps1 -Output D:\transfer_output
+#   .\sh\transfer\1_start_server.ps1
+#   .\sh\transfer\1_start_server.ps1 -Port 8765
+#   .\sh\transfer\1_start_server.ps1 -Output D:\transfer_output
 
 param(
     [string] $BindHost = "",    # default: из .env TRANSFER_HOST или 0.0.0.0

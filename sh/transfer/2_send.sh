@@ -1,11 +1,11 @@
 #!/bin/bash
-# 1_send.sh — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
+# 2_send.sh — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
 #
 # Usage:
-#   ./sh/transfer/1_send.sh <watch_dir>
-#   ./sh/transfer/1_send.sh .output/pipeline/1_motion_diff/run_XXX/images
-#   ./sh/transfer/1_send.sh <watch_dir> --ext jpg,png
-#   ./sh/transfer/1_send.sh <watch_dir> --server http://1.2.3.4:8765 --key SECRET
+#   ./sh/transfer/2_send.sh <watch_dir>
+#   ./sh/transfer/2_send.sh .output/pipeline/1_motion_diff/run_XXX/images
+#   ./sh/transfer/2_send.sh <watch_dir> --ext jpg,png
+#   ./sh/transfer/2_send.sh <watch_dir> --server http://1.2.3.4:8765 --key SECRET
 
 set -euo pipefail
 
@@ -27,7 +27,7 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-echo "=== 1_send (transfer watch) ==="
+echo "=== 2_send (transfer watch) ==="
 echo "WatchDir: $1"
 echo ""
 

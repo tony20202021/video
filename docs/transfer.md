@@ -27,13 +27,13 @@
 **Сервер (Linux):**
 ```bash
 # Задать ключ в .env, затем:
-./sh/transfer/2_start_server.sh
+./sh/transfer/1_start_server.sh
 ```
 
 **Клиент (Windows), параллельно с записью:**
 ```powershell
 # Задать TRANSFER_SERVER и TRANSFER_API_KEY в .env, затем:
-.\sh\transfer\1_send.ps1 .output\pipeline\1_motion_diff\run_XXX\images
+.\sh\transfer\2_send.ps1 .output\pipeline\1_motion_diff\run_XXX\images
 ```
 
 ---
@@ -44,10 +44,10 @@
 |------|-----------|
 | `scripts/transfer/server.py` | FastAPI-сервер приёма |
 | `scripts/transfer/client.py` | CLI-клиент (send / watch / health / runs) |
-| `sh/transfer/1_send.ps1` | Windows-обёртка: запустить `watch` |
-| `sh/transfer/1_send.sh` | Linux-обёртка: запустить `watch` |
-| `sh/transfer/2_start_server.ps1` | Windows-обёртка: запустить сервер |
-| `sh/transfer/2_start_server.sh` | Linux-обёртка: запустить сервер |
+| `sh/transfer/1_start_server.ps1` | Windows-обёртка: запустить сервер |
+| `sh/transfer/1_start_server.sh` | Linux-обёртка: запустить сервер |
+| `sh/transfer/2_send.ps1` | Windows-обёртка: запустить `watch` |
+| `sh/transfer/2_send.sh` | Linux-обёртка: запустить `watch` |
 
 ---
 
@@ -76,7 +76,7 @@ images/
 
 ```bash
 # Через обёртку (читает TRANSFER_HOST/PORT из .env)
-./sh/transfer/2_start_server.sh
+./sh/transfer/1_start_server.sh
 
 # Напрямую
 python scripts/transfer/server.py --port 8765
@@ -165,10 +165,10 @@ TRANSFER_ADAPT_FACTOR=2.0    # коэффициент изменения ско�
 ```
 Клиент (подъезд/дом):
   .\sh\pipeline\1_motion_diff.ps1         # записывает images/YYYYMMDD/...
-  .\sh\transfer\1_send.ps1 .output\pipeline\1_motion_diff\run_XXX\images  # параллельно
+  .\sh\transfer\2_send.ps1 .output\pipeline\1_motion_diff\run_XXX\images  # параллельно
 
 Сервер:
-  ./sh/transfer/2_start_server.sh         # запущен постоянно
+  ./sh/transfer/1_start_server.sh         # запущен постоянно
   ./sh/pipeline/2_yolo_boxes_files.sh     # детекция людей
   ./sh/pipeline/3_classify_groups.sh      # классификация
   ./sh/pipeline/4_identify_residents.sh   # идентификация

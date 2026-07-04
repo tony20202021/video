@@ -1,9 +1,9 @@
 #!/bin/bash
-# 2_start_server.sh — запуск Transfer Server на Linux-сервере
+# 1_start_server.sh — запуск Transfer Server на Linux-сервере
 #
 # Usage:
-#   ./sh/transfer/2_start_server.sh
-#   ./sh/transfer/2_start_server.sh --port 8765
+#   ./sh/transfer/1_start_server.sh
+#   ./sh/transfer/1_start_server.sh --port 8765
 
 set -euo pipefail
 
