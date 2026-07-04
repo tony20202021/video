@@ -44,7 +44,7 @@ def _load_env() -> dict[str, str]:
 
 _SERVER_ENV = _load_env()
 API_KEY: str = os.environ.get("TRANSFER_API_KEY") or _SERVER_ENV.get("TRANSFER_API_KEY", "")
-OUTPUT_DIR: Path = REPO_ROOT / ".output" / "pipeline"
+OUTPUT_DIR: Path = REPO_ROOT / ".output" / "transfer"
 
 app = FastAPI(title="Transfer Server", version="1.0")
 
@@ -106,6 +106,11 @@ async def receive_run(
     return JSONResponse({"ok": True, "step": step, "run": run_name, "dest": dest})
 
 
+def _validate_path_component(value: str, name: str) -> None:
+    if ".." in value or "/" in value or "\\" in value:
+        raise HTTPException(400, f"Invalid header {name}: {value!r}")
+
+
 @app.post("/file")
 async def receive_file(
     request: Request,
@@ -113,32 +118,58 @@ async def receive_file(
     x_step: str = Header(default=""),
     x_run: str = Header(default=""),
     x_rel_path: str = Header(default=""),
+    x_cam: str = Header(default=""),
+    x_date: str = Header(default=""),
+    x_time: str = Header(default=""),
+    x_type: str = Header(default=""),
 ) -> JSONResponse:
-    """Принять один файл, сохранить в OUTPUT_DIR/{step}/{run}/{rel_path}."""
+    """Принять один файл.
+
+    Если переданы X-Cam / X-Date / X-Type — раскладывает по структуре:
+      diff/YYYYMMDD/<cam>/   — тип diff
+      service/YYYYMMDD/<cam>/ — baseline, heartbeat и прочие
+
+    Иначе (legacy) — OUTPUT_DIR/{step}/{run}/{rel_path}.
+    """
     _check_key(x_api_key)
 
-    if not x_step or not x_run or not x_rel_path:
-        raise HTTPException(400, "X-Step, X-Run, X-Rel-Path headers required")
+    filename = Path(x_rel_path).name if x_rel_path else ""
 
-    for part in (x_step, x_run):
-        if ".." in part or "/" in part or "\\" in part:
-            raise HTTPException(400, f"Invalid path component: {part!r}")
+    if x_cam and x_date and filename:
+        _validate_path_component(x_cam, "X-Cam")
+        _validate_path_component(x_date, "X-Date")
+        if not x_date.isdigit() or len(x_date) != 8:
+            raise HTTPException(400, f"Invalid X-Date: {x_date!r}")
 
-    run_dir   = (OUTPUT_DIR / x_step / x_run).resolve()
-    dest_file = (run_dir / x_rel_path).resolve()
-    try:
-        dest_file.relative_to(run_dir)
-    except ValueError:
-        raise HTTPException(400, "Path traversal detected")
+        subdir = "diff" if x_type == "diff" else "service"
+        dest_dir = OUTPUT_DIR / subdir / x_date / x_cam
+        dest_file = (dest_dir / filename).resolve()
+        try:
+            dest_file.relative_to((OUTPUT_DIR / subdir).resolve())
+        except ValueError:
+            raise HTTPException(400, "Path traversal detected")
+        log_tag = f"{subdir}/{x_date}/{x_cam}/{filename}"
+    else:
+        if not x_step or not x_run or not x_rel_path:
+            raise HTTPException(400, "X-Cam+X-Date or X-Step+X-Run+X-Rel-Path headers required")
+        for part in (x_step, x_run):
+            _validate_path_component(part, "X-Step/X-Run")
+        run_dir   = (OUTPUT_DIR / x_step / x_run).resolve()
+        dest_file = (run_dir / x_rel_path).resolve()
+        try:
+            dest_file.relative_to(run_dir)
+        except ValueError:
+            raise HTTPException(400, "Path traversal detected")
+        log_tag = f"{x_step}/{x_run}/{x_rel_path}"
 
     dest_file.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(dest_file, "wb") as f:
+    with open(dest_file, "wb") as fh:
         async for chunk in request.stream():
-            f.write(chunk)
+            fh.write(chunk)
 
     size = dest_file.stat().st_size
-    print(f"  [recv] {x_step}/{x_run}/{x_rel_path}  ({size / 1024:.1f} КБ)")
+    logger.info("[recv] %s  (%.1f КБ)", log_tag, size / 1024)
     return JSONResponse({"ok": True, "dest": str(dest_file)})
 
 

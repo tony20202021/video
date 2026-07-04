@@ -79,6 +79,40 @@ def _make_limiter(env: dict[str, str]) -> AdaptiveRateLimiter:
     )
 
 
+def _parse_img_meta(f: Path) -> dict[str, str]:
+    """Parse cam, date, time, type from image filename.
+
+    Filename pattern: <cam>_YYYYMMDD_HHMMSS_ffffff_msk_<type>.jpg
+    Returns {"cam", "date", "time", "type"} — values may be empty if parsing fails.
+    """
+    stem = f.stem
+
+    if "_baseline" in stem:
+        img_type = "baseline"
+    elif "_heartbeat" in stem:
+        img_type = "heartbeat"
+    elif "_diff" in stem or f.parent.name == "diff":
+        img_type = "diff"
+    elif "_raw" in stem:
+        img_type = "raw"
+    else:
+        img_type = "unknown"
+
+    cam = date = time_str = ""
+    parts = stem.split("_")
+    for i, part in enumerate(parts):
+        if len(part) == 8 and part.isdigit():
+            cam = "_".join(parts[:i])
+            date = part
+            if i + 1 < len(parts) and len(parts[i + 1]) == 6 and parts[i + 1].isdigit():
+                time_str = parts[i + 1]
+                if i + 2 < len(parts) and len(parts[i + 2]) == 6 and parts[i + 2].isdigit():
+                    time_str = f"{time_str}_{parts[i + 2]}"
+            break
+
+    return {"cam": cam, "date": date, "time": time_str, "type": img_type}
+
+
 def _send_file(http, server: str, headers: dict, f: Path, run_root: Path) -> tuple[bool, float]:
     """Отправить один файл. Возвращает (ok, work_ms)."""
     try:
@@ -90,7 +124,12 @@ def _send_file(http, server: str, headers: dict, f: Path, run_root: Path) -> tup
         data = f.read_bytes()
         if not data:
             return True, 0.0
+        meta = _parse_img_meta(f)
         headers["X-Rel-Path"] = rel
+        headers["X-Cam"]  = meta["cam"]
+        headers["X-Date"] = meta["date"]
+        headers["X-Time"] = meta["time"]
+        headers["X-Type"] = meta["type"]
         resp = http.post(f"{server}/file", content=data, headers=headers)
         resp.raise_for_status()
         ok = resp.json().get("ok", False)
@@ -209,18 +248,36 @@ def cmd_watch(args) -> int:
                 time.sleep(poll_sec)
                 continue
 
+            # date dirs present in watch_dir right now (YYYYMMDD subdirs)
+            _date_dirs = sorted(
+                d.name for d in watch_dir.iterdir()
+                if d.is_dir() and d.name.isdigit() and len(d.name) == 8
+            ) if watch_dir.is_dir() else []
+            _n_dates = len(_date_dirs)
+
+            if new_files:
+                print(f"  новый батч: {len(new_files)} файлов")
+
             now = time.monotonic()
-            for f in new_files:
+            for _file_idx, f in enumerate(new_files, 1):
                 if now < _retry_after.get(f, 0):
                     continue  # backoff not expired yet
 
                 rel = f.relative_to(run_root).as_posix() if f.is_relative_to(run_root) else f.name
+                _rel_parts = f.relative_to(watch_dir).parts if f.is_relative_to(watch_dir) else ()
+                _date_part = _rel_parts[0] if len(_rel_parts) > 1 and _rel_parts[0] in _date_dirs else ""
+
                 t0 = time.monotonic()
                 try:
                     data = f.read_bytes()
                     if not data:
                         continue
+                    _meta = _parse_img_meta(f)
                     headers["X-Rel-Path"] = rel
+                    headers["X-Cam"]  = _meta["cam"]
+                    headers["X-Date"] = _meta["date"]
+                    headers["X-Time"] = _meta["time"]
+                    headers["X-Type"] = _meta["type"]
                     resp = http.post(f"{server}/file", content=data, headers=headers)
                     resp.raise_for_status()
                     result = resp.json()
@@ -230,8 +287,10 @@ def cmd_watch(args) -> int:
                         _fail_count.pop(f, None)
                         _retry_after.pop(f, None)
                         n_sent += 1
-                        print(f"  ↑ {rel}  ({len(data)/1024:.1f} КБ  {work_ms:.0f}мс)  "
-                              f"всего={n_sent}")
+                        _date_tag = f"  [дата {_date_part} / всего: {_n_dates}]" if _date_part else ""
+                        print(f"  [в батче {_file_idx}/{len(new_files)}] ↑ {rel}"
+                              f"  ({len(data)/1024:.1f} КБ  {work_ms:.0f}мс)"
+                              f"  всего={n_sent}{_date_tag}")
                     else:
                         n_failed += 1
                         work_ms = (time.monotonic() - t0) * 1000
