@@ -30,9 +30,8 @@ S1DIR="$REPO/.output/pipeline/1_motion_diff"
 
 # Список прогонов для обработки
 INPUT_DIRS=(
-    "$S1DIR/run_20260629_081339_msk"
-    # Или весь каталог:
-    # "$S1DIR"
+    "$S1DIR/run_20260704_002002_msk/images/20260704/cam_01_9_d/diff"
+    "$S1DIR/run_20260704_002002_msk/images/20260704/cam_01_9_u/diff"
 )
 
 echo "=== 2_yolo_boxes_files ==="
@@ -51,8 +50,12 @@ for d in "${INPUT_DIRS[@]}"; do
 done
 [[ "$missing" -eq 1 ]] && exit 1
 
-exec "$PYTHON" "$SCRIPT" "${INPUT_DIRS[@]}" \
-    --yolo-max-fps "$YOLO_MAX_FPS" \
-    --conf "$CONF" \
-    --nms "$NMS" \
-    "$@"
+for input_dir in "${INPUT_DIRS[@]}"; do
+    echo "--- $(basename "$input_dir") ---"
+    "$PYTHON" "$SCRIPT" "$input_dir" \
+        --yolo-max-fps "$YOLO_MAX_FPS" \
+        --conf "$CONF" \
+        --nms "$NMS" \
+        "$@"
+    echo ""
+done

@@ -50,6 +50,10 @@ for d in "${INPUT_DIRS[@]}"; do
 done
 [[ "$missing" -eq 1 ]] && exit 1
 
-exec "$PYTHON" "$SCRIPT" "${INPUT_DIRS[@]}" \
-    --identify-conf "$IDENTIFY_CONF" \
-    "$@"
+for input_dir in "${INPUT_DIRS[@]}"; do
+    echo "--- $(basename "$input_dir") ---"
+    "$PYTHON" "$SCRIPT" "$input_dir" \
+        --identify-conf "$IDENTIFY_CONF" \
+        "$@"
+    echo ""
+done
