@@ -15,7 +15,7 @@ PYTHON="${CONDA_PREFIX:-$HOME/miniconda3/envs/conda_video}/bin/python"
 if [[ -f "$ENV_FILE" ]]; then
     set -a
     # shellcheck disable=SC1090
-    source <(grep -v '^\s*#' "$ENV_FILE" | grep '=')
+    source <(grep -v '^\s*#' "$ENV_FILE" | grep '=' | grep -v '<')
     set +a
 fi
 
