@@ -17,9 +17,9 @@ SCRIPT="$REPO/scripts/train/2_label_ui.py"
 
 export PYTHONIOENCODING=utf-8
 
-INPUT=""
+INPUT="$REPO/.data/groups/new"
 LABELS=""
-DATASET=""
+DATASET="$REPO/.data/groups/v1"
 PORT=5050
 UNLABELED_ONLY=1
 EXT="jpg"
@@ -37,25 +37,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Ищем последний run_* если --input не задан
-if [[ -z "$INPUT" ]]; then
-    S2="$REPO/.output/pipeline/2_yolo_boxes_files"
-    if [[ -d "$S2" ]]; then
-        INPUT=$(ls -1dt "$S2"/run_* 2>/dev/null | head -1 || true)
-    fi
-fi
-
-if [[ -z "$INPUT" ]]; then
-    echo "[!] No run_* found in .output/pipeline/2_yolo_boxes_files" >&2
-    echo "    Set explicitly: --input <path>" >&2
-    exit 1
-fi
-
-# Относительные пути → абсолютные
-[[ "$INPUT"   != /* ]] && INPUT="$REPO/$INPUT"
 [[ -z "$LABELS" ]] && LABELS="$REPO/.output/train/2_label_ui/labels.json"
-[[ "$LABELS"  != /* ]] && LABELS="$REPO/$LABELS"
-[[ -n "$DATASET" && "$DATASET" != /* ]] && DATASET="$REPO/$DATASET"
 
 echo "=== 2_label_ui ==="
 echo "Repo:   $REPO"

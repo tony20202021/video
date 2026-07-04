@@ -30,3 +30,4 @@ av>=12.0.0                 # pyav: RTSP demux (используется в bench
 
 # Tests
 pytest==9.0.3
+flask

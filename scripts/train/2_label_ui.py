@@ -219,8 +219,15 @@ _GALLERY_HTML = """<!DOCTYPE html>
   :root { --tw: 120px; }
   .grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
   .tile { width: var(--tw); cursor: pointer; border: 2px solid #2a2a4a; border-radius: 4px;
-          overflow: hidden; background: #111120; transition: border-color .15s; }
+          overflow: hidden; background: #111120; transition: border-color .15s; position: relative; }
   .tile:hover { border-color: #7ec8e3; }
+  .tile.selected { border-color: #7ec8e3 !important; background: #0f2040; }
+  .tile-check { position: absolute; top: 4px; left: 4px; z-index: 5; width: 20px; height: 20px;
+                background: rgba(0,0,0,.65); border: 2px solid #556; border-radius: 3px;
+                cursor: pointer; display: flex; align-items: center; justify-content: center;
+                font-size: 13px; opacity: 0; transition: opacity .1s, border-color .1s; }
+  .tile:hover .tile-check, .tile.selected .tile-check { opacity: 1; }
+  .tile.selected .tile-check { border-color: #7ec8e3; color: #7ec8e3; background: rgba(0,30,60,.85); }
   .tile img { width: var(--tw); height: calc(var(--tw) * 0.75); object-fit: contain; display: block;
               background: #0a0a18; }
   .tile .tile-label { font-size: 9px; color: #777; padding: 3px 4px;
@@ -238,18 +245,42 @@ _GALLERY_HTML = """<!DOCTYPE html>
   #modal .btn-go { background: #0f3460; color: #7ec8e3; }
   #modal .btn-close { background: #2a2a4a; color: #aaa; }
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
-              cursor: pointer; font-size: 14px; padding: 2px 8px; font-family: monospace; }
+              cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
   .zoom-btn:hover { background: #3a3a6a; color: #eee; }
+  #bulk-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0d1522;
+              border-top: 2px solid #7ec8e3; padding: 8px 16px; display: none;
+              align-items: center; gap: 8px; z-index: 50; flex-wrap: wrap; }
+  #bulk-bar.show { display: flex; }
+  #bulk-count { color: #7ec8e3; font-size: 13px; white-space: nowrap; min-width: 90px; }
+  #bulk-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn-bulk { padding: 5px 11px; font-size: 12px; cursor: pointer; border: none;
+              border-radius: 4px; font-family: monospace; }
+  .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
+  .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
+  .btn-bulk-desel:hover { color: #eee; }
+  #gallery { padding-bottom: 72px; }
 </style>
 </head>
 <body>
-<h2>Галерея сессии <a href="/">← Разметка</a> <a href="/gallery/dataset">⊞ Датасет</a>
+<h2>Галерея сессии
+  <a href="/">← Разметка</a>
+  <a href="/gallery/dataset">⊞ Датасет</a>
   <span style="display:flex;gap:4px;align-items:center">
+    <button class="zoom-btn" onclick="selectAll()">☑ Все</button>
+    <button class="zoom-btn" onclick="deselectAll()">☐ Снять</button>
     <button class="zoom-btn" onclick="zoom(-1)">−</button>
     <button class="zoom-btn" onclick="zoom(+1)">+</button>
   </span>
-  <span class="stats" id="stats"></span></h2>
+  <span class="stats" id="stats"></span>
+</h2>
 <div id="gallery"></div>
+
+<div id="bulk-bar">
+  <span id="bulk-count">Выбрано: 0</span>
+  <div id="bulk-btns"></div>
+  <button class="btn-bulk btn-bulk-desel" onclick="deselectAll()">✕ Снять</button>
+</div>
 
 <div id="modal">
   <img id="modal-img" src="" alt="">
@@ -264,6 +295,9 @@ let crops = [], labels = {}, classes = [];
 let modalFile = '', modalIdx = 0;
 const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
+let selected = new Set();
+let lastToggleIdx = -1;
+
 function zoom(d) {
   zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
   document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
@@ -280,7 +314,12 @@ function render() {
   document.getElementById('stats').textContent =
     `${crops.length} кропов · размечено ${labeled}`;
 
-  // группируем: класс → [idx, ...]
+  document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) => {
+    const color = CLASS_COLORS[i] || '#888';
+    return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}')"
+      style="border-left-color:${color}">${cls}</button>`;
+  }).join('');
+
   const groups = {};
   const ORDER = [...classes, 'skip', 'unknown'];
   ORDER.forEach(c => groups[c] = []);
@@ -300,7 +339,10 @@ function render() {
     const tiles = groups[cls].map(i => {
       const f = crops[i];
       const name = f.split('/').pop();
-      return `<div class="tile" onclick="openModal(${i})" title="${name}">
+      const sel = selected.has(i);
+      return `<div class="tile${sel ? ' selected' : ''}" data-idx="${i}"
+        onclick="tileClick(${i}, event)" title="${name}">
+        <div class="tile-check" onclick="toggleSelect(${i}, event)">${sel ? '✓' : ''}</div>
         <img src="/image/${encodeURIComponent(f)}" loading="lazy">
         <div class="tile-label">${name}</div>
       </div>`;
@@ -312,6 +354,67 @@ function render() {
       <div class="grid">${tiles}</div>
     </div>`;
   }).join('');
+
+  updateBulkBar();
+}
+
+function tileClick(i, e) {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(i, e);
+  else openModal(i);
+}
+
+function toggleSelect(idx, e) {
+  e.stopPropagation();
+  if (e.shiftKey && lastToggleIdx >= 0) {
+    const lo = Math.min(lastToggleIdx, idx), hi = Math.max(lastToggleIdx, idx);
+    for (let j = lo; j <= hi; j++) selected.add(j);
+  } else {
+    if (selected.has(idx)) selected.delete(idx);
+    else { selected.add(idx); lastToggleIdx = idx; }
+  }
+  updateSelectionDOM();
+  updateBulkBar();
+}
+
+function selectAll() {
+  for (let i = 0; i < crops.length; i++) selected.add(i);
+  updateSelectionDOM();
+  updateBulkBar();
+}
+
+function deselectAll() {
+  selected.clear();
+  updateSelectionDOM();
+  updateBulkBar();
+}
+
+function updateSelectionDOM() {
+  document.querySelectorAll('.tile[data-idx]').forEach(el => {
+    const i = +el.dataset.idx;
+    const sel = selected.has(i);
+    el.classList.toggle('selected', sel);
+    el.querySelector('.tile-check').textContent = sel ? '✓' : '';
+  });
+}
+
+function updateBulkBar() {
+  document.getElementById('bulk-count').textContent = 'Выбрано: ' + selected.size;
+  document.getElementById('bulk-bar').classList.toggle('show', selected.size > 0);
+}
+
+async function applyBulk(cls) {
+  if (!selected.size) return;
+  const files = [...selected].map(i => crops[i]);
+  await fetch('/api/label/bulk', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({files, label: cls})
+  });
+  const d = await (await fetch('/api/state')).json();
+  labels = d.labels;
+  selected.clear();
+  lastToggleIdx = -1;
+  render();
 }
 
 function openModal(i) {
@@ -341,7 +444,7 @@ async function relabel(cls) {
   });
   const d = await (await fetch('/api/state')).json();
   labels = d.labels;
-  openModal(modalIdx);  // перерисовываем кнопки
+  openModal(modalIdx);
   render();
 }
 
@@ -385,8 +488,15 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   :root { --tw: 120px; }
   .grid { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
   .tile { width: var(--tw); cursor: pointer; border: 2px solid #2a2a4a; border-radius: 4px;
-          overflow: hidden; background: #111120; transition: border-color .15s; }
+          overflow: hidden; background: #111120; transition: border-color .15s; position: relative; }
   .tile:hover { border-color: #7ec8e3; }
+  .tile.selected { border-color: #7ec8e3 !important; background: #0f2040; }
+  .tile-check { position: absolute; top: 4px; left: 4px; z-index: 5; width: 20px; height: 20px;
+                background: rgba(0,0,0,.65); border: 2px solid #556; border-radius: 3px;
+                cursor: pointer; display: flex; align-items: center; justify-content: center;
+                font-size: 13px; opacity: 0; transition: opacity .1s, border-color .1s; }
+  .tile:hover .tile-check, .tile.selected .tile-check { opacity: 1; }
+  .tile.selected .tile-check { border-color: #7ec8e3; color: #7ec8e3; background: rgba(0,30,60,.85); }
   .tile img { width: var(--tw); height: calc(var(--tw) * 0.75); object-fit: contain; display: block; background: #0a0a18; }
   .tile .tile-label { font-size: 9px; color: #777; padding: 3px 4px;
                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -404,8 +514,21 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   #modal .btn-close { background: #2a2a4a; color: #aaa; }
   #modal .moving { opacity: 0.5; pointer-events: none; }
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
-              cursor: pointer; font-size: 14px; padding: 2px 8px; font-family: monospace; }
+              cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
   .zoom-btn:hover { background: #3a3a6a; color: #eee; }
+  #bulk-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0d1522;
+              border-top: 2px solid #7ec8e3; padding: 8px 16px; display: none;
+              align-items: center; gap: 8px; z-index: 50; flex-wrap: wrap; }
+  #bulk-bar.show { display: flex; }
+  #bulk-count { color: #7ec8e3; font-size: 13px; white-space: nowrap; min-width: 90px; }
+  #bulk-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn-bulk { padding: 5px 11px; font-size: 12px; cursor: pointer; border: none;
+              border-radius: 4px; font-family: monospace; }
+  .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
+  .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
+  .btn-bulk-desel:hover { color: #eee; }
+  #gallery { padding-bottom: 72px; }
 </style>
 </head>
 <body>
@@ -413,12 +536,20 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   <a href="/">← Разметка</a>
   <a href="/gallery">⊞ Галерея сессии</a>
   <span style="display:flex;gap:4px;align-items:center">
+    <button class="zoom-btn" onclick="selectAll()">☑ Все</button>
+    <button class="zoom-btn" onclick="deselectAll()">☐ Снять</button>
     <button class="zoom-btn" onclick="zoom(-1)">−</button>
     <button class="zoom-btn" onclick="zoom(+1)">+</button>
   </span>
   <span class="stats" id="stats"></span>
 </h2>
 <div id="gallery"></div>
+
+<div id="bulk-bar">
+  <span id="bulk-count">Выбрано: 0</span>
+  <div id="bulk-btns"></div>
+  <button class="btn-bulk btn-bulk-desel" onclick="deselectAll()">✕ Снять</button>
+</div>
 
 <div id="modal">
   <img id="modal-img" src="" alt="">
@@ -434,6 +565,10 @@ let groups = {}, classes = [];
 let modalFile = '', modalCls = '';
 const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
+let selected = new Set();  // indices into allFiles
+let allFiles = [];          // [{f, cls}, ...] flat list built each render
+let lastToggleIdx = -1;
+
 function zoom(d) {
   zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
   document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
@@ -449,25 +584,100 @@ function render() {
   const total = Object.values(groups).reduce((s, a) => s + a.length, 0);
   document.getElementById('stats').textContent = `${total} файлов`;
 
-  document.getElementById('gallery').innerHTML = classes
-    .filter(cls => groups[cls] && groups[cls].length)
-    .map(cls => {
-      const cidx = classes.indexOf(cls);
-      const color = CLASS_COLORS[cidx] || '#888';
-      const tiles = groups[cls].map(f => {
-        const name = f.split('/').pop();
-        return `<div class="tile" onclick="openModal('${f}','${cls}')" title="${name}">
-          <img src="/image/${encodeURIComponent(f)}" loading="lazy">
-          <div class="tile-label">${name}</div>
-        </div>`;
-      }).join('');
-      return `<div class="section">
-        <div class="section-title" style="background:${color}22;color:${color}">
-          ${cls} &nbsp;(${groups[cls].length})
-        </div>
-        <div class="grid">${tiles}</div>
+  document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) => {
+    const color = CLASS_COLORS[i] || '#888';
+    return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}')"
+      style="border-left-color:${color}">${cls}</button>`;
+  }).join('');
+
+  // rebuild flat list for range selection
+  allFiles = [];
+  const orderedCls = classes.filter(cls => groups[cls] && groups[cls].length);
+  orderedCls.forEach(cls => groups[cls].forEach(f => allFiles.push({f, cls})));
+
+  let fi = 0;
+  document.getElementById('gallery').innerHTML = orderedCls.map(cls => {
+    const cidx = classes.indexOf(cls);
+    const color = CLASS_COLORS[cidx] || '#888';
+    const tiles = groups[cls].map(f => {
+      const i = fi++;
+      const sel = selected.has(i);
+      const name = f.split('/').pop();
+      return `<div class="tile${sel ? ' selected' : ''}" data-fidx="${i}"
+        onclick="tileClick(${i},'${f}','${cls}',event)" title="${name}">
+        <div class="tile-check" onclick="toggleSelect(${i},event)">${sel ? '✓' : ''}</div>
+        <img src="/image/${encodeURIComponent(f)}" loading="lazy">
+        <div class="tile-label">${name}</div>
       </div>`;
     }).join('');
+    return `<div class="section">
+      <div class="section-title" style="background:${color}22;color:${color}">
+        ${cls} &nbsp;(${groups[cls].length})
+      </div>
+      <div class="grid">${tiles}</div>
+    </div>`;
+  }).join('');
+
+  updateBulkBar();
+}
+
+function tileClick(i, f, cls, e) {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(i, e);
+  else openModal(f, cls);
+}
+
+function toggleSelect(idx, e) {
+  e.stopPropagation();
+  if (e.shiftKey && lastToggleIdx >= 0) {
+    const lo = Math.min(lastToggleIdx, idx), hi = Math.max(lastToggleIdx, idx);
+    for (let j = lo; j <= hi; j++) selected.add(j);
+  } else {
+    if (selected.has(idx)) selected.delete(idx);
+    else { selected.add(idx); lastToggleIdx = idx; }
+  }
+  updateSelectionDOM();
+  updateBulkBar();
+}
+
+function selectAll() {
+  for (let i = 0; i < allFiles.length; i++) selected.add(i);
+  updateSelectionDOM();
+  updateBulkBar();
+}
+
+function deselectAll() {
+  selected.clear();
+  updateSelectionDOM();
+  updateBulkBar();
+}
+
+function updateSelectionDOM() {
+  document.querySelectorAll('.tile[data-fidx]').forEach(el => {
+    const i = +el.dataset.fidx;
+    const sel = selected.has(i);
+    el.classList.toggle('selected', sel);
+    el.querySelector('.tile-check').textContent = sel ? '✓' : '';
+  });
+}
+
+function updateBulkBar() {
+  document.getElementById('bulk-count').textContent = 'Выбрано: ' + selected.size;
+  document.getElementById('bulk-bar').classList.toggle('show', selected.size > 0);
+}
+
+async function applyBulk(toCls) {
+  if (!selected.size) return;
+  const files = [...selected].map(i => allFiles[i].f);
+  await fetch('/api/dataset/move/bulk', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({files, to_class: toCls})
+  });
+  const d = await (await fetch('/api/dataset')).json();
+  groups = d.groups; classes = d.classes;
+  selected.clear();
+  lastToggleIdx = -1;
+  render();
 }
 
 function openModal(f, cls) {
@@ -608,6 +818,27 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
             _shutil.move(str(src), dst)
         return jsonify({"ok": True, "new_path": dst.resolve().as_posix()})
 
+    @app.route("/api/dataset/move/bulk", methods=["POST"])
+    def api_dataset_move_bulk():
+        if dataset_dir is None:
+            return jsonify({"error": "no dataset"}), 404
+        data = request.get_json()
+        files = data.get("files", [])
+        to_cls = data.get("to_class", "")
+        if not to_cls or not files:
+            return jsonify({"error": "missing params"}), 400
+        dst_dir = dataset_dir / to_cls
+        dst_dir.mkdir(exist_ok=True)
+        moved = []
+        for fpath in files:
+            src = Path(fpath) if Path(fpath).is_absolute() else REPO_ROOT / fpath
+            if src.exists():
+                dst = dst_dir / src.name
+                if not dst.exists():
+                    _shutil.move(str(src), dst)
+                moved.append(dst.resolve().as_posix())
+        return jsonify({"ok": True, "moved": len(moved)})
+
     @app.route("/api/label", methods=["POST"])
     def label():
         nonlocal current
@@ -618,9 +849,24 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         _save_labels(labels_path, labels)
         return jsonify({"labels": labels})
 
+    @app.route("/api/label/bulk", methods=["POST"])
+    def label_bulk():
+        data = request.get_json()
+        files = data.get("files", [])
+        cls = data.get("label")
+        if cls and files:
+            crop_set = set(crops)
+            for f in files:
+                if f in crop_set:
+                    labels[f] = cls
+            _save_labels(labels_path, labels)
+        return jsonify({"labels": labels, "updated": len(files)})
+
     @app.route("/image/<path:fname>")
     def image(fname: str):
-        full = REPO_ROOT / fname
+        # Flask strips the leading '/' from path params; restore it for absolute paths
+        absolute = Path("/" + fname)
+        full = absolute if absolute.is_file() else REPO_ROOT / fname
         if not full.is_file():
             return Response("not found", status=404)
         mime = mimetypes.guess_type(str(full))[0] or "image/jpeg"
