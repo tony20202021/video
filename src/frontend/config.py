@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
-    BACKEND_URL: str = "http://localhost:8000"
+    BACKEND_URL: str = "http://localhost:8780"
     ADMIN_IDS: str = ""
 
     def is_admin(self, user_id: int) -> bool:

@@ -28,7 +28,7 @@ fi
 INPUT="$REPO/.data/groups/new"
 LABELS=""
 DATASET="$REPO/.data/groups/v1"
-PORT="${LABEL_UI_PORT:-5050}"
+PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=1
 EXT="jpg"
 

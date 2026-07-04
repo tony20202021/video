@@ -9,7 +9,7 @@ param(
     [string] $InputDir      = "E:\_Home\Tony\pet projects\video\.data\groups\new",   # каталог кропов для разметки
     [string] $Labels        = "",   # файл меток; по умолчанию .output\train\2_label_ui\labels.json
     [string] $Dataset       = "E:\_Home\Tony\pet projects\video\.data\groups\v1",   # каталог датасета для чтения классов; по умолчанию .data\groups\последняя версия
-    [int]    $Port          = 5050,
+    [int]    $Port          = 8750,
     [bool]   $UnlabeledOnly = $true,        # показывать только неразмеченные; -UnlabeledOnly $false — все
     [string] $Ext           = "jpg"         # расширения файлов через запятую
 )

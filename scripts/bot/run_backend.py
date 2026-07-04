@@ -9,4 +9,4 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 import uvicorn
 
 if __name__ == "__main__":
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8780, reload=False)

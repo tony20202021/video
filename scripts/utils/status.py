@@ -3,7 +3,7 @@
 
 Usage:
     python scripts/utils/status.py
-    python scripts/utils/status.py --url http://localhost:8000
+    python scripts/utils/status.py --url http://localhost:8780
     python scripts/utils/status.py --no-save
 """
 
@@ -41,7 +41,7 @@ def _local_status() -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Опрос статуса сервиса")
     ap.add_argument("--url", default=None,
-                    help="URL бэкенда (напр. http://localhost:8000/status/). "
+                    help="URL бэкенда (напр. http://localhost:8780/status/). "
                          "Если не задан — вызывает локально без HTTP.")
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     ap.add_argument("--no-save", action="store_true", help="Не сохранять на диск")

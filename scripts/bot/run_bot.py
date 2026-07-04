@@ -6,7 +6,7 @@
 
 Переменные окружения (из .env):
     BOT_TOKEN      — токен Telegram-бота (обязательно)
-    BACKEND_URL    — URL backend (default: http://localhost:8000)
+    BACKEND_URL    — URL backend (default: http://localhost:8780)
     ADMIN_IDS      — ID администраторов через запятую
     CONDA_ENV      — имя conda-окружения (используется в sh-скрипте)
 """

@@ -7,7 +7,7 @@
 Использование:
   python scripts/train/label_ui.py
   python scripts/train/label_ui.py --input .output/cameras/5_diff_yolo_boxes_low/run_XXX/crops
-  python scripts/train/label_ui.py --port 5050
+  python scripts/train/label_ui.py --port 8750
 
 Горячие клавиши в браузере:
   1-5  — присвоить класс (1=resident, 2=courier, 3=delivery, 4=utilities, 5=other)
@@ -32,7 +32,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from common.utils.access import IpAllowlist, is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
 
 _ENV = load_env_file(REPO_ROOT / ".env")
-_DEFAULT_PORT = int(_ENV.get("LABEL_UI_PORT", "5050"))
+_DEFAULT_PORT = int(_ENV.get("LABEL_UI_PORT", "8750"))
 
 DEFAULT_INPUT   = REPO_ROOT / ".output" / "pipeline" / "2_yolo_boxes_files"
 DEFAULT_LABELS  = REPO_ROOT / ".output" / "train" / "2_label_ui"

@@ -192,9 +192,9 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
 
 ```
 CAM_01_URL=rtsp://192.168.1.101:554/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
-CAM_02_URL=rtsp://<external_ip>:5541/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
-CAM_03_URL=rtsp://<external_ip>:5542/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
-CAM_04_URL=rtsp://<external_ip>:5543/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
+CAM_02_URL=rtsp://<external_ip>:8741/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
+CAM_03_URL=rtsp://<external_ip>:8742/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
+CAM_04_URL=rtsp://<external_ip>:8743/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 ```
 
 ### Перебор каналов/стримов (`2_probe_channels.py`)
@@ -345,9 +345,9 @@ Get-ChildItem "E:\_Home\Tony\pet projects\video\.output\cameras\5_1_diff_yolo_bo
 На внешнем роутере пробросить порты:
 
 ```
-порт 5541 → 192.168.X.X:554  (камера 2)
-порт 5542 → 192.168.X.X:554  (камера 3)
-порт 5543 → 192.168.X.X:554  (камера 4)
+порт 8741 → 192.168.X.X:554  (камера 2)
+порт 8742 → 192.168.X.X:554  (камера 3)
+порт 8743 → 192.168.X.X:554  (камера 4)
 ```
 
 Прод-сервер обращается к камерам через `<внешний_IP_роутера>:554X`.

@@ -6,7 +6,7 @@
 
 Usage:
     python scripts/agent/agent.py
-    python scripts/agent/agent.py --backend http://my-server:8000 --threshold 4
+    python scripts/agent/agent.py --backend http://my-server:8780 --threshold 4
     python scripts/agent/agent.py --heartbeat-sec 300
 """
 
@@ -191,7 +191,7 @@ def main() -> int:
 
     # backend из аргумента или env
     if not args.backend:
-        args.backend = os.environ.get("BACKEND_URL", "http://localhost:8000")
+        args.backend = os.environ.get("BACKEND_URL", "http://localhost:8780")
 
     # Параметры из env
     threshold = args.threshold or float(os.environ.get("MOTION_DIFF_THRESHOLD") or 10.0)
