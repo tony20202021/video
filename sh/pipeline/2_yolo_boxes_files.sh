@@ -30,8 +30,8 @@ S1DIR="$REPO/.output/pipeline/1_motion_diff"
 
 # Список прогонов для обработки
 INPUT_DIRS=(
-    "$S1DIR/run_20260704_002002_msk/images/20260704/cam_01_9_d/diff"
-    "$S1DIR/run_20260704_002002_msk/images/20260704/cam_01_9_u/diff"
+    "/home/tony/repos/video/.output/pipeline/pipeline/1_motion_diff/run_20260702_200143_msk/images/cam_01_9_d/diff"
+    "/home/tony/repos/video/.output/pipeline/pipeline/1_motion_diff/run_20260702_200143_msk/images/cam_01_9_u/diff"
 )
 
 echo "=== 2_yolo_boxes_files ==="

@@ -49,7 +49,7 @@ def export_onnx(model_name: str, out_path: Path) -> bool:
         print("Не удалось найти экспортированный .onnx файл.", file=sys.stderr)
         return False
 
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(out_path))
     print(f"Готово: {out_path}")
     return True
