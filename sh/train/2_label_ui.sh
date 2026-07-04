@@ -21,15 +21,18 @@ INPUT=""
 LABELS=""
 DATASET=""
 PORT=5050
-UNLABELED_ONLY=0
+UNLABELED_ONLY=1
+EXT="jpg"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --input)       INPUT="$2";   shift 2 ;;
-        --labels)      LABELS="$2";  shift 2 ;;
-        --dataset)     DATASET="$2"; shift 2 ;;
-        --port)        PORT="$2";    shift 2 ;;
+        --input)          INPUT="$2";   shift 2 ;;
+        --labels)         LABELS="$2";  shift 2 ;;
+        --dataset)        DATASET="$2"; shift 2 ;;
+        --port)           PORT="$2";    shift 2 ;;
+        --ext)            EXT="$2";     shift 2 ;;
         --unlabeled-only) UNLABELED_ONLY=1; shift ;;
+        --all)            UNLABELED_ONLY=0; shift ;;
         *) echo "[!] Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -67,7 +70,8 @@ if [[ ! -e "$INPUT" ]]; then
 fi
 
 args=("--input" "$INPUT" "--labels" "$LABELS" "--port" "$PORT")
-[[ -n "$DATASET" ]]       && args+=("--dataset" "$DATASET")
+[[ -n "$DATASET" ]]           && args+=("--dataset" "$DATASET")
+[[ -n "$EXT" ]]               && args+=("--ext" "$EXT")
 [[ "$UNLABELED_ONLY" -eq 1 ]] && args+=("--unlabeled-only")
 
 exec "$PYTHON" "$SCRIPT" "${args[@]}"

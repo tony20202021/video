@@ -41,9 +41,10 @@ if [[ -n "$REGEN_FROM" ]]; then
     dur_label="regen: $REGEN_FROM"
 elif [[ "$DURATION" -gt 0 ]]; then
     py_args+=("--duration" "$DURATION")
-    dur_label="${DURATION}s"
+    _hours=$(awk "BEGIN{printf \"%.1f\", $DURATION/3600}")
+    dur_label="${DURATION}s (${_hours}ч)"
 else
-    dur_label="∞"
+    dur_label="∞ (бесконечно)"
 fi
 
 for a in "${EXTRA[@]+"${EXTRA[@]}"}"; do

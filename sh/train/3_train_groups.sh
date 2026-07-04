@@ -19,16 +19,22 @@ EPOCHS=20
 BATCH_SIZE=32
 LR=1e-3
 VAL_SPLIT=0.2
+CLASS_WEIGHTS=1
+WEIGHTED_SAMPLING=1
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --data)       DATA="$2";       shift 2 ;;
-        --epochs)     EPOCHS="$2";     shift 2 ;;
-        --batch-size) BATCH_SIZE="$2"; shift 2 ;;
-        --lr)         LR="$2";         shift 2 ;;
-        --val-split)  VAL_SPLIT="$2";  shift 2 ;;
-        *)            EXTRA_ARGS+=("$1"); shift ;;
+        --data)               DATA="$2";             shift 2 ;;
+        --epochs)             EPOCHS="$2";           shift 2 ;;
+        --batch-size)         BATCH_SIZE="$2";       shift 2 ;;
+        --lr)                 LR="$2";               shift 2 ;;
+        --val-split)          VAL_SPLIT="$2";        shift 2 ;;
+        --class-weights)      CLASS_WEIGHTS=1;       shift ;;
+        --no-class-weights)   CLASS_WEIGHTS=0;       shift ;;
+        --weighted-sampling)  WEIGHTED_SAMPLING=1;   shift ;;
+        --no-weighted-sampling) WEIGHTED_SAMPLING=0; shift ;;
+        *)                    EXTRA_ARGS+=("$1");    shift ;;
     esac
 done
 
@@ -53,10 +59,14 @@ if [[ ! -e "$DATA" ]]; then
     exit 1
 fi
 
-exec "$PYTHON" "$SCRIPT" \
-    --data "$DATA" \
-    --epochs "$EPOCHS" \
-    --batch-size "$BATCH_SIZE" \
-    --lr "$LR" \
-    --val-split "$VAL_SPLIT" \
-    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+args=(
+    --data "$DATA"
+    --epochs "$EPOCHS"
+    --batch-size "$BATCH_SIZE"
+    --lr "$LR"
+    --val-split "$VAL_SPLIT"
+)
+[[ "$CLASS_WEIGHTS"     -eq 1 ]] && args+=(--class-weights)
+[[ "$WEIGHTED_SAMPLING" -eq 1 ]] && args+=(--weighted-sampling)
+
+exec "$PYTHON" "$SCRIPT" "${args[@]}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

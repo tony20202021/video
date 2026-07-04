@@ -1,10 +1,9 @@
-﻿# Запуск 4_motion_diff_low.py — motion detection, сохранение LOW-кадров и heartbeat
-# (без YOLO/ML — легковесный, для отладки порога и накопления кадров)
+# 1_motion_diff.ps1 — motion detection, сохранение LOW-кадров и heartbeat (без YOLO/ML)
 #
 # Использование:
-#   .\sh\cam4.ps1              — запустить бесконечно
-#   .\sh\cam4.ps1 7200         — запустить на 2 часа (секунды)
-#   .\sh\cam4.ps1 0 путь\к\run — перегенерировать графики из старого прогона
+#   .\sh\pipeline\1_motion_diff.ps1              — запустить бесконечно
+#   .\sh\pipeline\1_motion_diff.ps1 7200         — запустить на 2 часа (секунды)
+#   .\sh\pipeline\1_motion_diff.ps1 0 путь\к\run — перегенерировать графики из старого прогона
 #
 # Все настройки читаются из .env — менять только там, не здесь.
 
@@ -13,11 +12,11 @@ param(
     [string] $RegenFrom  = ""    # путь к run_xxx для --regen-from
 )
 
-# ─── Пути (менять только при переезде проекта) ─────────────────────────────────
-$CONDA_ENV  = "conda_video"
-$PY         = "$env:USERPROFILE\miniconda3\envs\$CONDA_ENV\python.exe"
-$PROJECT    = "E:\_Home\Tony\pet projects\video"
-$SCRIPT     = "$PROJECT\scripts\pipeline\1_motion_diff.py"
+$ErrorActionPreference = "Stop"
+$Repo      = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$CONDA_ENV = "conda_video"
+$PY        = "$env:USERPROFILE\miniconda3\envs\$CONDA_ENV\python.exe"
+$SCRIPT    = "$Repo\scripts\pipeline\1_motion_diff.py"
 
 # ─── Текущие значения из .env (для справки; менять в .env, не здесь) ──────────
 #   MOTION_DIFF_THRESHOLD = 3.3      # порог motion diff
@@ -51,7 +50,7 @@ $dur_label = if ($RegenFrom -ne "")  { "regen: $RegenFrom" }
              else                      { "∞ (бесконечно)" }
 
 Write-Host ""
-Write-Host "  cam4  •  conda:$CONDA_ENV  •  $dur_label" -ForegroundColor Green
+Write-Host "  1_motion_diff  •  conda:$CONDA_ENV  •  $dur_label" -ForegroundColor Green
 Write-Host ""
 
 & $PY @py_args
