@@ -16,7 +16,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string] $WatchDir = "E:\_Home\Tony\pet projects\video\.output\pipeline\1_motion_diff\run_20260702_200143_msk",
+    [string] $WatchDir = "E:\_Home\Tony\pet projects\video\.output\pipeline\1_motion_diff\run_20260704_002002_msk",
     [string] $RunRoot   = "",   # default: parent of WatchDir
     [string] $Step      = "",   # default: parent of RunRoot
     [string] $Run       = "",   # default: RunRoot.Name
