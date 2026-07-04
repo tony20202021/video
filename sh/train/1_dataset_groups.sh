@@ -27,17 +27,19 @@ fi
 CMD="$1"
 shift
 
+# CMD="apply"
+
 case "$CMD" in
     build|apply|check|add|status) ;;
     *) echo "[!] Unknown command: $CMD (expected: build, apply, check, add, status)" >&2; exit 1 ;;
 esac
 
-LABELS=""
+LABELS="/home/tony/repos/video/.data/groups/labels.json"
 VERSION=""
 OUT=""
-MOVE=0
-SRC=""
-DATASET=""
+MOVE=1
+SRC="/home/tony/repos/video/.data/groups/new"
+DATASET="/home/tony/repos/video/.data/groups/v1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

@@ -29,6 +29,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from common.utils.access import IpAllowlist, is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
+
+_ENV = load_env_file(REPO_ROOT / ".env")
+_DEFAULT_PORT = int(_ENV.get("LABEL_UI_PORT", "5050"))
+
 DEFAULT_INPUT   = REPO_ROOT / ".output" / "pipeline" / "2_yolo_boxes_files"
 DEFAULT_LABELS  = REPO_ROOT / ".output" / "train" / "2_label_ui"
 DEFAULT_DATASET = REPO_ROOT / ".data" / "groups"
@@ -743,12 +748,26 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                unlabeled_only: bool = False,
                classes: list[str] | None = None,
                dataset_dir: Path | None = None,
-               image_exts: set[str] | None = None) -> None:
-    from flask import Flask, jsonify, request, send_file, Response
+               image_exts: set[str] | None = None,
+               allowed_ips: IpAllowlist | None = None) -> None:
+    from flask import Flask, abort, jsonify, request, send_file, Response
+    import logging
     import shutil as _shutil
 
+    log = logging.getLogger(__name__)
     app = Flask(__name__)
     app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+
+    @app.before_request
+    def _check_client_ip():
+        if not is_ip_allowed(request.remote_addr, allowed_ips):
+            log_ip_denied(
+                log,
+                client_ip=request.remote_addr,
+                service="Label UI",
+                path=request.path,
+            )
+            abort(403)
 
     _exts = image_exts if image_exts is not None else IMAGE_EXTS
 
@@ -880,6 +899,10 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
     mode = "только неразмеченные" if unlabeled_only else "все"
     print(f"Кропов: {len(crops)} ({mode})  Уже размечено: {len(labels)}")
     print(f"Метки: {labels_path}")
+    if allowed_ips is not None:
+        print(f"Allowed IPs: {allowed_ips.summary()}")
+    else:
+        print("[!] ALLOWED_IPS не задан — доступ с любого IP", file=sys.stderr)
     print("Ctrl+C для остановки\n")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
@@ -900,7 +923,7 @@ def main() -> int:
                         help="Файл для сохранения меток (default: .output/train/2_label_ui/labels.json)")
     parser.add_argument("--dataset", type=Path, default=None,
                         help="Каталог датасета для чтения классов (default: .data/groups/последняя версия)")
-    parser.add_argument("--port",           type=int, default=5050)
+    parser.add_argument("--port",           type=int, default=_DEFAULT_PORT)
     parser.add_argument("--unlabeled-only", action="store_true",
                         help="Показывать только ещё не размеченные кропы")
     parser.add_argument("--ext", default="jpg",
@@ -916,11 +939,13 @@ def main() -> int:
 
     labels_path = args.labels or (DEFAULT_LABELS / "labels.json")
     image_exts = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
+    allowed_ips = parse_allowed_ips(_ENV.get("ALLOWED_IPS", ""))
     run_server(args.input, args.port, labels_path,
                unlabeled_only=args.unlabeled_only,
                classes=classes,
                dataset_dir=resolved_dataset,
-               image_exts=image_exts)
+               image_exts=image_exts,
+               allowed_ips=allowed_ips)
     return 0
 
 

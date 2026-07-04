@@ -23,30 +23,41 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 import logging
+
+from common.utils.access import is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
 
 logger = logging.getLogger(__name__)
 
-def _load_env() -> dict[str, str]:
-    env_file = REPO_ROOT / ".env"
-    result: dict[str, str] = {}
-    if not env_file.is_file():
-        return result
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            k, _, v = line.partition("=")
-            result[k.strip()] = v.strip()
-    return result
-
-
-_SERVER_ENV = _load_env()
+_SERVER_ENV = load_env_file(REPO_ROOT / ".env")
 API_KEY: str = os.environ.get("TRANSFER_API_KEY") or _SERVER_ENV.get("TRANSFER_API_KEY", "")
+ALLOWED_IPS = parse_allowed_ips(
+    os.environ.get("ALLOWED_IPS", _SERVER_ENV.get("ALLOWED_IPS", ""))
+)
 OUTPUT_DIR: Path = REPO_ROOT / ".output" / "transfer"
 
 app = FastAPI(title="Transfer Server", version="1.0")
+
+
+class _IPAllowlistMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        client = request.client.host if request.client else None
+        if not is_ip_allowed(client, ALLOWED_IPS):
+            key = request.headers.get("x-api-key", "")
+            log_ip_denied(
+                logger,
+                client_ip=client,
+                service="Transfer",
+                path=request.url.path,
+                api_key_valid=bool(API_KEY and key == API_KEY),
+            )
+            return JSONResponse({"detail": "Forbidden"}, status_code=403)
+        return await call_next(request)
+
+
+if ALLOWED_IPS is not None:
+    app.add_middleware(_IPAllowlistMiddleware)
 
 
 def _check_key(key: str) -> None:
@@ -216,6 +227,10 @@ def main() -> None:
 
     print(f"Transfer server: http://{args.host}:{args.port}")
     print(f"Output dir:      {OUTPUT_DIR}")
+    if ALLOWED_IPS is not None:
+        print(f"Allowed IPs:     {ALLOWED_IPS.summary()}")
+    else:
+        print("[!] ALLOWED_IPS не задан — доступ с любого IP", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port, log_config=_log_config())
 
 

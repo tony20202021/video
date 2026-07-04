@@ -23,6 +23,12 @@ if [[ -z "${TRANSFER_API_KEY:-}" ]]; then
     echo "[!] TRANSFER_API_KEY не задан — сервер открыт без аутентификации" >&2
 fi
 
+if [[ -z "${ALLOWED_IPS:-}" ]]; then
+    echo "[!] ALLOWED_IPS не задан — доступ с любого IP" >&2
+else
+    echo "Allowed IPs: $ALLOWED_IPS (+ localhost)"
+fi
+
 _HOST="${TRANSFER_HOST:-0.0.0.0}"
 _PORT="${TRANSFER_PORT:-8765}"
 

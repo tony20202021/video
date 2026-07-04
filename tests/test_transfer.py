@@ -24,6 +24,7 @@ def app_client(output_dir: Path, monkeypatch):
 
     monkeypatch.setattr(srv, "OUTPUT_DIR", output_dir)
     monkeypatch.setattr(srv, "API_KEY", "testkey")
+    monkeypatch.setattr(srv, "ALLOWED_IPS", None)
     return TestClient(srv.app)
 
 

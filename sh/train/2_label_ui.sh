@@ -11,16 +11,24 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+ENV_FILE="$REPO/.env"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/2_label_ui.py"
 
 export PYTHONIOENCODING=utf-8
 
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(grep -v '^\s*#' "$ENV_FILE" | grep '=' | grep -v '<')
+    set +a
+fi
+
 INPUT="$REPO/.data/groups/new"
 LABELS=""
 DATASET="$REPO/.data/groups/v1"
-PORT=5050
+PORT="${LABEL_UI_PORT:-5050}"
 UNLABELED_ONLY=1
 EXT="jpg"
 
