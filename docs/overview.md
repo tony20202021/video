@@ -134,32 +134,64 @@ video/
       api_client.py       — HTTP-клиент к backend API
       handlers/           — /start, /events, /persons, /cameras, /unclassified, /admin
       keyboards/          — inline-кнопки (пагинация, фильтры)
-  models/
-    yolov8n.onnx          — детекция людей (~13 MB, скачивается отдельно)
-  tests/
   scripts/
     cameras/
-      1_scan_cameras.py   — поиск камер в сети по портам
-      2_probe_channels.py — перебор channel×stream (XM/iCSee)
-      3_verify_cameras.py — проверка RTSP + сохранение кадра
-      4_motion_diff_low.py — frame diff по субпотоку, сохранение LOW-кадра
-      5_diff_yolo_boxes_low.py  — motion diff → YOLOv8n → кадры с людьми
-    setup_models.py       — скачать и конвертировать ONNX-модели
-    bot/run_bot.py        — запуск Telegram Bot
-  sh/                     — shell скрипты (start_bot.sh, psiphon_proxy.ps1)
+      1_scan_cameras.py       — поиск камер в сети по портам
+      2_probe_channels.py     — перебор channel×stream (XM/iCSee)
+      3_verify_cameras.py     — проверка RTSP + сохранение кадра
+    pipeline/
+      1_motion_diff.py        — motion diff, baseline/heartbeat кадры
+      2_yolo_boxes_files.py   — YOLOv8n инференс → кропы людей (watch-режим)
+      3_classify_groups.py    — Модель 1: классификация кропов по группам
+      4_identify_residents.py — Модель 2: идентификация жителей
+      5_track_direction.py    — определение направления движения
+    train/
+      dataset_groups.py       — управление датасетом: build/apply/check/add/status
+      2_label_ui.py           — веб-разметчик кропов (Flask)
+      3_train_groups.py       — обучение Модели 1
+      5_train_residents.py    — обучение Модели 2
+    transfer/
+      server.py               — FastAPI-сервер приёма файлов (атомарная запись)
+      client.py               — CLI-клиент (send / watch / health / runs)
+  sh/
+    pipeline/
+      1_motion_diff.sh/.ps1   — запуск 1_motion_diff.py
+      2_yolo_boxes_files.sh/.ps1 — запуск 2_yolo_boxes_files.py (watch + delete-after)
+      3_classify_groups.sh/.ps1
+      4_identify_residents.sh/.ps1
+    train/
+      1_1_dataset_groups_check.sh — watch: проверка 2_yolo_boxes_files → new/ (дубли против датасета)
+      1_2_dataset_groups_check_new.sh — watch: дедупликация внутри new/ по имени файла
+      1_dataset_groups.ps1/.sh  — ручное управление датасетом (Windows/Linux)
+      2_label_ui.ps1/.sh        — запуск веб-разметчика
+      3_train_groups.ps1/.sh    — обучение Модели 1
+    transfer/
+      1_start_server.sh/.ps1    — запуск Transfer-сервера
+      2_send.sh/.ps1            — запуск Transfer-клиента (watch)
+  tests/
+    test_atomic.py              — атомарные записи (imwrite / copy)
+    test_adaptive_rate.py       — AdaptiveRateLimiter
+    test_transfer.py            — Transfer server API
+    test_motion_utils.py        — утилиты motion-цикла
+    test_access.py              — IP whitelist
+    test_smoke.py               — загрузка YOLO, формат выхода
+    test_ml_pipeline.py         — ML-пайплайн classify → identify
+    (+ другие)
   .output/                — результаты скриптов (в .gitignore)
-    1_scan_cameras/       — отчёты 1_scan_cameras.py
-    2_probe_channels/     — кадры и отчёты 2_probe_channels.py
-    3_cam_verify/         — кадры и отчёты 3_verify_cameras.py
-    4_motion_diff_low/    — baseline и кадры движения 4_motion_diff_low.py
-    5_diff_yolo_boxes_low/ — кадры с людьми (bbox) 5_diff_yolo_boxes_low.py
+  .data/
+    groups/
+      v1/                 — датасет Модели 1 (по классам)
+      new/                — новые кропы для разметки
+  .models/
+    detect/yolov8n.onnx   — детекция людей (~13 MB)
+    classify/v*.onnx      — Модель 1 (классификатор групп)
+    identify/v*.onnx      — Модель 2 (идентификатор жителей)
   docs/
     overview.md           — этот файл
     setup.md              — Python, conda, окружение, requirements.txt
     cameras.md            — камеры, сетевой доступ, скрипты
-    ml.md                 — ML пайплайн и логика обработки видео
-    database.md           — схема MongoDB
-    services.md           — API сервисов, конфиг, экспорт
+    ml.md                 — ML пайплайн, датасет, обучение
+    transfer.md           — передача файлов клиент → сервер
+    testing.md            — тестирование
   .env                    — RTSP URL и секреты (в .gitignore)
-  .config.md              — инфраструктура: серверы, камеры, сети
 ```

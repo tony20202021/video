@@ -41,12 +41,14 @@ conda run -n conda_video pytest tests/test_motion_utils.py -s
 
 | Файл | Описание | Требования |
 |------|----------|------------|
+| `test_atomic.py` | Атомарные записи: imwrite() и copy() через .tmp → rename | нет |
+| `test_adaptive_rate.py` | AdaptiveRateLimiter: адаптация скорости по CPU | нет |
 | `test_motion_utils.py` | Утилиты motion-цикла: diff, plausibility, redact_url | нет |
 | `test_rtcp_time.py` | Парсинг RTCP SR пакетов, NTP конвертация | нет |
 | `test_osd_time.py` | Извлечение OSD-времени с кадра камеры | нет |
 | `test_ml_pipeline.py` | ML-пайплайн: classify → identify, работает без моделей | нет |
 | `test_access.py` | IP whitelist: одиночные IP, CIDR, localhost | нет |
-| `test_transfer.py` | Transfer server: API key, IP allowlist, POST /file | нет |
+| `test_transfer.py` | Transfer server: API key, IP allowlist, POST /file, атомарность | нет |
 | `test_person_detection_stub.py` | Заглушки детекции без ONNX | нет |
 | `test_smoke.py` | Загрузка YOLO, формат выхода, детекция на baseline-кадрах | `yolov8n.onnx` |
 | `test_person_detection.py` | Детекция людей на реальных кадрах | `yolov8n.onnx` |

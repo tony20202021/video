@@ -14,7 +14,13 @@
 
 ## Классы Модели 1
 
-Три класса (папки датасета = имена классов):
+Единственный источник правды — `src/common/utils/classes.py`:
+
+```python
+GROUP_CLASSES = ["1_resident", "2_delivery", "3_utilities", "4_guest"]
+```
+
+Импортируется во всех скриптах: `from common.utils.classes import GROUP_CLASSES`.
 
 | Класс | Описание |
 |-------|----------|
@@ -144,33 +150,61 @@ for r in results:
 
 ## Workflow разметки и обучения Модели 1
 
+Автоматические watch-скрипты (запускать параллельно с пайплайном):
+
+```bash
+# Терминал A — детекция + кропы
+./sh/pipeline/2_yolo_boxes_files.sh        # watch + delete-after по умолчанию
+
+# Терминал B — проверка кропов на дубли с датасетом → new/
+./sh/train/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files → .data/groups/new/
+
+# Терминал C — дедупликация внутри new/ (одинаковые имена из разных прогонов)
+./sh/train/1_2_dataset_groups_check_new.sh # watch: .data/groups/new/
 ```
-1. pipeline/2_yolo_boxes_files → кропы в .output/pipeline/2_yolo_boxes_files/run_XXX/
 
-2. Добавить в датасет:
-   .\sh\train\1_dataset_groups.ps1 add -Src .output\pipeline\2_yolo_boxes_files\run_XXX -Dataset .data\groups\v1
+Полный цикл разметки и обучения:
 
-3. Проверить на дубли с уже размеченным:
-   .\sh\train\1_dataset_groups.ps1 check -Src .data\groups\v1\new -Dataset .data\groups\v1
-   → уникальные → new/unique/, дубли → new/double/
-   → пустые подкаталоги Src удаляются автоматически
+```
+1. Накопить кропы:
+   2_yolo_boxes_files.sh + 1_1_dataset_groups_check.sh + 1_2_dataset_groups_check_new.sh
+   → уникальные кропы в .data/groups/new/
 
-4. Разметить:
-   .\sh\train\2_label_ui.ps1          # Windows
+2. Разметить:
    ./sh/train/2_label_ui.sh           # Linux (сервер)
-   Порт — `LABEL_UI_PORT` в `.env` (по умолчанию 8750).
+   .\sh\train\2_label_ui.ps1          # Windows
+   Порт — LABEL_UI_PORT в .env (по умолчанию 8750).
+   Галерея /gallery: SHIFT+click для выделения диапазона (в рамках одной секции).
 
-5. Применить разметку в датасет:
+3. Применить разметку в датасет:
+   ./sh/train/1_dataset_groups.sh apply --move
    .\sh\train\1_dataset_groups.ps1 apply -Move
-   → файлы перемещаются из new/ в 1_resident/, 2_delivery/, 3_utilities/
-   → если new/ стала пустой — удаляется автоматически
+   → файлы из new/ → 1_resident/, 2_delivery/, … по меткам
 
-6. Обучить:
-   .\sh\train\3_train_groups.ps1
+4. Обучить:
+   .\sh\train\3_train_groups.ps1        # Windows
+   ./sh/train/3_train_groups.sh         # Linux
    → .models/classify/v<N>.onnx
 
-7. (опционально) Проверить промежуточный результат во время обучения:
+5. (опционально) Проверить во время обучения:
    python scripts/train/3a_eval_pt.py
+```
+
+Ручные операции с датасетом (при необходимости):
+
+```bash
+# Добавить кропы из прогона в new/ (с проверкой дублей)
+python scripts/train/dataset_groups.py add \
+    --src .output/pipeline/2_yolo_boxes_files/run_XXX \
+    --dataset .data/groups/v1
+
+# Проверить new/ против датасета (вручную)
+python scripts/train/dataset_groups.py check \
+    --src .data/groups/new \
+    --dataset .data/groups/v1
+
+# Статус датасета
+python scripts/train/dataset_groups.py status --dataset .data/groups/v1
 ```
 
 ---
@@ -179,11 +213,13 @@ for r in results:
 
 | Скрипт | Назначение |
 |--------|-----------|
-| `sh/train/1_dataset_groups.ps1` | Управление датасетом: `build / apply / check / add / status` |
+| `sh/train/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes → new/ (дубли против датасета) |
+| `sh/train/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри new/ по имени файла |
+| `sh/train/1_dataset_groups.ps1/.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
 | `sh/train/2_label_ui.ps1` | Запуск веб-разметчика кропов (Windows) |
 | `sh/train/2_label_ui.sh` | То же на Linux-сервере |
-| `sh/train/3_train_groups.ps1` | Обучение Модели 1 |
-| `sh/train/5_train_residents.ps1` | Обучение Модели 2 |
+| `sh/train/3_train_groups.ps1/.sh` | Обучение Модели 1 |
+| `sh/train/5_train_residents.ps1/.sh` | Обучение Модели 2 |
 
 ---
 
@@ -213,7 +249,7 @@ for r in results:
 - `http://<host>:<port>/gallery` — галерея сессии (все кропы, сгруппированы по метке)
 - `http://<host>:<port>/gallery/dataset` — галерея датасета (файлы из папок датасета, перемещение между классами)
 
-**Горячие клавиши:**
+**Горячие клавиши (разметчик `/`):**
 
 | Клавиша | Действие |
 |---------|----------|
@@ -223,6 +259,19 @@ for r in results:
 | `→` | следующий без разметки |
 | `←` | предыдущий |
 | `U` | пропустить (unknown) |
+
+**Галерея `/gallery` — множественный выбор:**
+
+| Действие | Результат |
+|----------|-----------|
+| Клик по ✓ | выбрать / снять одну картинку |
+| Ctrl+клик | то же |
+| Shift+клик | диапазон в пределах секции (от последнего выбранного до текущего) |
+| ☑ Все | выбрать все |
+| ☐ Снять | снять выделение |
+
+Диапазон Shift+клик ограничен визуальным порядком: если между двумя картинками есть уже
+размеченные (они стоят в другой секции), в выделение они не попадут.
 
 ---
 

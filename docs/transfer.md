@@ -244,8 +244,45 @@ TRANSFER_ADAPT_FACTOR=2.0    # коэффициент изменения ско�
 
 ---
 
+## Атомарная запись на сервере
+
+Файл пишется через временное имя `.tmp`, затем `os.rename()`:
+
+```python
+tmp = dest_file.with_name(dest_file.stem + ".tmp" + dest_file.suffix)
+with open(tmp, "wb") as fh:
+    async for chunk in request.stream():
+        fh.write(chunk)
+tmp.rename(dest_file)   # атомарно: файл появляется целиком или не появляется
+```
+
+Это исключает ситуацию, когда YOLO-сканнер подхватывает файл, запись которого ещё
+не завершена. То же правило применяется во всём пайплайне:
+`common.utils.atomic.imwrite()` и `common.utils.atomic.copy()` оборачивают
+`cv2.imwrite` и `shutil.copy2` аналогичным образом.
+
+---
+
+## Формат логов
+
+Сервер и клиент используют единый формат:
+
+```
+HH:MM:SS  LEVEL     сообщение
+```
+
+Uvicorn access-лог:
+
+```
+HH:MM:SS  ACCESS    127.0.0.1:PORT - "POST /file HTTP/1.1" 200
+```
+
+Настраивается в `main()` через `_log_config()` перед запуском uvicorn.
+
+---
+
 ## Тесты
 
 ```bash
-pytest tests/test_access.py tests/test_transfer.py tests/test_adaptive_rate.py -v
+pytest tests/test_access.py tests/test_transfer.py tests/test_adaptive_rate.py tests/test_atomic.py -v
 ```
