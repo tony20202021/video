@@ -31,7 +31,7 @@ _ef() {
 S2DIR="$REPO/.output/pipeline/2_yolo_boxes_files/images"
 OUT_DIR="$REPO/.data/groups/v1/inference"
 CLASSIFY_CONF="$(_ef CLASSIFY_CONF 0.65)"
-POLL_SEC=30
+POLL_SEC=60
 ONCE=0
 EXTRA_ARGS=()
 

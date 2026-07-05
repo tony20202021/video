@@ -362,9 +362,8 @@ def main() -> int:
             heartbeat_sec = 600.0
             heartbeat_from = "встроенное 600 с"
 
-    from datetime import datetime as _dt
-    _base     = args.output or DEFAULT_OUTPUT_PARENT
-    _today    = _dt.now(MSK).strftime("%Y%m%d")
+    _base      = args.output or DEFAULT_OUTPUT_PARENT
+    _today     = ts_for_file()[:8]
     images_dir = _base / "images"
     meta_dir   = _base / "meta" / _today
     images_dir.mkdir(parents=True, exist_ok=True)

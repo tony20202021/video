@@ -37,7 +37,7 @@ INPUT_DIRS=(
 
 # Параметры watch-режима
 WATCH=1
-POLL_SEC=30
+POLL_SEC=60
 DELETE_AFTER=1
 EXTRA_ARGS=()
 
