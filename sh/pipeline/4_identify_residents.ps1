@@ -1,4 +1,4 @@
-# 6_3_identify_residents_files.ps1 — офлайн идентификация жителей из кропов 6_2 (Модель 2)
+﻿# 6_3_identify_residents_files.ps1 — офлайн идентификация жителей из кропов 6_2 (Модель 2)
 #
 # Usage:
 #   .\sh\cameras\6_3_identify_residents_files.ps1

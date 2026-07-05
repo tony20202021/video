@@ -1,4 +1,4 @@
-# 5_train_residents.ps1 — обучение идентификатора жителей (Модель 2)
+﻿# 5_train_residents.ps1 — обучение идентификатора жителей (Модель 2)
 #
 # Usage:
 #   .\sh\train\5_train_residents.ps1 -Data ".output\training\export_identify.zip"

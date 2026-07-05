@@ -1,4 +1,4 @@
-# 2_send.ps1 — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
+﻿# 2_send.ps1 — постоянно следит за каталогом и отправляет новые файлы на Transfer Server
 #
 # Usage:
 #   .\sh\transfer\2_send.ps1

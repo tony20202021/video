@@ -1,4 +1,4 @@
-# 6_2_classify_groups_files.ps1 — офлайн классификация кропов по группам (Модель 1)
+﻿# 6_2_classify_groups_files.ps1 — офлайн классификация кропов по группам (Модель 1)
 #
 # Usage:
 #   .\sh\cameras\6_2_classify_groups_files.ps1

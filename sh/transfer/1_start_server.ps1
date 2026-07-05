@@ -1,4 +1,4 @@
-# 1_start_server.ps1 — запуск Transfer Server на Windows
+﻿# 1_start_server.ps1 — запуск Transfer Server на Windows
 #
 # Usage:
 #   .\sh\transfer\1_start_server.ps1

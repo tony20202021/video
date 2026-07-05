@@ -1,4 +1,4 @@
-# 2_yolo_boxes_files.ps1 — YOLO-переобработка прогонов из 1_motion_diff
+﻿# 2_yolo_boxes_files.ps1 — YOLO-переобработка прогонов из 1_motion_diff
 #
 # Batch (по умолчанию):
 #   .\sh\pipeline\2_yolo_boxes_files.ps1

@@ -1,4 +1,4 @@
-# 1_motion_diff.ps1 — motion detection, сохранение LOW-кадров и heartbeat (без YOLO/ML)
+﻿# 1_motion_diff.ps1 — motion detection, сохранение LOW-кадров и heartbeat (без YOLO/ML)
 #
 # Использование:
 #   .\sh\pipeline\1_motion_diff.ps1              — запустить бесконечно

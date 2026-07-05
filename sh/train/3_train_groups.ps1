@@ -1,4 +1,4 @@
-# 2_train_groups.ps1 — обучение классификатора группы (Модель 1)
+﻿# 2_train_groups.ps1 — обучение классификатора группы (Модель 1)
 #
 # Usage:
 #   .\sh\train\2_train_groups.ps1 -Data ".output\training\export_classify.zip"
