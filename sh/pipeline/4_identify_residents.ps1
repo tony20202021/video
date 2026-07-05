@@ -37,6 +37,7 @@ $Script = "$Repo\scripts\pipeline\4_identify_residents.py"
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Выход скрипта 3_classify_groups — конкретные run_*
 $S3Dir = "$Repo\.output\pipeline\3_classify_groups"

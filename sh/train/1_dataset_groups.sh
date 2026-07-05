@@ -20,21 +20,18 @@ SCRIPT="$REPO/scripts/train/dataset_groups.py"
 export PYTHONIOENCODING=utf-8
 
 if [[ $# -eq 0 ]]; then
-    echo "Usage: $(basename "$0") <build|add|status> [options]" >&2
-    exit 1
+    CMD="apply"
+else
+    CMD="$1"
+    shift
 fi
-
-CMD="$1"
-shift
-
-# CMD="apply"
 
 case "$CMD" in
     build|apply|check|add|status) ;;
     *) echo "[!] Unknown command: $CMD (expected: build, apply, check, add, status)" >&2; exit 1 ;;
 esac
 
-LABELS="/home/tony/repos/video/.data/groups/labels.json"
+LABELS="/home/tony/repos/video/.data/groups/new/labels.json"
 VERSION=""
 OUT=""
 MOVE=1

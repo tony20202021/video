@@ -25,6 +25,7 @@ $Script = "$Repo\scripts\train\3_train_groups.py"
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Разворачиваем относительный путь к данным от корня репо
 if (-not [System.IO.Path]::IsPathRooted($Data)) {

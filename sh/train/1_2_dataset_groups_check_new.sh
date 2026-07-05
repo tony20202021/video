@@ -59,8 +59,6 @@ _dedup() {
         return 0
     fi
 
-    $(_ts)  # just warm up subshell, no output needed
-
     declare -A seen
     while IFS= read -r f; do
         local name

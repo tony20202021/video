@@ -43,6 +43,7 @@ if ($null -eq $Nms)        { $Nms        = _ef "YOLO_NMS"     0.45 }
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $Env    = "conda_video"
 $Python = "$env:USERPROFILE\miniconda3\envs\$Env\python.exe"
