@@ -39,7 +39,7 @@ $Script = "$Repo\scripts\train\dataset_groups.py"
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Разворачиваем относительные пути
 function Abs([string]$p) {

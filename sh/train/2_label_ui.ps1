@@ -23,7 +23,7 @@ $Script = "$Repo\scripts\train\2_label_ui.py"
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Ищем последний run_* в 5_2 если Input не задан
 if (-not $InputDir) {

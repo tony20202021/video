@@ -34,7 +34,7 @@ $Script = "$Repo\scripts\transfer\client.py"
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 if (-not $WatchDir) {
     $WatchDir = Join-Path $Repo ".output\pipeline\1_motion_diff"

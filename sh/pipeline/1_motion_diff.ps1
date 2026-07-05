@@ -32,7 +32,7 @@ $EXTRA = @(
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $py_args = [System.Collections.Generic.List[string]]::new()
 $py_args.Add($SCRIPT)

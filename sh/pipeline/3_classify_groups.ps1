@@ -35,7 +35,7 @@ $Script = "$Repo\scripts\pipeline\3_classify_groups.py"
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # Выход скрипта 2_yolo_boxes_files — конкретные run_*
 $S2Dir = "$Repo\.output\pipeline\2_yolo_boxes_files"

@@ -45,7 +45,7 @@ if ($ApiKey) {
 
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 Write-Host "=== Transfer Server (Windows) ===" -ForegroundColor Cyan
 Write-Host "Repo:   $Repo"
