@@ -401,6 +401,7 @@ def cmd_watch(args) -> int:
                     logger.info(msg)
 
             if not new_files:
+                logger.info("Файлов нет — ожидание %.0fs…", poll_sec)
                 time.sleep(poll_sec)
 
 
