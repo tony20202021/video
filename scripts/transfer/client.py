@@ -30,6 +30,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from common.utils.access import load_env_file
 from common.utils.adaptive_rate import AdaptiveRateLimiter
 from common.utils.log_setup import setup_logging
 
@@ -37,18 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 def _load_env() -> dict[str, str]:
-    env_file = REPO_ROOT / ".env"
-    result: dict[str, str] = {}
-    if not env_file.is_file():
-        return result
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            k, _, v = line.partition("=")
-            result[k.strip()] = v.strip()
-    return result
+    return load_env_file(REPO_ROOT / ".env")
 
 
 def _get_server_and_key(args) -> tuple[str, str]:
