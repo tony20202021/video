@@ -14,10 +14,9 @@ from typing import Any
 import cv2
 import numpy as np
 
+from common.utils.classes import GROUP_CLASSES as CLASSES
 from ml.classify import GroupClassifier
 from ml.identify import PersonIdentifier
-
-CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
 
 _DEFAULT_CLASSIFY_THRESH = 0.65
 _DEFAULT_IDENTIFY_THRESH = 0.70

@@ -73,6 +73,7 @@ _CLASS_COLORS = {
     "1_resident":  "#228833",
     "2_delivery":  "#0055cc",
     "3_utilities": "#770077",
+    "4_guest":     "#cc7700",
     "uncertain":   "#dddddd",
     "unknown":     "#aaaaaa",
 }

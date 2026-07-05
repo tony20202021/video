@@ -13,10 +13,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.db import get_db
+from common.utils.classes import GROUP_CLASSES as CLASSES
 
 MSK = timezone(timedelta(hours=3))
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
 router = APIRouter(prefix="/training", tags=["training"])
 
 

@@ -29,7 +29,9 @@ from pathlib import Path
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLASSES = ["1_resident", "2_delivery", "3_utilities"]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from common.utils.classes import GROUP_CLASSES as CLASSES
 NUM_CLASSES = len(CLASSES)
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 

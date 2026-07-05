@@ -50,11 +50,13 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from common.utils.classes import GROUP_CLASSES as MAIN_CLASSES
+
 DEFAULT_DATA = REPO_ROOT / ".data" / "groups"
 DEFAULT_LABELS = REPO_ROOT / ".output" / "train" / "2_label_ui" / "labels.json"
 MSK = timezone(timedelta(hours=3))
-
-MAIN_CLASSES = ["1_resident", "2_delivery", "3_utilities"]
 EXTRA_CLASSES = ["skip", "unknown", "new"]
 ALL_CLASSES = MAIN_CLASSES + EXTRA_CLASSES
 

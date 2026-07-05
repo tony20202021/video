@@ -16,7 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-CLASSES = ["1_resident", "2_delivery", "3_utilities"]
+from common.utils.classes import GROUP_CLASSES as CLASSES
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 DEFAULT_CHECKPOINT = REPO_ROOT / ".output" / "train" / "3_train_groups" / "run" / "best.pt"
 DEFAULT_DATA = REPO_ROOT / ".data" / "groups" / "v1"

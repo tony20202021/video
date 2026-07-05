@@ -1,4 +1,4 @@
-"""Классификация группы человека: 1_resident / 2_delivery / 3_utilities / 99_other.
+"""Классификация группы человека: 1_resident / 2_delivery / 3_utilities / 4_guest.
 
 Модель: MobileNetV3-Small, обученная на кропах людей.
 Вход:  BGR кроп произвольного размера → ресайз до 224×224
@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-CLASSES = ["1_resident", "2_delivery", "3_utilities", "99_other"]
+from common.utils.classes import GROUP_CLASSES as CLASSES
 INPUT_SIZE = 224
 # ImageNet mean/std — стандарт для MobileNetV3
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -65,7 +65,7 @@ class GroupClassifier:
         raw = self._sess.run(None, {self._input_name: blob})[0][0]
         probs = _softmax(raw)
         idx = int(np.argmax(probs))
-        prob_map = {cls: float(probs[i]) for i, cls in enumerate(CLASSES)}
+        prob_map = {cls: float(p) for cls, p in zip(CLASSES, probs)}
         return CLASSES[idx], float(probs[idx]), prob_map
 
 

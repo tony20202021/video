@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import queue
 import threading
 import time
@@ -25,6 +26,8 @@ import cv2
 
 from common.utils.motion_utils import open_cap
 from common.utils.time_msk import ts_for_file
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Tee ──────────────────────────────────────────────────────────────────────
@@ -431,7 +434,7 @@ def save_run_stats(frame_log: list, pts_log: list, saves_log: list,
 
     path = out_dir / "run_stats.json"
     path.write_text(_json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"  run_stats.json → {path}")
+    logger.info("run_stats.json → %s", path)
 
 
 # ─── CPU chart helper ─────────────────────────────────────────────────────────
@@ -506,7 +509,7 @@ def save_cpu_csv(cpu_log: list, out_dir: Path) -> None:
         w = _csv.writer(f)
         w.writerow(["mono_s", "ts_msk", "cpu_pct", "freq_mhz_pdh", "freq_mhz_step", "cpu_utility_pct"])
         w.writerows(cpu_log)
-    print(f"  cpu.csv:    {len(cpu_log)} замеров")
+    logger.info("cpu.csv:    %d замеров", len(cpu_log))
 
 
 # ─── pts_chart.png ────────────────────────────────────────────────────────────
@@ -611,7 +614,7 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
     path = out_dir / "pts_chart.png"
     plt.savefig(str(path), dpi=120)
     plt.close()
-    print(f"  pts_chart.png → {path}")
+    logger.info("pts_chart.png → %s", path)
 
 
 # ─── charts.png ───────────────────────────────────────────────────────────────
@@ -890,7 +893,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     chart_path = out_dir / "charts.png"
     plt.savefig(str(chart_path), dpi=120)
     plt.close()
-    print(f"  charts.png → {chart_path}")
+    logger.info("charts.png → %s", chart_path)
 
 
 # ─── OSD helpers ──────────────────────────────────────────────────────────────
@@ -940,7 +943,7 @@ def regen_osd_from_images(run_dir: Path) -> list[list]:
         return []
 
     if not low_templates_complete():
-        print(f"  [OSD] Построение LOW-шаблонов из {len(u_imgs)} изображений…")
+        logger.info("[OSD] Построение LOW-шаблонов из %d изображений…", len(u_imgs))
         added_total: set[str] = set()
         for img_path in u_imgs:
             info = parse_img_filename(img_path.stem)
@@ -954,7 +957,7 @@ def regen_osd_from_images(run_dir: Path) -> list[list]:
             added_total.update(new.keys())
             if low_templates_complete():
                 break
-        print(f"  [OSD] Шаблоны: {sorted(_LOW_TEMPLATES.keys())} ({len(_LOW_TEMPLATES)}/12)")
+        logger.info("[OSD] Шаблоны: %s (%d/12)", sorted(_LOW_TEMPLATES.keys()), len(_LOW_TEMPLATES))
 
     from datetime import datetime as _dt
     osd_log: list[list] = []
@@ -986,7 +989,7 @@ def regen_osd_from_images(run_dir: Path) -> list[list]:
         osd_log.append([wall_ts_str, cam_name, img_type, osd_ts_str,
                         "" if drift_sec is None else drift_sec])
 
-    print(f"  [OSD] Извлечено: {ok_count}/{len(u_imgs)} меток")
+    logger.info("[OSD] Извлечено: %d/%d меток", ok_count, len(u_imgs))
 
     if osd_log:
         csv_path = run_dir / "osd_times.csv"
@@ -994,7 +997,7 @@ def regen_osd_from_images(run_dir: Path) -> list[list]:
             writer = csv.writer(f)
             writer.writerow(["wall_ts", "cam", "img_type", "osd_ts", "drift_sec"])
             writer.writerows(osd_log)
-        print(f"  osd_times.csv → {csv_path}")
+        logger.info("osd_times.csv → %s", csv_path)
 
     return osd_log
 
@@ -1013,7 +1016,7 @@ def save_osd_chart(osd_log: list, out_dir: Path) -> None:
 
     rows_with_osd = [r for r in osd_log if r[3]]
     if not rows_with_osd:
-        print("  [OSD] Нет распознанных меток — график пропущен")
+        logger.info("[OSD] Нет распознанных меток — график пропущен")
         return
 
     def _parse(s: str) -> float:
@@ -1070,4 +1073,4 @@ def save_osd_chart(osd_log: list, out_dir: Path) -> None:
     chart_path = out_dir / "osd_chart.png"
     plt.savefig(str(chart_path), dpi=120)
     plt.close()
-    print(f"  osd_chart.png → {chart_path}")
+    logger.info("osd_chart.png → %s", chart_path)

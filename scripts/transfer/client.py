@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -30,6 +31,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.adaptive_rate import AdaptiveRateLimiter
+from common.utils.log_setup import setup_logging
+
+logger = logging.getLogger(__name__)
 
 
 def _load_env() -> dict[str, str]:
@@ -52,7 +56,7 @@ def _get_server_and_key(args) -> tuple[str, str]:
     server = args.server or os.environ.get("TRANSFER_SERVER") or env.get("TRANSFER_SERVER", "")
     key    = args.key    or os.environ.get("TRANSFER_API_KEY") or env.get("TRANSFER_API_KEY", "")
     if not server:
-        print("[!] Укажи --server или задай TRANSFER_SERVER в .env", file=sys.stderr)
+        logger.error("Укажи --server или задай TRANSFER_SERVER в .env")
         sys.exit(1)
     return server.rstrip("/"), key
 
@@ -217,7 +221,7 @@ def _send_file(
     except FileNotFoundError:
         return True, (time.monotonic() - t0) * 1000  # удалён между сканом и чтением — нормально
     except Exception as e:
-        print(f"  [!] {rel}: {e}", file=sys.stderr)
+        logger.warning("[!] %s: %s", rel, e)
         return False, (time.monotonic() - t0) * 1000
 
 
@@ -227,7 +231,7 @@ def cmd_send(args) -> int:
 
     src = Path(args.src).resolve()
     if not src.is_dir():
-        print(f"[!] Не найдено: {src}", file=sys.stderr)
+        logger.error("[!] Не найдено: %s", src)
         return 1
 
     step   = src.parent.name
@@ -240,16 +244,15 @@ def cmd_send(args) -> int:
     files = sorted(f for f in src.rglob("*") if f.is_file() and f.suffix.lower() in exts)
 
     if not files:
-        print(f"  Нет файлов с расширениями {exts} в {src}")
+        logger.info("Нет файлов с расширениями %s в %s", exts, src)
         return 0
 
     base_headers = {"X-Api-Key": key, "Content-Type": "application/octet-stream"}
 
-    print(f"  Источник: {src}")
-    print(f"  Parent:  {parent}  Шаг: {step}  Прогон: {run}")
-    print(f"  Сервер:  {server}")
-    print(f"  Файлов:  {len(files)}")
-    print()
+    logger.info("Источник: %s", src)
+    logger.info("Parent:  %s  Шаг: %s  Прогон: %s", parent, step, run)
+    logger.info("Сервер:  %s", server)
+    logger.info("Файлов:  %d", len(files))
 
     limiter = _make_limiter(env)
     n_ok = n_fail = 0
@@ -262,15 +265,15 @@ def cmd_send(args) -> int:
             ok, work_ms = _send_file(http, server, base_headers, f, routing)
             if ok:
                 n_ok += 1
-                print(f"  [{i}/{len(files)}] ↑ {rel}  ({work_ms:.0f}мс)")
+                logger.info("[%d/%d] ↑ %s  (%.0fмс)", i, len(files), rel, work_ms)
             else:
                 n_fail += 1
             sleep_ms = limiter.sleep(t0)
             msg = limiter.adapt(work_ms, sleep_ms)
             if msg:
-                print(msg)
+                logger.info(msg)
 
-    print(f"\nИтого: {n_ok} отправлено, {n_fail} ошибок")
+    logger.info("Итого: %d отправлено, %d ошибок", n_ok, n_fail)
     return 0 if n_fail == 0 else 1
 
 
@@ -304,15 +307,14 @@ def cmd_watch(args) -> int:
         scope_parent = args.parent or watch_dir.parent.name
         scope_step = args.step or watch_dir.name
 
-    print("=== transfer watch ===")
-    print(f"  Каталог: {watch_dir}")
-    print(f"  Parent:  {scope_parent}  Шаг: {scope_step}  Run: {run_hint}")
-    print(f"  Сервер:  {server}")
-    print(f"  Расш.:   {', '.join(sorted(exts))}")
     _max_r = f"{1/limiter.min_interval:.1f}" if limiter.min_interval > 0 else "∞"
     _min_r = f"{1/limiter.max_interval:.2f}" if limiter.max_interval > 0 else "0"
-    print(f"  Скор.:   max={_max_r}/с  min={_min_r}/с  poll={poll_sec}с")
-    print()
+    logger.info("=== transfer watch ===")
+    logger.info("Каталог: %s", watch_dir)
+    logger.info("Parent:  %s  Шаг: %s  Run: %s", scope_parent, scope_step, run_hint)
+    logger.info("Сервер:  %s", server)
+    logger.info("Расш.:   %s", ', '.join(sorted(exts)))
+    logger.info("Скор.:   max=%s/с  min=%s/с  poll=%ss", _max_r, _min_r, poll_sec)
 
     n_sent = n_failed = 0
     _fail_count: dict[Path, int] = {}   # consecutive failures per file
@@ -330,12 +332,12 @@ def cmd_watch(args) -> int:
                     if f.is_file() and f.suffix.lower() in exts
                 )
             except Exception as e:
-                print(f"[!] scan: {e}", file=sys.stderr)
+                logger.warning("scan: %s", e)
                 time.sleep(poll_sec)
                 continue
 
             if new_files:
-                print(f"  новый батч: {len(new_files)} файлов")
+                logger.info("новый батч: %d файлов", len(new_files))
 
             now = time.monotonic()
             for _file_idx, f in enumerate(new_files, 1):
@@ -373,13 +375,13 @@ def cmd_watch(args) -> int:
                         n_sent += 1
                         _run_tag = f"  run={routing['run']}" if routing["run"] else ""
                         _date_tag = f"  [дата {_date_part}]" if _date_part else ""
-                        print(f"  [в батче {_file_idx}/{len(new_files)}] ↑ {rel}"
-                              f"  ({len(data)/1024:.1f} КБ  {work_ms:.0f}мс)"
-                              f"  всего={n_sent}{_run_tag}{_date_tag}")
+                        logger.info("[в батче %d/%d] ↑ %s  (%.1f КБ  %.0fмс)  всего=%d%s%s",
+                                    _file_idx, len(new_files), rel,
+                                    len(data) / 1024, work_ms, n_sent, _run_tag, _date_tag)
                     else:
                         n_failed += 1
                         work_ms = (time.monotonic() - t0) * 1000
-                        print(f"  [!] нет подтверждения: {rel}", file=sys.stderr)
+                        logger.warning("[!] нет подтверждения: %s", rel)
                 except FileNotFoundError:
                     work_ms = (time.monotonic() - t0) * 1000
                     _fail_count.pop(f, None)
@@ -391,12 +393,12 @@ def cmd_watch(args) -> int:
                     _fail_count[f] = cnt
                     delay = min(2.0 ** cnt, 60.0)  # 2s, 4s, 8s, …, 60s
                     _retry_after[f] = time.monotonic() + delay
-                    print(f"  [!] {rel}: {e}  (retry in {delay:.0f}s)", file=sys.stderr)
+                    logger.warning("[!] %s: %s  (retry in %.0fs)", rel, e, delay)
 
                 sleep_ms = limiter.sleep(t0)
                 msg = limiter.adapt(work_ms, sleep_ms)
                 if msg:
-                    print(msg)
+                    logger.info(msg)
 
             if not new_files:
                 time.sleep(poll_sec)
@@ -408,10 +410,10 @@ def cmd_health(args) -> int:
     try:
         r = httpx.get(f"{server}/health", timeout=5)
         r.raise_for_status()
-        print(f"  {server}  →  {r.json()}")
+        logger.info("%s  →  %s", server, r.json())
         return 0
     except Exception as e:
-        print(f"[!] {e}", file=sys.stderr)
+        logger.error("[!] %s", e)
         return 1
 
 
@@ -422,12 +424,12 @@ def cmd_runs(args) -> int:
     r.raise_for_status()
     data: dict = r.json()
     if not data:
-        print("  (нет принятых прогонов)")
+        logger.info("(нет принятых прогонов)")
         return 0
     for step, runs in sorted(data.items()):
-        print(f"  {step}:")
+        logger.info("%s:", step)
         for run in runs:
-            print(f"    {run}")
+            logger.info("  %s", run)
     return 0
 
 
@@ -463,6 +465,7 @@ def main() -> int:
     if not args.cmd:
         ap.print_help()
         return 1
+    setup_logging()
 
     if args.cmd == "send":
         return cmd_send(args)

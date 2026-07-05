@@ -30,10 +30,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from common.utils.classes import GROUP_CLASSES as CLASSES
 from common.utils.time_msk import ts_for_dir
 
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "train" / "1_export_data"
-CLASSES = ["1_resident", "2_delivery", "3_utilities"]
 
 
 def _connect_db():
