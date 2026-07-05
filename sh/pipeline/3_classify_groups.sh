@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# Классификация кропов по группам (Модель 1)
+# Классификация кропов по группам (Модель 1) — watch-режим.
+#
+# Непрерывно следит за кропами в 2_yolo_boxes_files/images/,
+# запускает инференс и перемещает результаты в inference/images/<date>/<class>/.
 #
 # Usage:
 #   ./sh/pipeline/3_classify_groups.sh
+#   ./sh/pipeline/3_classify_groups.sh --poll-sec 30
+#   ./sh/pipeline/3_classify_groups.sh --once
 #   ./sh/pipeline/3_classify_groups.sh --classify-conf 0.70
+#   ./sh/pipeline/3_classify_groups.sh --copy   # копировать, не перемещать
 
 set -euo pipefail
 
@@ -22,37 +28,57 @@ _ef() {
     echo "${val:-$default}"
 }
 
+S2DIR="$REPO/.output/pipeline/2_yolo_boxes_files/images"
+OUT_DIR="$REPO/.data/groups/v1/inference"
 CLASSIFY_CONF="$(_ef CLASSIFY_CONF 0.65)"
+POLL_SEC=30
+ONCE=0
+EXTRA_ARGS=()
 
-S2DIR="$REPO/.output/pipeline/2_yolo_boxes_files"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --poll-sec)      POLL_SEC="$2"; shift 2 ;;
+        --once)          ONCE=1; shift ;;
+        --classify-conf) CLASSIFY_CONF="$2"; shift 2 ;;
+        --copy)          EXTRA_ARGS+=("--copy"); shift ;;
+        *) echo "[!] Unknown arg: $1" >&2; exit 1 ;;
+    esac
+done
 
-# Список входных каталогов (весь 2_yolo_boxes_files или конкретные прогоны)
-INPUT_DIRS=(
-    "$S2DIR"
-    # "$S2DIR/run_20260628_202843_msk"
-)
+_ts() { date '+%H:%M:%S'; }
+
+_count_crops() {
+    find "$S2DIR" -name "*.jpg" -type f 2>/dev/null | wc -l
+}
 
 echo "=== 3_classify_groups ==="
-echo "Repo:   $REPO"
-echo "Script: $SCRIPT"
-echo "classify_conf=$CLASSIFY_CONF"
-echo "Input:"
-for d in "${INPUT_DIRS[@]}"; do echo "  $d"; done
+echo "  Input:         $S2DIR"
+echo "  Output:        $OUT_DIR"
+echo "  classify_conf: $CLASSIFY_CONF"
+echo "  poll: ${POLL_SEC}s"
+echo ""
+echo "[classify] Ctrl+C для остановки"
 echo ""
 
-missing=0
-for d in "${INPUT_DIRS[@]}"; do
-    if [[ ! -e "$d" ]]; then
-        echo "[!] Not found: $d" >&2
-        missing=1
-    fi
-done
-[[ "$missing" -eq 1 ]] && exit 1
+while true; do
+    n=$(_count_crops)
 
-for input_dir in "${INPUT_DIRS[@]}"; do
-    echo "--- $(basename "$input_dir") ---"
-    "$PYTHON" "$SCRIPT" "$input_dir" \
-        --classify-conf "$CLASSIFY_CONF" \
-        "$@"
-    echo ""
+    if [[ "$n" -gt 0 ]]; then
+        echo "$(_ts)  INFO      Найдено кропов: $n — запуск инференса…"
+
+        "$PYTHON" "$SCRIPT" "$S2DIR" \
+            --classify-conf "$CLASSIFY_CONF" \
+            --output        "$OUT_DIR" \
+            "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+
+        echo ""
+    else
+        echo "$(_ts)  INFO      Кропов нет — ожидание ${POLL_SEC}s…"
+    fi
+
+    if [[ "$ONCE" -eq 1 ]]; then
+        break
+    fi
+
+    sleep "$POLL_SEC"
 done

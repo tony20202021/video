@@ -281,8 +281,8 @@ def train(
     torch.onnx.export(
         model, dummy, str(onnx_path),
         input_names=["input"], output_names=["output"],
-        opset_version=12,
-        dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
+        opset_version=18,
+        dynamo=False,
     )
 
     # Встраиваем список классов в метаданные ONNX

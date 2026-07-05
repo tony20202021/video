@@ -184,7 +184,9 @@ video/
       new/                — новые кропы для разметки
   .models/
     detect/yolov8n.onnx   — детекция людей (~13 MB)
-    classify/v*.onnx      — Модель 1 (классификатор групп)
+    classify/v1_1.onnx    — Модель 1 (пример: датасет v1, прогон 1)
+    classify/v1_1.json    — манифест модели
+    classify/backbone.pt  — backbone для Модели 2
     identify/v*.onnx      — Модель 2 (идентификатор жителей)
   docs/
     overview.md           — этот файл

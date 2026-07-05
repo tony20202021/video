@@ -54,6 +54,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.atomic import copy as _copy
+from common.utils.classes import GROUP_CLASS_COLORS
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
@@ -67,22 +68,15 @@ logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
 
-DEFAULT_OUTPUT = REPO_ROOT / ".output" / "pipeline" / "3_classify_groups"
+DEFAULT_OUTPUT = REPO_ROOT / ".data" / "groups" / "v1" / "inference"
 DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 
-_CLASS_COLORS = {
-    "1_resident":  "#228833",
-    "2_delivery":  "#0055cc",
-    "3_utilities": "#770077",
-    "4_guest":     "#cc7700",
-    "uncertain":   "#dddddd",
-    "unknown":     "#aaaaaa",
-}
+_CLASS_COLORS = GROUP_CLASS_COLORS
 
 
 
 
-def _find_crops(run_dir: Path) -> dict[str, dict[str, list[Path]]]:
+def _find_crops(run_dir: Path, ext: str = "jpg") -> dict[str, dict[str, list[Path]]]:
     """Возвращает {sub_run_name: {cam_name: [crop_path, ...]}}.
 
     Перебирает все jpg-файлы в run_dir рекурсивно без фильтров по именам каталогов.
@@ -90,7 +84,7 @@ def _find_crops(run_dir: Path) -> dict[str, dict[str, list[Path]]]:
     """
     result: dict[str, dict[str, list[Path]]] = {}
     try:
-        for img in sorted(run_dir.rglob("*.jpg")):
+        for img in sorted(run_dir.rglob(f"*.{ext}")):
             rel = img.relative_to(run_dir)
             parts = rel.parts
             if len(parts) >= 3:
@@ -129,8 +123,9 @@ def _load_classifier(config_path: Path):
     try:
         from ml.classify import GroupClassifier
         clf = GroupClassifier()
-        if not clf.load(Path(classify_path)):
-            logger.warning(f"  [ML] Не удалось загрузить: {classify_path}")
+        resolved = Path(classify_path) if Path(classify_path).is_absolute() else REPO_ROOT / classify_path
+        if not clf.load(resolved):
+            logger.warning(f"  [ML] Не удалось загрузить: {resolved}")
             return None
         return clf
     except Exception as e:
@@ -279,6 +274,10 @@ def main() -> int:
     parser.add_argument("--classify-conf", type=float, default=0.65, metavar="CONF",
                         help="Порог GroupClassifier (default: 0.65)")
     parser.add_argument("--output",        type=Path, default=None)
+    parser.add_argument("--copy",          action="store_true",
+                        help="Копировать кропы вместо перемещения (по умолчанию — перемещение)")
+    parser.add_argument("--ext",           default="jpg", metavar="EXT",
+                        help="Расширение файлов кропов (default: jpg)")
     parser.add_argument("--cpu-interval",  type=float, default=2.0)
     args = parser.parse_args()
 
@@ -312,11 +311,14 @@ def main() -> int:
         return 1
     run_pairs = [(args.input_dir, "")]
 
-    out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _base   = args.output or DEFAULT_OUTPUT
+    _today  = datetime.now(MSK).strftime("%Y%m%d")
+    images_dir = _base / "images" / _today
+    meta_dir   = _base / "meta"   / _today
+    images_dir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
 
-
-    add_file_handler(out_dir / 'run.log')
+    add_file_handler(meta_dir / 'run.log')
 
     t_start     = time.monotonic()
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
@@ -333,8 +335,8 @@ def main() -> int:
             if not _snap:
                 continue
             try:
-                _save_cpu_csv(_snap, out_dir)
-                _save_cpu_chart(_snap, out_dir / "cpu_chart.png",
+                _save_cpu_csv(_snap, meta_dir)
+                _save_cpu_chart(_snap, meta_dir / "cpu_chart.png",
                                 list(timing_log) or None)
             except Exception:
                 pass
@@ -351,19 +353,20 @@ def main() -> int:
         "ml_active":     clf is not None,
         "classify_conf": args.classify_conf,
         "cpu_interval":  args.cpu_interval,
-        "out_dir":       str(out_dir),
+        "images_dir":    str(images_dir),
+        "meta_dir":      str(meta_dir),
     }
-    (out_dir / "run_params.json").write_text(
+    (meta_dir / "run_params.json").write_text(
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
     logger.info(f"ML:        {'GroupClassifier готов' if clf and clf.ready else 'не загружен (unknown/)'}")
     logger.info(f"Порог M1:  {args.classify_conf}")
-    logger.info(f"Вывод:     {out_dir}")
+    logger.info(f"Вывод:     images={images_dir}  meta={meta_dir}")
     logger.info(f"Прогонов:  {len(run_pairs)}")
     for rd, ps in run_pairs:
         prefix = f"{ps}/" if ps else ""
-        crops_by_subrun = _find_crops(rd)
+        crops_by_subrun = _find_crops(rd, args.ext)
         total = sum(len(cs) for cams in crops_by_subrun.values() for cs in cams.values())
         logger.info(f"  {prefix}{rd.name}  [{total} кропов]")
     logger.info('')
@@ -384,12 +387,10 @@ def main() -> int:
             logger.info(f"  [!] Нет кропов в {run_dir}")
             continue
 
+        n_run = 0
         for sub_run_name, cams in sorted(crops_by_subrun.items()):
             logger.info(f"  {sub_run_name}")
             for cam_name, crop_paths in sorted(cams.items()):
-                classified_base = (
-                    out_dir / run_name / sub_run_name / cam_name / "classified"
-                )
                 n_cam = 0
                 logger.info(f"    {cam_name}: {len(crop_paths)} кропов")
 
@@ -406,9 +407,12 @@ def main() -> int:
                     classify_ms = (time.monotonic() - t0) * 1000
                     timing_log.append([round(t0 - t_start, 3), round(classify_ms, 1)])
 
-                    dest = classified_base / out_class
+                    dest = images_dir / out_class
                     dest.mkdir(parents=True, exist_ok=True)
-                    _copy(crop_path, dest / crop_path.name)
+                    if args.copy:
+                        _copy(crop_path, dest / crop_path.name)
+                    else:
+                        shutil.move(str(crop_path), dest / crop_path.name)
 
                     ts_ep = _crop_ts_epoch(crop_path)
                     class_log.append({
@@ -426,7 +430,10 @@ def main() -> int:
                     n_cam += 1
 
                 grand_total += n_cam
+                n_run += n_cam
                 logger.info(f"    → классифицировано: {n_cam}")
+
+        logger.info(f"  Итого в прогоне: {n_run}")
 
         logger.info('')
 
@@ -434,7 +441,7 @@ def main() -> int:
     cpu_log = cpu_monitor.stop()
 
     if class_log:
-        csv_path = out_dir / "classifications.csv"
+        csv_path = meta_dir / "classifications.csv"
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=[
                 "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
@@ -446,16 +453,16 @@ def main() -> int:
     else:
         logger.info("Классификаций не найдено.")
 
-    _save_cpu_csv(cpu_log, out_dir)
+    _save_cpu_csv(cpu_log, meta_dir)
 
     if timing_log:
-        with open(out_dir / "classify_timing.csv", "w", newline="", encoding="utf-8") as f:
+        with open(meta_dir / "classify_timing.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["mono_s", "classify_ms"])
             w.writerows(timing_log)
 
-    _save_timeline_chart(class_log, out_dir / "timeline_chart.png")
-    _save_cpu_chart(cpu_log, out_dir / "cpu_chart.png", timing_log or None)
+    _save_timeline_chart(class_log, meta_dir / "timeline_chart.png")
+    _save_cpu_chart(cpu_log, meta_dir / "cpu_chart.png", timing_log or None)
 
     stats = {
         "input_runs":          [f"{ps}/{rd.name}" if ps else str(rd) for rd, ps in run_pairs],
@@ -464,12 +471,11 @@ def main() -> int:
         "ml_active":           clf is not None,
         "duration_sec":        round(time.monotonic() - t_start, 1),
     }
-    (out_dir / "run_stats.json").write_text(
+    (meta_dir / "run_stats.json").write_text(
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-
-    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"Готово. Время: {stats['duration_sec']} с.  images={images_dir}  meta={meta_dir}")
     summary = "  ".join(f"{cls}: {n}" for cls, n in sorted(grand_classified.items()))
     if summary:
         logger.info(f"Итог: {summary}")

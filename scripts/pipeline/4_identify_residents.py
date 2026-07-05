@@ -42,7 +42,7 @@ _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from common.utils.atomic import copy as _copy
+from common.utils.classes import EXTRA_DATASET_DIRS, GROUP_CLASSES, RESIDENT_CLASS
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
@@ -64,23 +64,28 @@ UNKNOWN_CLASS  = "unknown_resident"
 
 
 def _find_resident_crops(run_dir: Path) -> list[tuple[Path, Path]]:
-    """Возвращает [(crop_path, rel_cam_dir)] из classified/resident/ в 6_2 run.
+    """Возвращает [(crop_path, rel_cam_dir)] из classified/<RESIDENT_CLASS>/ в 6_2 run.
 
     rel_cam_dir — путь до каталога камеры относительно run_dir.
+    Поддерживает устаревший каталог classified/resident/.
     """
     results: list[tuple[Path, Path]] = []
+    seen: set[Path] = set()
+    patterns = (f"classified/{RESIDENT_CLASS}", "classified/resident")
     try:
-        for resident_dir in sorted(run_dir.rglob("classified/resident")):
-            if not resident_dir.is_dir():
-                continue
-            cam_dir = resident_dir.parent.parent  # .../cam/classified/resident → .../cam
-            try:
-                rel_cam = cam_dir.relative_to(run_dir)
-            except ValueError:
-                continue
-            for crop in sorted(resident_dir.iterdir()):
-                if crop.suffix.lower() == ".jpg":
-                    results.append((crop, rel_cam))
+        for pattern in patterns:
+            for resident_dir in sorted(run_dir.rglob(pattern)):
+                if not resident_dir.is_dir() or resident_dir in seen:
+                    continue
+                seen.add(resident_dir)
+                cam_dir = resident_dir.parent.parent
+                try:
+                    rel_cam = cam_dir.relative_to(run_dir)
+                except ValueError:
+                    continue
+                for crop in sorted(resident_dir.iterdir()):
+                    if crop.suffix.lower() == ".jpg":
+                        results.append((crop, rel_cam))
     except OSError:
         pass
     return results

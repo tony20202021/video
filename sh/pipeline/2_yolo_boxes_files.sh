@@ -37,7 +37,7 @@ INPUT_DIRS=(
 
 # Параметры watch-режима
 WATCH=1
-POLL_SEC=5
+POLL_SEC=30
 DELETE_AFTER=1
 EXTRA_ARGS=()
 
@@ -150,5 +150,8 @@ while true; do
         echo ""
     done
 
-    [[ "$_any" -eq 0 ]] && sleep "$POLL_SEC"
+    if [[ "$_any" -eq 0 ]]; then
+        echo "[$(date '+%H:%M:%S')] Файлов нет — ожидание ${POLL_SEC}s…"
+        sleep "$POLL_SEC"
+    fi
 done

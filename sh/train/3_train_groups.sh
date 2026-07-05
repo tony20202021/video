@@ -14,7 +14,7 @@ SCRIPT="$REPO/scripts/train/3_train_groups.py"
 
 export PYTHONIOENCODING=utf-8
 
-DATA=""
+DATA="$REPO/.data/groups/v1/dataset"
 EPOCHS=20
 BATCH_SIZE=32
 LR=1e-3
@@ -50,7 +50,7 @@ echo "Repo:   $REPO"
 echo "Script: $SCRIPT"
 echo "Data:   $DATA"
 echo "Epochs=$EPOCHS  BatchSize=$BATCH_SIZE  LR=$LR"
-echo "Model output: $REPO/.models/classify/"
+echo "Model output: $REPO/.models/classify/<dataset>_<run>.onnx  (e.g. v1_1.onnx for .data/groups/v1)"
 echo "Backbone:     $REPO/.models/classify/backbone.pt"
 echo ""
 

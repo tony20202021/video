@@ -11,7 +11,7 @@
 | `5_1_diff_yolo_boxes_low.py` | То же что 4, но после детекции движения прогоняет YOLOv8n и сохраняет только кадры с людьми | Да + модель | `.output/cameras/5_1_diff_yolo_boxes_low/run_<UTC>/` — baseline + кадры с людьми (bbox) | Запускать постоянно для детекции людей |
 | `5_2_yolo_boxes_files.py` | Офлайн-переобработка: YOLO-детекция на уже сохранённых diff-кадрах прогонов 4 и 5_1 | Нет (файлы) | `.output/cameras/5_2_yolo_boxes_files/run_<ts>/` — детекции, timeline, cpu_chart | Ретроспективный анализ накопленных прогонов |
 | `6_2_classify_groups_files.py` | Берёт кропы 5_2, прогоняет GroupClassifier (Модель 1) | Нет (файлы) | `.output/cameras/6_2_classify_groups_files/run_<ts>/` | Классификация кропов по группам |
-| `6_3_identify_residents_files.py` | Берёт кропы `resident/` из 6_2, прогоняет PersonIdentifier (Модель 2) | Нет (файлы) | `.output/cameras/6_3_identify_residents_files/run_<ts>/` | Идентификация конкретных жителей |
+| `6_3_identify_residents_files.py` | Берёт кропы `1_resident/` из 6_2, прогоняет PersonIdentifier (Модель 2) | Нет (файлы) | `.output/cameras/6_3_identify_residents_files/run_<ts>/` | Идентификация конкретных жителей |
 
 **Порядок первичной настройки:** `1` → `2` → `3` → `4` и/или `5_1`
 
@@ -19,8 +19,8 @@
 - `4_motion_diff_low` сохраняет любое движение без ML — только LOW-поток, легковесный
 - `5_1_diff_yolo_boxes_low` запускает YOLOv8n на каждый motion-кадр — тяжелее, но фильтрует только людей; требует `.models/detect/yolov8n.onnx`
 - `5_2` обрабатывает накопленные прогоны 4 или 5_1 офлайн, вырезает кропы YOLO
-- `6_2` берёт кропы `5_2` → GroupClassifier (Модель 1) → `classified/<group>/`
-- `6_3` берёт `classified/resident/` из `6_2` → PersonIdentifier (Модель 2) → `classified/<person_id>/`
+- `6_2` берёт кропы `5_2` → GroupClassifier (Модель 1) → `classified/1_resident/`, `classified/2_delivery/`, …
+- `6_3` берёт `classified/1_resident/` из `6_2` → PersonIdentifier (Модель 2) → `classified/<person_id>/`
 - Оба live-скрипта можно запускать одновременно, но они открывают одни и те же RTSP-потоки
 
 ---
@@ -303,7 +303,7 @@ MOTION_DIFF_THRESHOLD=3.3
 | `sh/cameras/5_1_diff_yolo_boxes_low.ps1` | `5_1_diff_yolo_boxes_low.py` | motion → YOLO → сохранение bbox-кадров |
 | `sh/cameras/5_2_yolo_boxes_files.ps1` | `5_2_yolo_boxes_files.py` | офлайн: YOLO на сохранённых diff-кадрах |
 | `sh/cameras/6_2_classify_groups_files.ps1` | `6_2_classify_groups_files.py` | офлайн: GroupClassifier на кропах 5_2 |
-| `sh/cameras/6_3_identify_residents_files.ps1` | `6_3_identify_residents_files.py` | офлайн: PersonIdentifier на кропах `resident/` из 6_2 |
+| `sh/cameras/6_3_identify_residents_files.ps1` | `6_3_identify_residents_files.py` | офлайн: PersonIdentifier на кропах `1_resident/` из 6_2 |
 
 **Синтаксис для живых скриптов (4, 5_1):**
 ```powershell

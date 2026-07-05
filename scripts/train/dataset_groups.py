@@ -33,11 +33,11 @@
 
 Usage:
     python scripts/train/dataset_groups.py build --labels .output/train/2_label_ui/labels.json
-    python scripts/train/dataset_groups.py apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1
-    python scripts/train/dataset_groups.py apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1 --move
-    python scripts/train/dataset_groups.py check --src .data/groups/new --dataset .data/groups/v1
-    python scripts/train/dataset_groups.py add --src .output/pipeline/2_yolo_boxes_files/run_xxx --dataset .data/groups/v1
-    python scripts/train/dataset_groups.py status --dataset .data/groups/v1
+    python scripts/train/dataset_groups.py apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1/dataset
+    python scripts/train/dataset_groups.py apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1/dataset --move
+    python scripts/train/dataset_groups.py check --src .data/groups/v1/new --dataset .data/groups/v1/dataset
+    python scripts/train/dataset_groups.py add --src .output/pipeline/2_yolo_boxes_files/run_xxx --dataset .data/groups/v1/dataset
+    python scripts/train/dataset_groups.py status --dataset .data/groups/v1/dataset
 """
 
 from __future__ import annotations
@@ -53,13 +53,21 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.atomic import copy as _copy
-from common.utils.classes import GROUP_CLASSES as MAIN_CLASSES
+from common.utils.classes import (
+    EXTRA_DATASET_DIRS,
+    GROUP_CLASSES,
+    LEGACY_CLASS_MIGRATIONS,
+)
 
 DEFAULT_DATA = REPO_ROOT / ".data" / "groups"
 DEFAULT_LABELS = REPO_ROOT / ".output" / "train" / "2_label_ui" / "labels.json"
 MSK = timezone(timedelta(hours=3))
-EXTRA_CLASSES = ["skip", "unknown", "new"]
+MAIN_CLASSES = GROUP_CLASSES
+EXTRA_CLASSES = EXTRA_DATASET_DIRS
 ALL_CLASSES = MAIN_CLASSES + EXTRA_CLASSES
+
+# Устаревшие имена классов → новые
+CLASS_MIGRATIONS = LEGACY_CLASS_MIGRATIONS
 
 # Устаревшие префиксы путей → новые (для миграции)
 PATH_MIGRATIONS = [
@@ -68,15 +76,6 @@ PATH_MIGRATIONS = [
     (".output\\cameras\\6_2_classify_groups_files", ".output\\pipeline\\3_classify_groups"),
     (".output/cameras/6_2_classify_groups_files",   ".output/pipeline/3_classify_groups"),
 ]
-
-# Устаревшие имена классов → новые
-CLASS_MIGRATIONS = {
-    "resident":  "1_resident",
-    "delivery":  "2_delivery",
-    "utilities": "3_utilities",
-    "other":     None,   # удалён — перенести в unknown
-    "courier":   None,   # удалён — перенести в unknown
-}
 
 
 def _fix_path(p: str) -> str:

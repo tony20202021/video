@@ -6,7 +6,7 @@
 #   ./sh/train/1_dataset_groups.sh build --labels .output/train/2_label_ui/labels.json
 #   ./sh/train/1_dataset_groups.sh apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1
 #   ./sh/train/1_dataset_groups.sh apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1 --move
-#   ./sh/train/1_dataset_groups.sh check --src .data/groups/new --dataset .data/groups/v1
+#   ./sh/train/1_dataset_groups.sh check --src .data/groups/v1/new --dataset .data/groups/v1/dataset
 #   ./sh/train/1_dataset_groups.sh add --src .output/pipeline/2_yolo_boxes_files/run_xxx --dataset .data/groups/v1
 #   ./sh/train/1_dataset_groups.sh status --dataset .data/groups/v1
 
@@ -31,12 +31,12 @@ case "$CMD" in
     *) echo "[!] Unknown command: $CMD (expected: build, apply, check, add, status)" >&2; exit 1 ;;
 esac
 
-LABELS="/home/tony/repos/video/.data/groups/new/labels.json"
+LABELS="/home/tony/repos/video/.data/groups/v1/new/labels.json"
 VERSION=""
 OUT=""
 MOVE=1
-SRC="/home/tony/repos/video/.data/groups/new"
-DATASET="/home/tony/repos/video/.data/groups/v1"
+SRC="/home/tony/repos/video/.data/groups/v1/new"
+DATASET="/home/tony/repos/video/.data/groups/v1/dataset"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

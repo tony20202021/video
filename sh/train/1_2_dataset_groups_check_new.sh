@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Непрерывная дедупликация внутри .data/groups/new/:
+# Непрерывная дедупликация внутри .data/groups/v1/new/:
 # находит файлы с одинаковым именем (из разных подкаталогов), удаляет лишние,
 # оставляя первый по алфавиту пути.
 #
@@ -13,7 +13,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
-NEW_DIR="$REPO/.data/groups/new"
+NEW_DIR="$REPO/.data/groups/v1/new"
 
 POLL_SEC=30
 DELETE=1   # удалять дубли
@@ -99,6 +99,8 @@ while true; do
         echo "$(_ts)  INFO      Найдено файлов в new/: $n — проверка дублей…"
         _dedup
         echo ""
+    else
+        echo "$(_ts)  INFO      Файлов нет — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

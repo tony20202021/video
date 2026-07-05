@@ -14,7 +14,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from common.utils.classes import GROUP_CLASSES as CLASSES
+from common.utils.classes import GROUP_CLASSES as CLASSES, RESIDENT_CLASS
 from ml.classify import GroupClassifier
 from ml.identify import PersonIdentifier
 
@@ -82,7 +82,7 @@ class MLPipeline:
         id_conf: float = 0.0
 
         if self._identifier.ready and (
-            group_class == "resident" or not self._classifier.ready
+            group_class == RESIDENT_CLASS or not self._classifier.ready
         ):
             person_id, id_conf = self._identifier.identify(
                 bgr_crop, threshold=self._cfg.identify_threshold

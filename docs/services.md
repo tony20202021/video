@@ -47,8 +47,8 @@ POST /inference/detect
 
 POST /inference/classify
   body: image (bytes, multipart)   — crop одного человека
-  response: { "class": "resident", "confidence": 0.87 }
-  # class: resident | courier | delivery | utilities | other
+  response: { "class": "1_resident", "confidence": 0.87 }
+  # class: 1_resident | 2_delivery | 3_utilities | 4_guest
 
 POST /inference/identify
   body: image (bytes, multipart)   — crop одного человека
@@ -76,10 +76,10 @@ POST /models/{model_type}/activate
 {
   "version": "1.0",
   "task": "classify",
-  "classes": ["resident", "courier", "delivery", "utilities", "other"],
+  "classes": ["1_resident", "2_delivery", "3_utilities", "4_guest"],
   "labels": [
-    { "image": "img_001.jpg", "class": "courier", "person_id": null },
-    { "image": "img_002.jpg", "class": "resident", "person_id": "p_0042" }
+    { "image": "img_001.jpg", "class": "2_delivery", "person_id": null },
+    { "image": "img_002.jpg", "class": "1_resident", "person_id": "p_0042" }
   ]
 }
 ```
@@ -126,9 +126,9 @@ temporal:
   event_end_silence_frames: 10
 
 models:
-  detect:   models/detect/v1.0.0.onnx
-  classify: models/classify/v1.0.0.onnx
-  identify: models/identify/v1.0.0.onnx
+  detect:   .models/detect/yolov8n.onnx
+  classify: .models/classify/v1_1.onnx
+  identify: .models/identify/v1.onnx
 ```
 
 ---

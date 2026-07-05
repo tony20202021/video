@@ -25,9 +25,9 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-INPUT="$REPO/.data/groups/new"
-LABELS="$REPO/.data/groups/new/labels.json"
-DATASET="$REPO/.data/groups/v1"
+INPUT="$REPO/.data/groups/v1/new"
+LABELS="$REPO/.data/groups/v1/new/labels.json"
+DATASET="$REPO/.data/groups/v1/dataset"
 PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=1
 EXT="jpg"

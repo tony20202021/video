@@ -7,7 +7,7 @@
 | Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
 | Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Готово** `.models/detect/yolov8n.onnx` |
-| Классификация группы (Модель 1) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | **v1 обучена** `.models/classify/v1.onnx` |
+| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Обучена** `.models/classify/v1_1.onnx` (датасет v1, val_acc 79%) |
 | Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Нужно обучить |
 
 ---
@@ -18,9 +18,14 @@
 
 ```python
 GROUP_CLASSES = ["1_resident", "2_delivery", "3_utilities", "4_guest"]
+RESIDENT_CLASS = "1_resident"   # для идентификации жителей (Модель 2)
+EXTRA_DATASET_DIRS = ["skip", "unknown", "new"]
+GROUP_CLASS_COLORS  # цвета для графиков pipeline
+GROUP_CLASS_RU      # подписи в Telegram-боте
+LEGACY_CLASS_MIGRATIONS  # resident → 1_resident, courier → unknown, …
 ```
 
-Импортируется во всех скриптах: `from common.utils.classes import GROUP_CLASSES`.
+Импорт: `from common.utils.classes import GROUP_CLASSES, RESIDENT_CLASS`.
 
 | Класс | Описание |
 |-------|----------|
@@ -120,6 +125,7 @@ src/ml/
   classify.py     — GroupClassifier (Модель 1: MobileNetV3-Small ONNX wrapper)
   identify.py     — PersonIdentifier (Модель 2: MobileNetV3-Small ONNX wrapper)
   pipeline.py     — MLPipeline: оркестрация classify → identify
+  versions.py     — версии моделей: v1_1.onnx, манифесты, activate
 ```
 
 ### Использование
@@ -129,7 +135,7 @@ from ml.pipeline import MLPipeline, MLConfig
 from pathlib import Path
 
 pipeline = MLPipeline(MLConfig(
-    classify_model=Path(".models/classify/v1.onnx"),
+    classify_model=Path(".models/classify/v1_1.onnx"),
     identify_model=Path(".models/identify/v1.onnx"),
 ))
 
@@ -184,7 +190,7 @@ for r in results:
 4. Обучить:
    .\sh\train\3_train_groups.ps1        # Windows
    ./sh/train/3_train_groups.sh         # Linux
-   → .models/classify/v<N>.onnx
+   → .models/classify/v1_1.onnx (+ v1_1.json манифест)
 
 5. (опционально) Проверить во время обучения:
    python scripts/train/3a_eval_pt.py
@@ -313,10 +319,30 @@ python scripts/train/dataset_groups.py status --dataset .data/groups/v1
 
 **Результаты:**
 ```
-.models/classify/v<N>.onnx             — модель для production
-.models/classify/backbone.pt           — backbone для инициализации Модели 2
+.models/classify/v1_1.onnx            — ONNX (opset 18, один файл ~6 MB)
+.models/classify/v1_1.json            — манифест: dataset_version, metrics
+.models/classify/backbone.pt          — backbone для инициализации Модели 2
 .output/train/3_train_groups/run/training_results.json
 ```
+
+**Версионирование моделей** (логика в `src/ml/versions.py`):
+
+| Датасет | 1-й прогон | 2-й прогон на том же датасете |
+|---------|------------|-------------------------------|
+| `.data/groups/v1` | `v1_1.onnx` | `v1_2.onnx` |
+| `.data/groups/v2` | `v2_1.onnx` | `v2_2.onnx` |
+| export.zip (без версии) | `v3.onnx` (legacy) | `v4.onnx` |
+
+CLI:
+```bash
+python scripts/train/0_model_versions.py list
+python scripts/train/0_model_versions.py activate v1_1
+python scripts/train/0_model_versions.py info v1_1
+```
+
+**ONNX export:** `opset_version=18`, `dynamo=False` — один `.onnx` без внешнего `.onnx.data`.
+
+**Batch size на сервере 2 GB RAM:** batch=32 работает, но активен swap; для следующих прогонов попробовать `--batch-size 16`.
 
 **Аугментация при обучении:**
 ```python
@@ -374,7 +400,7 @@ ImageNet weights
     ↓
 fine-tune на датасете групп (1_resident / 2_delivery / 3_utilities)
     ↓
-Модель 1  (.models/classify/v1.onnx)
+Модель 1  (.models/classify/v1_1.onnx)
     │
     └── backbone.pt (только features, без головы)
             ↓
@@ -394,7 +420,8 @@ fine-tune на датасете групп (1_resident / 2_delivery / 3_utilitie
   detect/
     yolov8n.onnx        — детекция людей (готово)
   classify/
-    v1.onnx             — Модель 1: обучена на датасете .data/groups/v1
+    v1_1.onnx           — Модель 1: датасет v1, 1-й прогон (val_acc 79%)
+    v1_1.json           — манифест (dataset_version, metrics)
     backbone.pt         — только features (PyTorch) для инициализации Модели 2
   identify/
     v1.onnx             — Модель 2: после первого обучения на жителях
@@ -415,6 +442,11 @@ thresholds:
     min_confidence: 0.65   # Модель 1 — ниже → "uncertain"
   identification:
     min_confidence: 0.70   # Модель 2 — ниже → unknown_resident
+
+models:
+  detect:   .models/detect/yolov8n.onnx
+  classify: .models/classify/v1_1.onnx
+  # identify: .models/identify/v1.onnx
 ```
 
 На ранних версиях Модели 2 (мало данных) стоит поднять порог идентификации до 0.80.

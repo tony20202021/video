@@ -3,7 +3,7 @@
 #
 # Поведение по умолчанию:
 #   - Дубли (уже есть в датасете) — удалять
-#   - Уникальные — перемещать в .data/groups/new/ (с сохранением структуры подкаталогов)
+#   - Уникальные — перемещать в .data/groups/v1/new/ (с сохранением структуры подкаталогов)
 #   - Работает непрерывно (watch-режим)
 #
 # Usage:
@@ -20,8 +20,8 @@ PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/dataset_groups.py"
 
 INPUT_DIR="$REPO/.output/pipeline/2_yolo_boxes_files"
-DATASET="$REPO/.data/groups/v1"
-DST_NEW="$REPO/.data/groups/new"
+DATASET="$REPO/.data/groups/v1/dataset"
+DST_NEW="$REPO/.data/groups/v1/new"
 
 POLL_SEC=10
 DELETE_DOUBLES=1   # удалять дубли сразу
@@ -106,6 +106,7 @@ while true; do
     n=$(_count_crops)
 
     if [[ "$n" -eq 0 ]]; then
+        echo "$(_ts)  INFO      Кропов нет — ожидание ${POLL_SEC}s…"
         sleep "$POLL_SEC"
         continue
     fi

@@ -504,11 +504,15 @@ def main() -> int:
         return 1
     run_pairs = [(args.input_dir, "")]
 
-    out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    _base   = args.output or DEFAULT_OUTPUT
+    _today  = datetime.now(MSK).strftime("%Y%m%d")
+    images_dir    = _base / "images"    / _today
+    annotated_dir = _base / "annotated" / _today
+    meta_dir      = _base / "meta"      / _today
+    images_dir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
 
-
-    add_file_handler(out_dir / 'run.log')
+    add_file_handler(meta_dir / 'run.log')
 
     t_start     = time.monotonic()
     cpu_monitor = _CpuMonitor(interval=max(args.cpu_interval, 0.5))
@@ -523,14 +527,14 @@ def main() -> int:
             if not _snap:
                 continue
             try:
-                _save_cpu_csv(_snap, out_dir)
+                _save_cpu_csv(_snap, meta_dir)
                 _tsnap = list(timing_log)
                 if _tsnap:
-                    with open(out_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as _f:
+                    with open(meta_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as _f:
                         _w = csv.writer(_f)
                         _w.writerow(["mono_s", "inference_ms", "sleep_ms"])
                         _w.writerows(_tsnap)
-                _save_cpu_chart(_snap, out_dir / "cpu_chart.png", _tsnap or None)
+                _save_cpu_chart(_snap, meta_dir / "cpu_chart.png", _tsnap or None)
             except Exception:
                 pass
 
@@ -554,9 +558,11 @@ def main() -> int:
         "yolo_adapt_factor":  _ADAPT_FACTOR,
         "cpu_interval":       args.cpu_interval,
         "delete_after":       args.delete_after,
-        "out_dir":            str(out_dir),
+        "images_dir":         str(images_dir),
+        "annotated_dir":      str(annotated_dir),
+        "meta_dir":           str(meta_dir),
     }
-    (out_dir / "run_params.json").write_text(
+    (meta_dir / "run_params.json").write_text(
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
@@ -566,7 +572,7 @@ def main() -> int:
     logger.info(f"Conf / NMS:   {args.conf} / {args.nms}")
     logger.info(f"YOLO rate:    {yolo_rate}  min={_yolo_min_fps} fps")
     logger.info(f"Адаптация:    window={_ADAPT_WINDOW}  high={_ADAPT_HIGH}  low={_ADAPT_LOW}  factor=×{_ADAPT_FACTOR}")
-    logger.info(f"Вывод:        {out_dir}")
+    logger.info(f"Вывод:        images={images_dir}  annotated={annotated_dir}  meta={meta_dir}")
     logger.info(f"Прогонов:     {len(run_pairs)}")
     for rd, parent_stem in run_pairs:
         prefix = f"{parent_stem}/" if parent_stem else ""
@@ -594,7 +600,7 @@ def main() -> int:
 
         # Output goes into parent_stem subdir if the source had one.
         # Created lazily — only when the first detection is actually written.
-        run_out = (out_dir / parent_stem / run_name) if parent_stem else (out_dir / run_name)
+        run_out = images_dir / run_name
         _run_out_created = [False]
 
         def _ensure_run_out() -> None:
@@ -656,8 +662,8 @@ def main() -> int:
         n_total    = 0
 
         for cam_stem, img_paths in images_by_cam.items():
-            cam_out   = run_out / cam_stem
-            crops_dir = cam_out / "crops"
+            cam_out   = annotated_dir / run_name / cam_stem
+            crops_dir = images_dir    / run_name / cam_stem
 
             logger.info(f"  {cam_stem}: {len(img_paths)} изображений")
             n_deleted = 0
@@ -685,8 +691,8 @@ def main() -> int:
                 if detections:
                     n_detected += 1
                     _ensure_run_out()
-                    cam_out.mkdir(exist_ok=True)
-                    crops_dir.mkdir(exist_ok=True)
+                    cam_out.mkdir(parents=True, exist_ok=True)
+                    crops_dir.mkdir(parents=True, exist_ok=True)
 
                     if args.save_annotated:
                         annotated = draw_boxes(frame, detections)
@@ -745,21 +751,21 @@ def main() -> int:
         # Промежуточное обновление графика и detections.csv после каждого прогона
         if all_detections:
             try:
-                with open(out_dir / "detections.csv", "w", newline="", encoding="utf-8") as _f:
+                with open(meta_dir / "detections.csv", "w", newline="", encoding="utf-8") as _f:
                     _w = csv.writer(_f)
                     _w.writerow(["image_ts", "run_name", "cam", "filename",
                                  "x1", "y1", "x2", "y2", "conf"])
                     _w.writerows(all_detections)
             except Exception:
                 pass
-        _save_combined_chart(run_data, out_dir / "timeline_chart.png")
+        _save_combined_chart(run_data, meta_dir / "timeline_chart.png")
 
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
 
     # detections.csv
     if all_detections:
-        det_path = out_dir / "detections.csv"
+        det_path = meta_dir / "detections.csv"
         with open(det_path, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["image_ts", "run_name", "cam", "filename", "x1", "y1", "x2", "y2", "conf"])
@@ -768,18 +774,18 @@ def main() -> int:
     else:
         logger.info("Детекций не найдено.")
 
-    _save_cpu_csv(cpu_log, out_dir)
+    _save_cpu_csv(cpu_log, meta_dir)
 
     # yolo_timing.csv
     if timing_log:
-        with open(out_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as f:
+        with open(meta_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["mono_s", "inference_ms", "sleep_ms"])
             w.writerows(timing_log)
 
     # Charts
-    _save_combined_chart(run_data, out_dir / "timeline_chart.png")
-    _save_cpu_chart(cpu_log, out_dir / "cpu_chart.png", timing_log or None)
+    _save_combined_chart(run_data, meta_dir / "timeline_chart.png")
+    _save_cpu_chart(cpu_log, meta_dir / "cpu_chart.png", timing_log or None)
 
     # run_stats.json
     stats = {
@@ -793,11 +799,11 @@ def main() -> int:
         "conf":                args.conf,
         "nms":                 args.nms,
     }
-    (out_dir / "run_stats.json").write_text(
+    (meta_dir / "run_stats.json").write_text(
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"Готово. Время: {stats['duration_sec']} с.  images={images_dir}  annotated={annotated_dir}  meta={meta_dir}")
     return 0
 
 

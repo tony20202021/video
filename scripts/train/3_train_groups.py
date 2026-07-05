@@ -5,7 +5,8 @@
   - labels.json с разметкой (формат из /training/export)
 
 Выходные данные:
-  - .models/classify/v<N>.onnx   — ONNX модель для production
+  - .models/classify/v1_1.onnx   — ONNX (датасет v1, 1-й прогон)
+  - .models/classify/v1_1.json   — манифест с dataset_version
   - .models/classify/backbone.pt — веса backbone для инициализации Модели 2
   - training_results.json        — метрики
 
@@ -32,6 +33,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.classes import GROUP_CLASSES as CLASSES
+from ml.versions import (
+    classify_model_path,
+    models_dir,
+    next_classify_model_tag,
+    resolve_dataset_version,
+    write_classify_manifest,
+)
 NUM_CLASSES = len(CLASSES)
 CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 
@@ -130,6 +138,16 @@ def train(
         return {}
 
     images_dir, labels = _load_dataset(data_path)
+    dataset_version, _dataset_dir = resolve_dataset_version(data_path)
+    try:
+        dataset_path_rel = str(data_path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        dataset_path_rel = str(data_path)
+    model_tag = next_classify_model_tag(dataset_version)
+    if dataset_version:
+        print(f"Датасет: {dataset_version}  →  модель: {model_tag}")
+    else:
+        print(f"Датасет: (без версии)  →  модель: {model_tag}")
 
     valid = [
         lb for lb in labels
@@ -280,22 +298,19 @@ def train(
     model.eval()
 
     # Экспорт в ONNX
-    classify_dir = REPO_ROOT / ".models" / "classify"
-    classify_dir.mkdir(parents=True, exist_ok=True)
-    existing = sorted(classify_dir.glob("v*.onnx"))
-    next_v = len(existing) + 1
-    onnx_path = classify_dir / f"v{next_v}.onnx"
+    models_dir().mkdir(parents=True, exist_ok=True)
+    onnx_path = classify_model_path(model_tag)
 
     dummy = torch.zeros(1, 3, 224, 224, device=device)
     torch.onnx.export(
         model, dummy, str(onnx_path),
         input_names=["input"], output_names=["output"],
-        opset_version=12,
-        dynamic_axes={"input": {0: "batch"}, "output": {0: "batch"}},
+        opset_version=18,
+        dynamo=False,
     )
 
     # Сохраняем backbone для инициализации Модели 2 (5_train_residents.py)
-    backbone_path = classify_dir / "backbone.pt"
+    backbone_path = models_dir() / "backbone.pt"
     backbone_state = {k: v for k, v in model.state_dict().items()
                       if k.startswith("features.")}
     torch.save(backbone_state, backbone_path)
@@ -304,15 +319,24 @@ def train(
     (output_dir / "best.pt").unlink(missing_ok=True)
 
     metrics = {
+        "model_tag": model_tag,
+        "dataset_version": dataset_version,
+        "dataset_path": dataset_path_rel,
         "best_val_acc": round(best_val_acc, 4),
         "epochs": epochs,
         "train_samples": n_train,
         "val_samples": n_val,
         "class_counts": class_counts,
         "history": history,
-        "model_path": str(onnx_path),
-        "backbone_path": str(backbone_path),
+        "model_path": str(onnx_path.relative_to(REPO_ROOT)),
+        "backbone_path": str(backbone_path.relative_to(REPO_ROOT)),
     }
+    write_classify_manifest(
+        model_tag,
+        metrics=metrics,
+        dataset_version=dataset_version,
+        dataset_path=dataset_path_rel,
+    )
     (output_dir / "training_results.json").write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
     )

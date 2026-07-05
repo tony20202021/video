@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ml.classify import GroupClassifier, CLASSES, _preprocess as classify_preprocess
 from ml.identify import PersonIdentifier, _preprocess as identify_preprocess
 from ml.pipeline import MLPipeline, MLConfig, PersonResult, _extract_crop
+from ml.versions import next_classify_model_tag, resolve_dataset_version
 
 
 # ─── GroupClassifier ──────────────────────────────────────────────────────────
@@ -150,3 +151,22 @@ class TestMLPipeline:
         pipeline = MLPipeline.from_config(cfg)
         assert pipeline._cfg.classify_threshold == 0.7
         assert pipeline._cfg.identify_threshold == 0.8
+
+
+# ─── Model versions ───────────────────────────────────────────────────────────
+
+class TestModelVersions:
+    def test_resolve_dataset_from_folder(self, tmp_path):
+        ds = tmp_path / "v3"
+        ds.mkdir()
+        (ds / "dataset.json").write_text('{"version": 3}', encoding="utf-8")
+        ver, resolved = resolve_dataset_version(ds)
+        assert ver == "v3"
+        assert resolved == ds
+
+    def test_next_tag_includes_dataset(self, tmp_path, monkeypatch):
+        import ml.versions as mv
+        monkeypatch.setattr(mv, "_MODELS_DIR", tmp_path)
+        assert next_classify_model_tag("v2") == "v2_1"
+        (tmp_path / "v2_1.onnx").write_bytes(b"x")
+        assert next_classify_model_tag("v2") == "v2_2"

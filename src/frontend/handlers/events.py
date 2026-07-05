@@ -4,15 +4,11 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message, ReplyKeyboa
 
 from ..api_client import client
 from ..keyboards.navigation import event_detail, pager
+from common.utils.classes import GROUP_CLASS_RU as _GROUP_CLASS_RU
 
 router = Router()
 
-GROUP_CLASS_RU = {
-    "1_resident":  "Житель",
-    "2_delivery":  "Доставка",
-    "3_utilities": "ЖКХ",
-    "99_other":    "Другой",
-}
+GROUP_CLASS_RU = {**_GROUP_CLASS_RU, "99_other": "Другой"}
 
 
 def _format_event(e: dict) -> str:

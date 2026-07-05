@@ -12,7 +12,7 @@ thresholds:
 
 models:
   detect:   .models/detect/yolov8n.onnx
-  classify: .models/classify/v0.onnx
+  classify: .models/classify/v1_1.onnx
   # identify: .models/identify/v1.onnx   # модель не обучена
 
 temporal:

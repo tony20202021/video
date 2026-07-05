@@ -24,7 +24,7 @@
 | `frame_group_id`    | String     | Группирует людей из одного кадра                  |
 | `image_path`        | String     | Путь к кадру (основной поток)                     |
 | `bbox`              | [Int]      | Bounding box человека [x1, y1, x2, y2]            |
-| `group_class`       | String     | resident / courier / delivery / utilities / other |
+| `group_class`       | String     | `1_resident` / `2_delivery` / `3_utilities` / `4_guest` |
 | `group_confidence`  | Float      | Уверенность классификации группы                  |
 | `person_id`         | String?    | ID жителя (null если не определён)                |
 | `person_confidence` | Float?     | Уверенность идентификации                         |
@@ -59,7 +59,7 @@
 |---------------|----------|---------------------------------------|
 | `_id`         | ObjectId |                                       |
 | `image_path`  | String   |                                       |
-| `class_label` | String   | resident / courier / delivery / ...   |
+| `class_label` | String   | `1_resident` / `2_delivery` / `3_utilities` / `4_guest` |
 | `person_id`   | String?  | Привязка к жителю                     |
 | `added_at`    | DateTime |                                       |
 | `source`      | String   | manual / from_unclassified            |

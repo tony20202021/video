@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.access import IpAllowlist, is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
+from common.utils.classes import EXTRA_DATASET_DIRS, GROUP_CLASSES
 
 _ENV = load_env_file(REPO_ROOT / ".env")
 _DEFAULT_PORT = int(_ENV.get("LABEL_UI_PORT", "8750"))
@@ -38,9 +39,7 @@ DEFAULT_INPUT   = REPO_ROOT / ".output" / "pipeline" / "2_yolo_boxes_files"
 DEFAULT_LABELS  = REPO_ROOT / ".output" / "train" / "2_label_ui"
 DEFAULT_DATASET = REPO_ROOT / ".data" / "groups"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
-_EXTRA_CLASSES = {"skip", "unknown", "new"}
-_CLASS_COLORS = ["#27ae60", "#e67e22", "#9b59b6", "#95a5a6", "#3498db",
-                 "#e74c3c", "#1abc9c", "#f39c12", "#8e44ad"]
+_EXTRA_CLASSES = set(EXTRA_DATASET_DIRS)
 
 
 def _load_classes(dataset_dir: Path | None) -> tuple[list[str], Path]:
@@ -57,8 +56,7 @@ def _load_classes(dataset_dir: Path | None) -> tuple[list[str], Path]:
         if d.is_dir() and d.name not in _EXTRA_CLASSES
     )
     if not classes:
-        print(f"[!] Нет классов в датасете: {dataset_dir}", file=sys.stderr)
-        sys.exit(1)
+        classes = list(GROUP_CLASSES)
     return classes, dataset_dir
 
 _HTML = """<!DOCTYPE html>
@@ -107,7 +105,10 @@ _HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h2>Разметка кропов людей <a href="/gallery">⊞ Галерея</a></h2>
+<h2>Разметка кропов людей
+  <a href="/gallery">⊞ Галерея</a>
+  <a href="/gallery/dataset">⊞ Датасет</a>
+</h2>
 <div id="app"></div>
 <script>
 const CLASS_COLORS = ["#27ae60","#e67e22","#9b59b6","#95a5a6","#3498db",
@@ -551,7 +552,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
 <body>
 <h2>Датасет
   <a href="/">← Разметка</a>
-  <a href="/gallery">⊞ Галерея сессии</a>
+  <a href="/gallery">⊞ Галерея</a>
   <span style="display:flex;gap:4px;align-items:center">
     <button class="zoom-btn" onclick="selectAll()">☑ Все</button>
     <button class="zoom-btn" onclick="deselectAll()">☐ Снять</button>
