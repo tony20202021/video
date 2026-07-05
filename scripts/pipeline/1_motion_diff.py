@@ -362,14 +362,15 @@ def main() -> int:
             heartbeat_sec = 600.0
             heartbeat_from = "встроенное 600 с"
 
-    out_dir = args.output
-    if out_dir is None:
-        out_dir = DEFAULT_OUTPUT_PARENT / f"run_{ts_for_dir()}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    images_dir = out_dir / "images"
-    images_dir.mkdir(exist_ok=True)
+    from datetime import datetime as _dt
+    _base     = args.output or DEFAULT_OUTPUT_PARENT
+    _today    = _dt.now(MSK).strftime("%Y%m%d")
+    images_dir = _base / "images"
+    meta_dir   = _base / "meta" / _today
+    images_dir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
 
-    add_file_handler(out_dir / 'run.log')
+    add_file_handler(meta_dir / 'run.log')
 
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _ffmpeg_capture_options(
         use_tcp=args.tcp, stimeout_us=args.stimeout_us,
@@ -445,7 +446,7 @@ def main() -> int:
 
     import json as _json
     from common.utils.time_msk import ts_iso as _ts_iso
-    (out_dir / "run_params.json").write_text(_json.dumps({
+    (meta_dir / "run_params.json").write_text(_json.dumps({
         "started_at_msk": _ts_iso(),
         "script": "4_motion_diff_low.py",
         "threshold": threshold,
@@ -456,7 +457,8 @@ def main() -> int:
         "cpu_interval": args.cpu_interval,
         "cameras": [vn for vn, _ in opened_vars],
         "crop_global": list(global_crop) if global_crop else None,
-        "output": str(out_dir),
+        "images_dir": str(images_dir),
+        "meta_dir":   str(meta_dir),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _cam_now(calib) -> "datetime | None":
@@ -476,7 +478,7 @@ def main() -> int:
     logger.info(f"Порог:     {threshold}  [{threshold_from}]")
     logger.info(f"Пульс:     {heartbeat_sec} сек  [{heartbeat_from}]")
     logger.info(f"Длит.:     {duration_desc}")
-    logger.info(f"Вывод:     {out_dir}")
+    logger.info(f"Вывод:     images={images_dir}  meta={meta_dir}")
     logger.info(f"Камеры ({len(opened_vars)}): {', '.join(vn for vn, _ in opened_vars)}")
     logger.info(f"Обрезка:   {global_crop!r}  [{global_crop_from}]")
     for vn, _ in opened_vars:
@@ -631,7 +633,7 @@ def main() -> int:
             if args.csv_save_interval > 0:
                 _now = time.monotonic()
                 if _now - _last_csv_save >= args.csv_save_interval:
-                    _save_cpu_csv(cpu_monitor.snapshot(), out_dir)
+                    _save_cpu_csv(cpu_monitor.snapshot(), meta_dir)
                     _last_csv_save = _now
 
     except KeyboardInterrupt:
@@ -656,38 +658,38 @@ def main() -> int:
         logger.info("Сохранение результатов…")
 
         if frame_log:
-            with open(out_dir / "frames.csv", "w", newline="", encoding="utf-8") as f:
+            with open(meta_dir / "frames.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "url_id", "ok", "plausible", "event"])
                 writer.writerows(frame_log)
             logger.info(f"  frames.csv: {len(frame_log)} строк")
 
         if saves_log:
-            with open(out_dir / "saves.csv", "w", newline="", encoding="utf-8") as f:
+            with open(meta_dir / "saves.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "cam", "type"])
                 writer.writerows(saves_log)
             logger.info(f"  saves.csv:  {len(saves_log)} записей")
 
         if diffs_log:
-            with open(out_dir / "diffs.csv", "w", newline="", encoding="utf-8") as f:
+            with open(meta_dir / "diffs.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "cam", "diff"])
                 writer.writerows(diffs_log)
             logger.info(f"  diffs.csv:  {len(diffs_log)} записей")
 
         if pts_log:
-            with open(out_dir / "pts.csv", "w", newline="", encoding="utf-8") as f:
+            with open(meta_dir / "pts.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(["mono_s", "ts_msk", "url_id", "pts_ms"])
                 writer.writerows(pts_log)
             logger.info(f"  pts.csv:    {len(pts_log)} записей")
 
-        _save_cpu_csv(cpu_log, out_dir)
+        _save_cpu_csv(cpu_log, meta_dir)
 
-        _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, out_dir)
-        _save_pts_chart(pts_log, cpu_log, out_dir)
-        _save_run_stats(frame_log, pts_log, saves_log, diffs_log, out_dir)
+        _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, meta_dir)
+        _save_pts_chart(pts_log, cpu_log, meta_dir)
+        _save_run_stats(frame_log, pts_log, saves_log, diffs_log, meta_dir)
 
 
     return 0
