@@ -57,6 +57,8 @@ _count_crops() {
         ! -path "*/double/*" 2>/dev/null | wc -l
 }
 
+_ts() { date '+%H:%M:%S'; }
+
 _move_unique() {
     local unique_dir="$INPUT_DIR/unique"
     [[ ! -d "$unique_dir" ]] && return 0
@@ -67,7 +69,7 @@ _move_unique() {
         local dst="$DST_NEW/$rel"
         mkdir -p "$(dirname "$dst")"
         mv "$f" "$dst"
-        echo "  [→ new] $rel"
+        echo "$(_ts)  INFO      [→ new] $rel"
         (( moved++ )) || true
     done < <(find "$unique_dir" -name "*.jpg" -type f -print0 2>/dev/null)
 
@@ -75,7 +77,7 @@ _move_unique() {
     find "$unique_dir" -type d -empty -delete 2>/dev/null || true
     [[ -d "$unique_dir" ]] && rmdir "$unique_dir" 2>/dev/null || true
 
-    echo "  Уникальных: $moved"
+    echo "$(_ts)  INFO      Уникальных: $moved"
 }
 
 _handle_doubles() {
@@ -87,9 +89,9 @@ _handle_doubles() {
 
     if [[ "$DELETE_DOUBLES" -eq 1 ]]; then
         rm -rf "$double_dir"
-        echo "  Дублей удалено: $count"
+        echo "$(_ts)  INFO      Дублей удалено: $count"
     else
-        echo "  Дублей (оставлено в double/): $count"
+        echo "$(_ts)  INFO      Дублей (оставлено в double/): $count"
     fi
 }
 

@@ -53,6 +53,7 @@ _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from common.utils.atomic import copy as _copy
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
@@ -407,7 +408,7 @@ def main() -> int:
 
                     dest = classified_base / out_class
                     dest.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(crop_path, dest / crop_path.name)
+                    _copy(crop_path, dest / crop_path.name)
 
                     ts_ep = _crop_ts_epoch(crop_path)
                     class_log.append({
@@ -468,7 +469,7 @@ def main() -> int:
     )
 
 
-    logger.info(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
     summary = "  ".join(f"{cls}: {n}" for cls, n in sorted(grand_classified.items()))
     if summary:
         logger.info(f"Итог: {summary}")

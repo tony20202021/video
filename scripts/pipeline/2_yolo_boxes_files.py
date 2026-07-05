@@ -53,6 +53,7 @@ from common.utils.camera_run import (
     save_cpu_csv as _save_cpu_csv,
 )
 from common.utils.adaptive_rate import AdaptiveRateLimiter
+from common.utils.atomic import copy as _copy, imwrite as _imwrite
 from common.utils.time_msk import ts_for_dir
 import logging
 from common.utils.log_setup import setup_logging, add_file_handler
@@ -431,6 +432,8 @@ def main() -> int:
     parser.add_argument("--cpu-interval", type=float, default=2.0)
     parser.add_argument("--save-annotated", action="store_true", default=False,
                         help="Сохранять кадры с нарисованными YOLO-рамками (*_yolo.jpg)")
+    parser.add_argument("--delete-after", action="store_true", default=False,
+                        help="Удалять исходный файл сразу после успешного инференса")
     args = parser.parse_args()
 
     # ── Single-instance guard ──────────────────────────────────────────────────
@@ -550,6 +553,7 @@ def main() -> int:
         "yolo_adapt_low":     _ADAPT_LOW,
         "yolo_adapt_factor":  _ADAPT_FACTOR,
         "cpu_interval":       args.cpu_interval,
+        "delete_after":       args.delete_after,
         "out_dir":            str(out_dir),
     }
     (out_dir / "run_params.json").write_text(
@@ -580,6 +584,7 @@ def main() -> int:
     timing_log:           list[list] = []  # [mono_s, inference_ms, sleep_ms]
     grand_total_checked   = 0
     grand_total_detected  = 0
+    grand_total_deleted   = 0
 
     for run_dir, parent_stem in run_pairs:
         run_name = run_dir.name
@@ -655,11 +660,13 @@ def main() -> int:
             crops_dir = cam_out / "crops"
 
             logger.info(f"  {cam_stem}: {len(img_paths)} изображений")
+            n_deleted = 0
             for img_idx, img_path in enumerate(img_paths, 1):
                 n_total += 1
                 frame = cv2.imread(str(img_path))
                 if frame is None:
-                    continue
+                    logger.warning("    [!] не читается, пропускаем: %s", img_path.name)
+                    continue  # нечитаемый файл не удаляем
 
                 _t_yolo_start = time.monotonic()
 
@@ -675,47 +682,51 @@ def main() -> int:
                 if _msg:
                     logger.info(_msg)
 
-                if not detections:
-                    continue
+                if detections:
+                    n_detected += 1
+                    _ensure_run_out()
+                    cam_out.mkdir(exist_ok=True)
+                    crops_dir.mkdir(exist_ok=True)
 
-                n_detected += 1
-                _ensure_run_out()
-                cam_out.mkdir(exist_ok=True)
-                crops_dir.mkdir(exist_ok=True)
+                    if args.save_annotated:
+                        annotated = draw_boxes(frame, detections)
+                        _imwrite(cam_out / (img_path.stem + "_yolo.jpg"), annotated)
 
-                if args.save_annotated:
-                    annotated = draw_boxes(frame, detections)
-                    cv2.imwrite(str(cam_out / (img_path.stem + "_yolo.jpg")), annotated)
+                    # Crops (recalculated from scratch)
+                    h, w = frame.shape[:2]
+                    for idx, (x1, y1, x2, y2, conf) in enumerate(detections, 1):
+                        bw_box = x2 - x1;  bh_box = y2 - y1
+                        px = int(bw_box * args.crop_pad);  py = int(bh_box * args.crop_pad)
+                        x1c = max(0, x1 - px);  y1c = max(0, y1 - py)
+                        x2c = min(w, x2 + px);  y2c = min(h, y2 + py)
+                        if x2c > x1c and y2c > y1c:
+                            crop_name = (f"{img_path.stem}"
+                                         f"_p{idx}of{len(detections)}_conf{conf:.2f}.jpg")
+                            _imwrite(crops_dir / crop_name, frame[y1c:y2c, x1c:x2c])
 
-                # Crops (recalculated from scratch)
-                h, w = frame.shape[:2]
-                for idx, (x1, y1, x2, y2, conf) in enumerate(detections, 1):
-                    bw_box = x2 - x1;  bh_box = y2 - y1
-                    px = int(bw_box * args.crop_pad);  py = int(bh_box * args.crop_pad)
-                    x1c = max(0, x1 - px);  y1c = max(0, y1 - py)
-                    x2c = min(w, x2 + px);  y2c = min(h, y2 + py)
-                    if x2c > x1c and y2c > y1c:
-                        crop_name = (f"{img_path.stem}"
-                                     f"_p{idx}of{len(detections)}_conf{conf:.2f}.jpg")
-                        cv2.imwrite(str(crops_dir / crop_name), frame[y1c:y2c, x1c:x2c])
+                    # mono_approx for chart
+                    parsed = _parse_img_filename(img_path.stem)
+                    mono_approx = 0.0
+                    if parsed and wall_t0_epoch:
+                        mono_approx = _img_ts_to_mono(parsed[1], wall_t0_epoch, first_mono_s)
 
-                # mono_approx for chart
-                parsed = _parse_img_filename(img_path.stem)
-                mono_approx = 0.0
-                if parsed and wall_t0_epoch:
-                    mono_approx = _img_ts_to_mono(parsed[1], wall_t0_epoch, first_mono_s)
+                    yolo_new.append([cam_stem, img_path.stem, len(detections), mono_approx])
+                    for x1, y1, x2, y2, conf in detections:
+                        all_detections.append([
+                            img_path.stem, run_name, cam_stem, img_path.name,
+                            x1, y1, x2, y2, round(conf, 4),
+                        ])
+                    logger.info(f"    [{img_idx}/{len(img_paths)}] {img_path.name}  →  {len(detections)} чел.")
 
-                yolo_new.append([cam_stem, img_path.stem, len(detections), mono_approx])
-                for x1, y1, x2, y2, conf in detections:
-                    all_detections.append([
-                        img_path.stem, run_name, cam_stem, img_path.name,
-                        x1, y1, x2, y2, round(conf, 4),
-                    ])
-                logger.info(f"    [{img_idx}/{len(img_paths)}] {img_path.name}  →  {len(detections)} чел.")
+                if args.delete_after:
+                    img_path.unlink(missing_ok=True)
+                    n_deleted += 1
 
         grand_total_checked  += n_total
         grand_total_detected += n_detected
-        logger.info(f"  Итого: {n_detected} с людьми / {n_total} проверено")
+        grand_total_deleted  += n_deleted
+        _del_msg = f"  удалено: {n_deleted}" if args.delete_after else ""
+        logger.info(f"  Итого: {n_detected} с людьми / {n_total} проверено{_del_msg}")
         if n_detected == 0:
             logger.info("  (нет детекций YOLO)")
         logger.info('')
@@ -775,6 +786,7 @@ def main() -> int:
         "input_runs":          [f"{ps}/{rd.name}" if ps else str(rd) for rd, ps in run_pairs],
         "images_yolo_checked": grand_total_checked,
         "images_with_people":  grand_total_detected,
+        "images_deleted":      grand_total_deleted,
         "detections_total":    len(all_detections),
         "duration_sec":        round(time.monotonic() - t_start, 1),
         "model":               str(args.model),
@@ -785,7 +797,7 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"\nГотово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
     return 0
 
 

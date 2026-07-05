@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from common.utils.atomic import copy as _copy
+
 # Корень проекта определяется относительно этого файла: src/ml/ → ../.. → repo root
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODELS_DIR = _REPO_ROOT / ".models" / "classify"
@@ -115,7 +117,7 @@ def register_version(onnx_src: Path, metrics: dict | None = None, notes: str = "
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     existing = list_versions()
     next_v = (max(v["version"] for v in existing) + 1) if existing else 0
-    shutil.copy2(onnx_src, model_path(next_v))
+    _copy(onnx_src, model_path(next_v))
     manifest_path(next_v).write_text(
         json.dumps({
             "version": next_v,

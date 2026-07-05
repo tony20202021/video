@@ -63,10 +63,13 @@ echo ""
 # ── Вспомогательная функция: запуск скрипта на каталог ──────────────────────
 _run_dir() {
     local input_dir="$1"
+    local _da=()
+    [[ "$DELETE_AFTER" -eq 1 ]] && _da=("--delete-after")
     "$PYTHON" "$SCRIPT" "$input_dir" \
         --yolo-max-fps "$YOLO_MAX_FPS" \
         --conf "$CONF" \
         --nms "$NMS" \
+        "${_da[@]+"${_da[@]}"}" \
         "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 }
 
@@ -137,14 +140,12 @@ while true; do
         _rc=$?
 
         if [[ $_rc -eq 0 ]]; then
-            if [[ "$DELETE_AFTER" -eq 1 ]]; then
-                rm -f "${_new[@]}"
-                echo "[$(date '+%H:%M:%S')] Удалено: ${#_new[@]} файлов"
-            else
+            if [[ "$DELETE_AFTER" -eq 0 ]]; then
                 printf '%s\n' "${_new[@]}" >> "${_STATE[$input_dir]}"
             fi
+            # удаление файлов выполняет Python (--delete-after)
         else
-            echo "[!] Скрипт вернул ошибку ($_rc), файлы не удалены" >&2
+            echo "[!] Скрипт вернул ошибку ($_rc)" >&2
         fi
         echo ""
     done

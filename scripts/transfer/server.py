@@ -250,11 +250,13 @@ async def receive_file(
 
     dest_file.parent.mkdir(parents=True, exist_ok=True)
 
+    tmp_file = dest_file.with_suffix(".tmp")
     size = 0
-    with open(dest_file, "wb") as fh:
+    with open(tmp_file, "wb") as fh:
         async for chunk in request.stream():
             fh.write(chunk)
             size += len(chunk)
+    tmp_file.rename(dest_file)  # атомарный rename — файл появляется целиком
 
     meta_file = _write_meta_sidecar(
         dest_file,
@@ -288,11 +290,21 @@ def list_runs() -> dict:
 
 
 def _log_config() -> dict:
-    """Uvicorn log config extended to route app-level logs through the default handler."""
+    """Uvicorn log config with timestamps on all lines."""
     import copy
     from uvicorn.config import LOGGING_CONFIG
     cfg = copy.deepcopy(LOGGING_CONFIG)
-    # Root logger → default handler so our logger.info/warning() appear alongside uvicorn lines
+
+    cfg["formatters"]["default"] = {
+        "format":  "%(asctime)s  %(levelname)-8s  %(message)s",
+        "datefmt": "%H:%M:%S",
+    }
+    cfg["formatters"]["access"] = {
+        "()":       "uvicorn.logging.AccessFormatter",
+        "fmt":      '%(asctime)s  ACCESS    %(client_addr)s - "%(request_line)s" %(status_code)s',
+        "datefmt":  "%H:%M:%S",
+        "use_colors": False,
+    }
     cfg["loggers"][""] = {"handlers": ["default"], "level": "INFO"}
     return cfg
 
@@ -312,15 +324,14 @@ def main() -> None:
         OUTPUT_DIR = args.output.resolve()
 
     if not API_KEY:
-        print("[!] TRANSFER_API_KEY не задан — сервер открыт без аутентификации",
-              file=sys.stderr)
+        logger.warning("[!] TRANSFER_API_KEY не задан — сервер открыт без аутентификации")
 
-    print(f"Transfer server: http://{args.host}:{args.port}")
-    print(f"Output dir:      {OUTPUT_DIR}")
+    logger.info("Transfer server: http://%s:%s", args.host, args.port)
+    logger.info("Output dir:      %s", OUTPUT_DIR)
     if ALLOWED_IPS is not None:
-        print(f"Allowed IPs:     {ALLOWED_IPS.summary()}")
+        logger.info("Allowed IPs:     %s", ALLOWED_IPS.summary())
     else:
-        print("[!] ALLOWED_IPS не задан — доступ с любого IP", file=sys.stderr)
+        logger.warning("[!] ALLOWED_IPS не задан — доступ с любого IP")
     uvicorn.run(app, host=args.host, port=args.port, log_config=_log_config())
 
 

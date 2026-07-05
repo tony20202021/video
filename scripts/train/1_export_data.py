@@ -30,6 +30,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from common.utils.atomic import copy as _copy
 from common.utils.classes import GROUP_CLASSES as CLASSES
 from common.utils.time_msk import ts_for_dir
 
@@ -65,7 +66,7 @@ async def export_classify(db, output_dir: Path, min_samples: int) -> dict:
         if not src.is_file():
             continue
         name = f"img_{img_idx:05d}.jpg"
-        shutil.copy(str(src), str(images_dir / name))
+        _copy(src, images_dir / name)
         labels.append({
             "image": name,
             "class": doc["class_label"],
@@ -83,7 +84,7 @@ async def export_classify(db, output_dir: Path, min_samples: int) -> dict:
         if not src.is_file():
             continue
         name = f"img_{img_idx:05d}.jpg"
-        shutil.copy(str(src), str(images_dir / name))
+        _copy(src, images_dir / name)
         labels.append({
             "image": name,
             "class": doc["group_class"],
@@ -121,7 +122,7 @@ async def export_identify(db, output_dir: Path, min_samples: int) -> dict:
             if not src.is_file():
                 continue
             name = f"img_{img_idx:05d}.jpg"
-            shutil.copy(str(src), str(images_dir / name))
+            _copy(src, images_dir / name)
             labels.append({
                 "image": name,
                 "class": "resident",

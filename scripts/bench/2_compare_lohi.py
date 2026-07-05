@@ -31,6 +31,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from common.utils.atomic import imwrite as _imwrite
 from common.utils.cam_urls import collect_cam_urls, resolve_hi_rtsp_url
 from common.utils.motion_utils import (
     StreamReader,
@@ -222,9 +223,9 @@ def main() -> int:
         )
 
         prefix = f"pair_{pair_num:03d}"
-        cv2.imwrite(str(out_dir / f"{prefix}_low.jpg"), low_ann)
-        cv2.imwrite(str(out_dir / f"{prefix}_hi.jpg"), hi_ann)
-        cv2.imwrite(str(out_dir / f"{prefix}_side.jpg"), side)
+        _imwrite(out_dir / f"{prefix}_low.jpg", low_ann)
+        _imwrite(out_dir / f"{prefix}_hi.jpg", hi_ann)
+        _imwrite(out_dir / f"{prefix}_side.jpg", side)
 
         row = {
             "pair": pair_num,

@@ -52,6 +52,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from common.utils.atomic import copy as _copy
 from common.utils.classes import GROUP_CLASSES as MAIN_CLASSES
 
 DEFAULT_DATA = REPO_ROOT / ".data" / "groups"
@@ -158,7 +159,7 @@ def cmd_build(args) -> int:
         cls_dir = cls_fixed if cls_fixed in ALL_CLASSES else "unknown"
         dst = out_dir / cls_dir / src.name
         if not dst.exists():
-            shutil.copy2(src, dst)
+            _copy(src, dst)
         counts[cls_dir] = counts.get(cls_dir, 0) + 1
 
     dataset_meta = {
@@ -229,7 +230,7 @@ def cmd_apply(args) -> int:
                 shutil.move(str(src), dst)
                 moved_dirs.add(src.parent)
             else:
-                shutil.copy2(src, dst)
+                _copy(src, dst)
         counts[cls_dir] = counts.get(cls_dir, 0) + 1
 
     if moved_dirs:
@@ -363,7 +364,7 @@ def cmd_add(args) -> int:
         if crop.name in existing:
             skipped_dupe += 1
             continue
-        shutil.copy2(crop, new_dir / crop.name)
+        _copy(crop, new_dir / crop.name)
         existing.add(crop.name)
         copied += 1
 

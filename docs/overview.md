@@ -120,8 +120,12 @@ video/
   src/
     common/
       utils/
+        atomic.py         — атомарные записи: imwrite() и copy() через .tmp → rename
         cam_urls.py       — сбор CAM_<stem>_URL из окружения
         cam_crop.py       — обрезка кадра по долям x,y,w,h
+        classes.py        — GROUP_CLASSES — единый список классов классификатора
+        adaptive_rate.py  — AdaptiveRateLimiter, регулировка YOLO по CPU-нагрузке
+        log_setup.py      — setup_logging() с единым форматом %(asctime)s  %(levelname)-8s
         motion_utils.py   — общие утилиты motion-цикла
         person_detector.py — обёртка YOLOv8n ONNX
     frontend/             — Telegram Bot (aiogram 3.0)

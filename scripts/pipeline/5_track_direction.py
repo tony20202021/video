@@ -60,7 +60,7 @@ def main() -> int:
     for r in results:
         by_dir[r["direction"]] += 1
 
-    logger.info("\nИтого треков: %s", len(results))
+    logger.info("Итого треков: %s", len(results))
     labels = {DIRECTION_HOME: "→ домой", DIRECTION_AWAY: "← из дома",
               DIRECTION_UNKNOWN: "неизвестно"}
     for d, n in sorted(by_dir.items()):

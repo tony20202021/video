@@ -51,6 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+from common.utils.atomic import imwrite as _imwrite
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.camera_run import (
@@ -482,7 +483,7 @@ def main() -> int:
         c = crop_by_cam[vn]
         cr = (f"x,y,w,h={c}" if c is not None else "полный кадр")
         logger.info(f"  └ {vn}: {cr}")
-    logger.info("Останов: Ctrl+C\n")
+    logger.info("Останов: Ctrl+C")
 
     t_start = time.monotonic()
 
@@ -512,7 +513,7 @@ def main() -> int:
             stem = _stem_from_env_var(vn)
             calib0 = rtcp_workers[low_u].get_calib() if rtcp_workers else None
             bname = f"{stem}_{_ts(calib0)}_baseline.jpg"
-            cv2.imwrite(str(_cam_dir(vn) / bname), fl)
+            _imwrite(_cam_dir(vn) / bname, fl)
             saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "baseline"])
             logger.info(f"  {bname}")
     logger.info('')
@@ -545,7 +546,7 @@ def main() -> int:
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
-                logger.info(f"\nДлительность {args.duration:.0f} сек истекла — останов.")
+                logger.info(f"Длительность {args.duration:.0f} сек истекла — останов.")
                 break
 
             _today = ts_for_file()[:8]
@@ -604,7 +605,7 @@ def main() -> int:
                         calib = rtcp_workers[low_u].get_calib() if rtcp_workers else None
                         stem = _stem_from_env_var(vn)
                         fname = f"{stem}_{_ts(calib)}_diff{diff:.1f}.jpg"
-                        cv2.imwrite(str(_cam_dir(vn) / "diff" / fname), frame_u)
+                        _imwrite(_cam_dir(vn) / "diff" / fname, frame_u)
                         frame_log[-1][5] = "diff"
                         saves_log.append([round(_now - t_start, 4), _ts_str, vn, "diff"])
                         logger.info(f"  {fname}  diff={diff:.2f}")
@@ -622,7 +623,7 @@ def main() -> int:
                     calib = rtcp_workers[low_u].get_calib() if rtcp_workers else None
                     stem = _stem_from_env_var(vn)
                     hb_name = f"{stem}_{_ts(calib)}_heartbeat.jpg"
-                    cv2.imwrite(str(_cam_dir(vn) / hb_name), hb)
+                    _imwrite(_cam_dir(vn) / hb_name, hb)
                     frame_log[-1][5] = "heartbeat"
                     saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "heartbeat"])
                     logger.info(f"  пульс {hb_name}")
@@ -634,7 +635,7 @@ def main() -> int:
                     _last_csv_save = _now
 
     except KeyboardInterrupt:
-        logger.info("\nОстанов по Ctrl+C")
+        logger.info("Останов по Ctrl+C")
         logger.info("Сохранение статистики — не нажимайте Ctrl+C повторно…")
     finally:
         for r in readers.values():
@@ -652,7 +653,7 @@ def main() -> int:
         except KeyboardInterrupt:
             cpu_log = cpu_monitor.snapshot()
 
-        logger.info("\nСохранение результатов…")
+        logger.info("Сохранение результатов…")
 
         if frame_log:
             with open(out_dir / "frames.csv", "w", newline="", encoding="utf-8") as f:

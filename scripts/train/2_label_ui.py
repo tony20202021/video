@@ -302,6 +302,7 @@ const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
 let selected = new Set();
 let lastToggleIdx = -1;
+let flatOrder = [];  // crop indices in visual (DOM) order, rebuilt each render()
 
 function zoom(d) {
   zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
@@ -338,6 +339,9 @@ function render() {
 
   const sections = [...ORDER, '—'].filter(k => groups[k] && groups[k].length);
 
+  flatOrder = [];
+  sections.forEach(cls => groups[cls].forEach(i => flatOrder.push(i)));
+
   document.getElementById('gallery').innerHTML = sections.map(cls => {
     const cidx = classes.indexOf(cls);
     const color = cidx >= 0 ? CLASS_COLORS[cidx] : (cls === '—' ? '#444' : '#888');
@@ -371,8 +375,15 @@ function tileClick(i, e) {
 function toggleSelect(idx, e) {
   e.stopPropagation();
   if (e.shiftKey && lastToggleIdx >= 0) {
-    const lo = Math.min(lastToggleIdx, idx), hi = Math.max(lastToggleIdx, idx);
-    for (let j = lo; j <= hi; j++) selected.add(j);
+    const a = flatOrder.indexOf(lastToggleIdx);
+    const b = flatOrder.indexOf(idx);
+    if (a >= 0 && b >= 0) {
+      const lo = Math.min(a, b), hi = Math.max(a, b);
+      for (let j = lo; j <= hi; j++) selected.add(flatOrder[j]);
+    } else {
+      selected.add(idx);
+      lastToggleIdx = idx;
+    }
   } else {
     if (selected.has(idx)) selected.delete(idx);
     else { selected.add(idx); lastToggleIdx = idx; }
@@ -449,6 +460,7 @@ async function relabel(cls) {
   });
   const d = await (await fetch('/api/state')).json();
   labels = d.labels;
+  lastToggleIdx = -1;
   openModal(modalIdx);
   render();
 }
@@ -572,7 +584,7 @@ const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
 let selected = new Set();  // indices into allFiles
 let allFiles = [];          // [{f, cls}, ...] flat list built each render
-let lastToggleIdx = -1;
+let lastToggleFile = null;  // anchor tracked by file path (allFiles indices shift on render)
 
 function zoom(d) {
   zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
@@ -633,12 +645,18 @@ function tileClick(i, f, cls, e) {
 
 function toggleSelect(idx, e) {
   e.stopPropagation();
-  if (e.shiftKey && lastToggleIdx >= 0) {
-    const lo = Math.min(lastToggleIdx, idx), hi = Math.max(lastToggleIdx, idx);
-    for (let j = lo; j <= hi; j++) selected.add(j);
+  if (e.shiftKey && lastToggleFile !== null) {
+    const anchorPos = allFiles.findIndex(x => x.f === lastToggleFile);
+    if (anchorPos >= 0) {
+      const lo = Math.min(anchorPos, idx), hi = Math.max(anchorPos, idx);
+      for (let j = lo; j <= hi; j++) selected.add(j);
+    } else {
+      selected.add(idx);
+      lastToggleFile = allFiles[idx].f;
+    }
   } else {
     if (selected.has(idx)) selected.delete(idx);
-    else { selected.add(idx); lastToggleIdx = idx; }
+    else { selected.add(idx); lastToggleFile = allFiles[idx].f; }
   }
   updateSelectionDOM();
   updateBulkBar();
@@ -681,7 +699,7 @@ async function applyBulk(toCls) {
   const d = await (await fetch('/api/dataset')).json();
   groups = d.groups; classes = d.classes;
   selected.clear();
-  lastToggleIdx = -1;
+  lastToggleFile = null;
   render();
 }
 
@@ -720,6 +738,7 @@ async function moveTo(toCls) {
     groups[toCls].push(d.new_path);
     modalFile = d.new_path;
     modalCls = toCls;
+    lastToggleFile = null;
     render();
     buildModalBtns();
     document.getElementById('modal-cls').textContent = toCls;

@@ -39,6 +39,7 @@ _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from common.utils.atomic import imwrite as _imwrite  # noqa: E402
 from common.utils.cam_urls import collect_cam_urls, stem_sort_key  # noqa: E402
 from common.utils.motion_utils import redact_url  # noqa: E402
 from common.utils.time_msk import ts_for_dir, ts_iso  # noqa: E402
@@ -253,7 +254,7 @@ def main() -> int:
                         entry["error"] = _scrub(entry["error"], args.password)
                     if r["ok"]:
                         fname = f"rtsp_ch{ch}_st{st}.jpg"
-                        cv2.imwrite(str(run_dir / fname), r["frame"])
+                        _imwrite(run_dir / fname, r["frame"])
                         entry["frame_saved"] = fname
                         ok_count += 1
                         print(f"OK  {r['width']}×{r['height']} {r['fps']:.1f}fps  → {fname}")

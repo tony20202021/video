@@ -33,6 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _SRC = REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+from common.utils.atomic import imwrite as _imwrite
 from common.utils.cam_crop import apply_crop_optional, crop_map_for_cameras, resolve_global_crop
 from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.motion_utils import redact_url as _redact_url
@@ -340,7 +341,7 @@ def main() -> int:
             else:
                 probe["crop_rel"] = None
             jpg_path = run_dir / f"{stem}_frame.jpg"
-            cv2.imwrite(str(jpg_path), frame)
+            _imwrite(jpg_path, frame)
             probe["frame_saved"] = str(jpg_path.name)
         else:
             probe["frame_saved"] = None
