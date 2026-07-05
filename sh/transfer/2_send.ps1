@@ -16,7 +16,7 @@
 
 param(
     [Parameter(Mandatory=$false)]
-    [string] $WatchDir = "E:\_Home\Tony\pet projects\video\.output\pipeline\1_motion_diff\",
+    [string] $WatchDir = "E:\_Home\Tony\pet projects\video\.output\pipeline\1_motion_diff",   # default: $Repo\.output\pipeline\1_motion_diff
     [string] $RunRoot   = "",   # default: parent of WatchDir
     [string] $Step      = "",   # default: parent of RunRoot
     [string] $Run       = "",   # default: RunRoot.Name
@@ -35,9 +35,12 @@ $Script = "$Repo\scripts\transfer\client.py"
 $env:PYTHONIOENCODING = "utf-8"
 chcp 65001 | Out-Null
 
-if (-not [System.IO.Path]::IsPathRooted($WatchDir)) {
-    $WatchDir = "$Repo\$WatchDir"
+if (-not $WatchDir) {
+    $WatchDir = Join-Path $Repo ".output\pipeline\1_motion_diff"
+} elseif (-not [System.IO.Path]::IsPathRooted($WatchDir)) {
+    $WatchDir = Join-Path $Repo $WatchDir
 }
+$WatchDir = [System.IO.Path]::GetFullPath($WatchDir.TrimEnd('\', '/'))
 if ($RunRoot -and -not [System.IO.Path]::IsPathRooted($RunRoot)) {
     $RunRoot = "$Repo\$RunRoot"
 }
