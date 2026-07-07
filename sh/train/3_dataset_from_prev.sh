@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Стратегии 4,7: прогон инференса на предыдущем датасете.
 #
-# Вызывается один раз для старого датасета (или из 2_dataset_build.sh).
+# Вызывается один раз для старого датасета (или из 3_dataset_build.sh).
 #
 # Usage:
-#   ./sh/train/2_dataset_from_prev.sh <dataset_dir> --output <output_dir>
-#   ./sh/train/2_dataset_from_prev.sh .data/groups/v1/dataset \
+#   ./sh/train/3_dataset_from_prev.sh <dataset_dir> --output <output_dir>
+#   ./sh/train/3_dataset_from_prev.sh .data/groups/v1/dataset \
 #       --output .data/groups/v2/dataset
-#   ./sh/train/2_dataset_from_prev.sh ... --strategies 7 --dry-run
+#   ./sh/train/3_dataset_from_prev.sh ... --strategies 7 --dry-run
 
 set -euo pipefail
 

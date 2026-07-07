@@ -46,6 +46,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 _ts() { date '+%H:%M:%S'; }
+SCRIPT_NAME="$(basename "$0" .sh)"
 
 _count_crops() {
     find "$S2DIR" -name "*.jpg" -type f 2>/dev/null | wc -l
@@ -73,7 +74,7 @@ while true; do
 
         echo ""
     else
-        echo "$(_ts)  INFO      Кропов нет в $S2DIR — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      ($SCRIPT_NAME) Кропов нет в $S2DIR — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

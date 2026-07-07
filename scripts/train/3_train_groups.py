@@ -115,6 +115,74 @@ def _build_model(num_classes: int, pretrained: bool = True):
     return model
 
 
+def _eval_dataset(
+    model, items: list[dict], images_dir: Path, device, batch_size: int, transform
+) -> tuple[list[int], list[int]]:
+    """Инференс без аугментации. Возвращает (y_true, y_pred) как списки индексов классов."""
+    import torch
+    from torch.utils.data import DataLoader, Dataset
+    from PIL import Image
+
+    class _DS(Dataset):
+        def __init__(self, items, tf):
+            self.items, self.tf = items, tf
+        def __len__(self): return len(self.items)
+        def __getitem__(self, i):
+            it = self.items[i]
+            return self.tf(Image.open(images_dir / it["image"]).convert("RGB")), CLASS_TO_IDX[it["class"]]
+
+    y_true: list[int] = []
+    y_pred: list[int] = []
+    model.eval()
+    with torch.no_grad():
+        for imgs, targets in DataLoader(_DS(items, transform), batch_size=batch_size):
+            y_pred.extend(model(imgs.to(device)).argmax(1).cpu().tolist())
+            y_true.extend(targets.tolist())
+    return y_true, y_pred
+
+
+def _compute_eval_metrics(y_true: list[int], y_pred: list[int]) -> dict:
+    """Confusion matrix, per-class accuracy/precision/recall/F1, macro/weighted F1."""
+    n = len(CLASSES)
+    cm = [[0] * n for _ in range(n)]
+    for t, p in zip(y_true, y_pred):
+        cm[t][p] += 1
+
+    by_class: dict[str, dict] = {}
+    correct_total = 0
+    macro_f1 = 0.0
+    weighted_f1 = 0.0
+    support_total = 0
+
+    for i, cls in enumerate(CLASSES):
+        support = sum(cm[i])
+        tp = cm[i][i]
+        fp = sum(cm[r][i] for r in range(n)) - tp
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall    = tp / support   if support  else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        by_class[cls] = {
+            "accuracy":  round(tp / support if support else 0.0, 4),
+            "precision": round(precision, 4),
+            "recall":    round(recall, 4),
+            "f1":        round(f1, 4),
+            "support":   support,
+        }
+        correct_total  += tp
+        macro_f1       += f1
+        weighted_f1    += f1 * support
+        support_total  += support
+
+    return {
+        "total_samples": support_total,
+        "accuracy":      round(correct_total / support_total, 4) if support_total else 0.0,
+        "macro_f1":      round(macro_f1 / n, 4),
+        "weighted_f1":   round(weighted_f1 / support_total, 4) if support_total else 0.0,
+        "by_class":      by_class,
+        "confusion_matrix": {"classes": list(CLASSES), "matrix": cm},
+    }
+
+
 def train(
     data_path: Path,
     *,
@@ -318,6 +386,18 @@ def train(
 
     (output_dir / "best.pt").unlink(missing_ok=True)
 
+    # Полный инференс по датасету после обучения
+    print("\nИнференс по датасету…")
+    y_true_full, y_pred_full = _eval_dataset(model, valid, images_dir, device, batch_size, _val_tf)
+    y_true_val,  y_pred_val  = _eval_dataset(model, val_items, images_dir, device, batch_size, _val_tf)
+    eval_full = _compute_eval_metrics(y_true_full, y_pred_full)
+    eval_val  = _compute_eval_metrics(y_true_val,  y_pred_val)
+    print(f"  full:  accuracy={eval_full['accuracy']:.3f}  macro_f1={eval_full['macro_f1']:.3f}")
+    print(f"  val:   accuracy={eval_val['accuracy']:.3f}   macro_f1={eval_val['macro_f1']:.3f}")
+    for cls in CLASSES:
+        mf, mv = eval_full["by_class"][cls], eval_val["by_class"][cls]
+        print(f"  {cls}: full acc={mf['accuracy']:.3f} f1={mf['f1']:.3f} | val acc={mv['accuracy']:.3f} f1={mv['f1']:.3f} (n={mv['support']})")
+
     metrics = {
         "model_tag": model_tag,
         "dataset_version": dataset_version,
@@ -330,6 +410,7 @@ def train(
         "history": history,
         "model_path": str(onnx_path.relative_to(REPO_ROOT)),
         "backbone_path": str(backbone_path.relative_to(REPO_ROOT)),
+        "eval": {"full": eval_full, "val": eval_val},
     }
     write_classify_manifest(
         model_tag,
@@ -337,11 +418,13 @@ def train(
         dataset_version=dataset_version,
         dataset_path=dataset_path_rel,
     )
-    (output_dir / "training_results.json").write_text(
+    results_path = (_dataset_dir / "training_results.json") if _dataset_dir else (output_dir / "training_results.json")
+    results_path.write_text(
         json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"\nЛучший val_acc: {best_val_acc:.3f}")
     print(f"Модель: {onnx_path}")
+    print(f"Результаты: {results_path}")
     return metrics
 
 

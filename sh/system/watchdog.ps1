@@ -8,9 +8,9 @@
 # Каждый процесс пишет в свой лог-файл (logs\*.log).
 #
 # Usage:
-#   .\sh\watchdog.ps1                  — запустить watchdog (окно остаётся открытым)
-#   .\sh\watchdog.ps1 -Register        — зарегистрировать как задачу при пробуждении системы
-#   .\sh\watchdog.ps1 -Unregister      — удалить задачу
+#   .\sh\system\watchdog.ps1                  — запустить watchdog (окно остаётся открытым)
+#   .\sh\system\watchdog.ps1 -Register        — зарегистрировать как задачу при пробуждении системы
+#   .\sh\system\watchdog.ps1 -Unregister      — удалить задачу
 
 param(
     [switch] $Register,
@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo    = Split-Path -Parent $PSScriptRoot
+$Repo    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Conda   = "conda_video"
 $Python  = "$env:USERPROFILE\miniconda3\envs\$Conda\python.exe"
 $LogDir  = "$Repo\logs"
@@ -76,7 +76,7 @@ if ($Register) {
     schtasks /Create /TN $TaskName /XML $xmlPath /F | Out-Null
     Remove-Item $xmlPath -ErrorAction SilentlyContinue
     Write-Host "Задача '$TaskName' зарегистрирована (при старте системы + при пробуждении)."
-    Write-Host "Для удаления: .\sh\watchdog.ps1 -Unregister"
+    Write-Host "Для удаления: .\sh\system\watchdog.ps1 -Unregister"
     exit
 }
 

@@ -40,6 +40,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 _ts() { date '+%H:%M:%S'; }
+SCRIPT_NAME="$(basename "$0" .sh)"
 
 # ── Обновление labels.json для одного каталога с датой ────────────────────────
 #
@@ -106,12 +107,12 @@ while true; do
         if [[ -n "$out" ]]; then
             echo "$(_ts)  INFO      $(basename "$date_dir"): $out"
         else
-            echo "$(_ts)  INFO      $date_dir: labels.json актуален ($n файлов) — ожидание ${POLL_SEC}s…"
+            echo "$(_ts)  INFO      ($SCRIPT_NAME) $date_dir: labels.json актуален ($n файлов) — ожидание ${POLL_SEC}s…"
         fi
     done
 
     if [[ "$found" -eq 0 ]]; then
-        echo "$(_ts)  INFO      Файлов нет в $INFERENCE_IMAGES — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      ($SCRIPT_NAME) Файлов нет в $INFERENCE_IMAGES — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

@@ -117,6 +117,7 @@ let idx = 0;
 let crops = [];
 let labels = {};
 let classes = [];
+let probs = {};
 
 async function loadState() {
   const r = await fetch('/api/state');
@@ -125,6 +126,7 @@ async function loadState() {
   labels = d.labels;
   idx = d.current_idx;
   classes = d.classes;
+  probs = d.probs || {};
   const p = new URLSearchParams(location.search).get('idx');
   if (p !== null) idx = Math.max(0, Math.min(crops.length - 1, parseInt(p)));
   render();
@@ -176,6 +178,7 @@ function render() {
         </div>
         <div class="fname">${f}</div>
         <div class="current-label">Класс: <span>${lbl || '—'}</span></div>
+        ${probBars(f)}
         <div class="buttons">${classButtons}</div>
         <div class="nav-row">
           <button class="btn-nav" onclick="navigate(-1)">← Назад</button>
@@ -190,6 +193,25 @@ function render() {
         <img src="/image/${encodeURIComponent(f)}" alt="${f}" />
       </div>
     </div>`;
+}
+
+function probBars(filename) {
+  const fname = filename.split('/').pop();
+  const p = probs[fname];
+  if (!p) return '';
+  const rows = classes.map((cls, i) => {
+    const color = CLASS_COLORS[i] || '#888888';
+    const val = p[cls] !== undefined ? p[cls] : 0;
+    const pct = (val * 100).toFixed(0);
+    return `<div style="display:flex;align-items:center;gap:5px;margin:2px 0">
+      <span style="width:86px;font-size:10px;text-align:right;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cls}</span>
+      <div style="flex:1;height:8px;background:#111120;border-radius:2px">
+        <div style="width:${pct}%;height:100%;background:${color}bb;border-radius:2px"></div>
+      </div>
+      <span style="width:34px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
+    </div>`;
+  }).join('');
+  return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
 }
 
 document.addEventListener('keydown', e => {
@@ -243,6 +265,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
   #modal.open { display: flex; }
   #modal img { max-width: 90vw; max-height: 70vh; object-fit: contain; border: 2px solid #444; }
   #modal .modal-fname { color: #aaa; font-size: 11px; }
+  #modal .modal-probs { min-width: 280px; }
   #modal .modal-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
   #modal button { padding: 8px 16px; font-size: 13px; cursor: pointer; border: none;
                   border-radius: 4px; font-family: monospace; }
@@ -263,6 +286,8 @@ _GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
+  .btn-bulk-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
   .btn-bulk-desel:hover { color: #eee; }
   #gallery { padding-bottom: 72px; }
@@ -291,6 +316,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
 <div id="modal">
   <img id="modal-img" src="" alt="">
   <div class="modal-fname" id="modal-fname"></div>
+  <div class="modal-probs" id="modal-probs"></div>
   <div class="modal-btns" id="modal-btns"></div>
 </div>
 
@@ -298,6 +324,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
 const CLASS_COLORS = ["#27ae60","#e67e22","#9b59b6","#95a5a6","#3498db",
                       "#e74c3c","#1abc9c","#f39c12","#8e44ad"];
 let crops = [], labels = {}, classes = [];
+let probs = {};
 let modalFile = '', modalIdx = 0;
 const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
@@ -313,7 +340,27 @@ function zoom(d) {
 async function loadState() {
   const d = await (await fetch('/api/state')).json();
   crops = d.crops; labels = d.labels; classes = d.classes;
+  probs = d.probs || {};
   render();
+}
+
+function probBars(filename) {
+  const fname = filename.split('/').pop();
+  const p = probs[fname];
+  if (!p) return '';
+  const rows = classes.map((cls, i) => {
+    const color = CLASS_COLORS[i] || '#888888';
+    const val = p[cls] !== undefined ? p[cls] : 0;
+    const pct = (val * 100).toFixed(0);
+    return `<div style="display:flex;align-items:center;gap:5px;margin:2px 0">
+      <span style="width:86px;font-size:10px;text-align:right;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cls}</span>
+      <div style="flex:1;height:8px;background:#111120;border-radius:2px">
+        <div style="width:${pct}%;height:100%;background:${color}bb;border-radius:2px"></div>
+      </div>
+      <span style="width:34px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
+    </div>`;
+  }).join('');
+  return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
 }
 
 function render() {
@@ -321,11 +368,13 @@ function render() {
   document.getElementById('stats').textContent =
     `${crops.length} кропов · размечено ${labeled}`;
 
-  document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) => {
-    const color = CLASS_COLORS[i] || '#888';
-    return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}')"
-      style="border-left-color:${color}">${cls}</button>`;
-  }).join('');
+  document.getElementById('bulk-btns').innerHTML =
+    classes.map((cls, i) => {
+      const color = CLASS_COLORS[i] || '#888';
+      return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}')"
+        style="border-left-color:${color}">${cls}</button>`;
+    }).join('') +
+    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk('skip')">Пропустить</button>`;
 
   const groups = {};
   const ORDER = [...classes, 'skip', 'unknown'];
@@ -440,6 +489,7 @@ function openModal(i) {
   const lbl = labels[modalFile] || '';
   document.getElementById('modal-img').src = '/image/' + encodeURIComponent(modalFile);
   document.getElementById('modal-fname').textContent = modalFile.split('/').pop();
+  document.getElementById('modal-probs').innerHTML = probBars(modalFile);
   const btns = classes.map((cls, ci) => {
     const color = CLASS_COLORS[ci] || '#888';
     const active = lbl === cls;
@@ -524,6 +574,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   #modal img { max-width: 90vw; max-height: 70vh; object-fit: contain; border: 2px solid #444; }
   #modal .modal-cls { font-size: 13px; color: #aaa; }
   #modal .modal-fname { color: #555; font-size: 11px; }
+  #modal .modal-probs { min-width: 280px; }
   #modal .modal-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
   #modal button { padding: 8px 16px; font-size: 13px; cursor: pointer; border: none;
                   border-radius: 4px; font-family: monospace; }
@@ -573,6 +624,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   <img id="modal-img" src="" alt="">
   <div class="modal-cls" id="modal-cls"></div>
   <div class="modal-fname" id="modal-fname"></div>
+  <div class="modal-probs" id="modal-probs"></div>
   <div class="modal-btns" id="modal-btns"></div>
 </div>
 
@@ -580,6 +632,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
 const CLASS_COLORS = ["#27ae60","#e67e22","#9b59b6","#95a5a6","#3498db",
                       "#e74c3c","#1abc9c","#f39c12","#8e44ad"];
 let groups = {}, classes = [];
+let probs = {};
 let modalFile = '', modalCls = '';
 const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
@@ -595,7 +648,27 @@ function zoom(d) {
 async function loadState() {
   const d = await (await fetch('/api/dataset')).json();
   groups = d.groups; classes = d.classes;
+  probs = d.probs || {};
   render();
+}
+
+function probBars(filename) {
+  const fname = filename.split('/').pop();
+  const p = probs[fname];
+  if (!p) return '';
+  const rows = classes.map((cls, i) => {
+    const color = CLASS_COLORS[i] || '#888888';
+    const val = p[cls] !== undefined ? p[cls] : 0;
+    const pct = (val * 100).toFixed(0);
+    return `<div style="display:flex;align-items:center;gap:5px;margin:2px 0">
+      <span style="width:86px;font-size:10px;text-align:right;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cls}</span>
+      <div style="flex:1;height:8px;background:#111120;border-radius:2px">
+        <div style="width:${pct}%;height:100%;background:${color}bb;border-radius:2px"></div>
+      </div>
+      <span style="width:34px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
+    </div>`;
+  }).join('');
+  return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
 }
 
 function render() {
@@ -709,6 +782,7 @@ function openModal(f, cls) {
   document.getElementById('modal-img').src = '/image/' + encodeURIComponent(f);
   document.getElementById('modal-cls').textContent = cls;
   document.getElementById('modal-fname').textContent = f.split('/').pop();
+  document.getElementById('modal-probs').innerHTML = probBars(f);
   buildModalBtns();
   document.getElementById('modal').classList.add('open');
 }
@@ -764,12 +838,39 @@ loadState();
 </html>"""
 
 
+def _load_probs(csv_path: Path, classes: list[str]) -> dict[str, dict[str, float]]:
+    """Читает p_<class> колонки из classifications.csv → {filename: {class: prob}}."""
+    import csv as _csv
+    if not csv_path.is_file():
+        return {}
+    result: dict[str, dict[str, float]] = {}
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in _csv.DictReader(f):
+                crop = row.get("crop", "")
+                if not crop:
+                    continue
+                cls_probs: dict[str, float] = {}
+                for cls in classes:
+                    raw = row.get(f"p_{cls}", "")
+                    try:
+                        cls_probs[cls] = float(raw) if raw else 0.0
+                    except ValueError:
+                        cls_probs[cls] = 0.0
+                if any(v > 0 for v in cls_probs.values()):
+                    result[crop] = cls_probs
+    except Exception:
+        pass
+    return result
+
+
 def run_server(input_dir: Path, port: int, labels_path: Path,
                unlabeled_only: bool = False,
                classes: list[str] | None = None,
                dataset_dir: Path | None = None,
                image_exts: set[str] | None = None,
-               allowed_ips: IpAllowlist | None = None) -> None:
+               allowed_ips: IpAllowlist | None = None,
+               probs: dict | None = None) -> None:
     from flask import Flask, abort, jsonify, request, send_file, Response
     import logging
     import shutil as _shutil
@@ -821,10 +922,12 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
     def gallery_dataset():
         return Response(_DATASET_GALLERY_HTML, mimetype="text/html")
 
+    _probs = probs or {}
+
     @app.route("/api/state")
     def state():
         return jsonify({"crops": crops, "labels": labels, "current_idx": current,
-                        "classes": _classes})
+                        "classes": _classes, "probs": _probs})
 
     @app.route("/api/dataset")
     def api_dataset():
@@ -841,7 +944,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
             )
             if files:
                 grps[subdir.name] = files
-        return jsonify({"groups": grps, "classes": _classes})
+        return jsonify({"groups": grps, "classes": _classes, "probs": _probs})
 
     @app.route("/api/dataset/move", methods=["POST"])
     def api_dataset_move():
@@ -948,6 +1051,8 @@ def main() -> int:
                         help="Показывать только ещё не размеченные кропы")
     parser.add_argument("--ext", default="jpg",
                         help="Расширения файлов через запятую (default: jpg)")
+    parser.add_argument("--probs", action="store_true",
+                        help="Показывать вероятности из classifications.csv")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -960,12 +1065,20 @@ def main() -> int:
     labels_path = args.labels or (DEFAULT_LABELS / "labels.json")
     image_exts = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
     allowed_ips = parse_allowed_ips(_ENV.get("ALLOWED_IPS", ""))
+
+    probs: dict | None = None
+    if args.probs:
+        csv_path = labels_path.parent / "classifications.csv"
+        probs = _load_probs(csv_path, classes)
+        print(f"Вероятности: {csv_path}  ({len(probs)} записей)")
+
     run_server(args.input, args.port, labels_path,
                unlabeled_only=args.unlabeled_only,
                classes=classes,
                dataset_dir=resolved_dataset,
                image_exts=image_exts,
-               allowed_ips=allowed_ips)
+               allowed_ips=allowed_ips,
+               probs=probs)
     return 0
 
 

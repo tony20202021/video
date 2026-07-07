@@ -54,7 +54,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.atomic import copy as _copy
-from common.utils.classes import GROUP_CLASS_COLORS
+from common.utils.classes import GROUP_CLASS_COLORS, GROUP_CLASSES
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
@@ -148,22 +148,99 @@ def _load_classifier(config_path: Path):
 
 
 def _classify(clf, bgr_crop, *, classify_conf: float):
-    """Возвращает (group_class, group_conf, out_class, conf_2nd).
+    """Возвращает (group_class, group_conf, out_class, conf_2nd, prob_map).
 
     out_class — имя подкаталога: group_class если уверенность >= classify_conf,
     иначе 'uncertain'.
     conf_2nd  — вторая по величине вероятность (для margin = group_conf − conf_2nd).
+    prob_map  — {class: probability} для всех классов.
     """
     if clf is None:
-        return "unknown", 0.0, "unknown", 0.0
+        return "unknown", 0.0, "unknown", 0.0, {}
     group_class, group_conf, prob_map = clf.classify(bgr_crop)
     out_class = group_class if group_conf >= classify_conf else "uncertain"
     sorted_probs = sorted(prob_map.values(), reverse=True)
     conf_2nd = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
-    return group_class, group_conf, out_class, conf_2nd
+    return group_class, group_conf, out_class, conf_2nd, prob_map
 
 
 # ─── Timestamp from crop filename ────────────────────────────────────────────
+
+def _detect_subrun(filename: str) -> str:
+    """Извлекает YYYYMMDD из имени файла (sub_run в CSV)."""
+    stem = filename.rsplit(".", 1)[0]
+    for part in stem.split("_"):
+        if len(part) == 8 and part.isdigit():
+            return part
+    return "unknown"
+
+
+def _detect_source(filename: str) -> str:
+    """Определяет источник файла (cam в CSV): service или diff."""
+    if "heartbeat" in filename or "baseline" in filename:
+        return "service"
+    return "diff"
+
+
+def _rebuild_csv(clf, images_dir: Path, *, classify_conf: float, ext: str = "jpg") -> int:
+    """Перестраивает classifications.csv из файлов в images_dir/<class>/."""
+    import cv2
+
+    all_files: list[Path] = []
+    for d in sorted(images_dir.iterdir()):
+        if d.is_dir():
+            for f in sorted(d.iterdir()):
+                if f.suffix.lower() == f".{ext}":
+                    all_files.append(f)
+
+    if not all_files:
+        logger.warning("[rebuild-csv] Файлов не найдено в %s", images_dir)
+        return 0
+
+    logger.info("[rebuild-csv] %d файлов в %s", len(all_files), images_dir)
+
+    _csv_fields = [
+        "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
+        "group", "group_conf", "conf_2nd", "margin",
+        *[f"p_{cls}" for cls in GROUP_CLASSES],
+        "out_class",
+    ]
+
+    rows = []
+    for crop_path in all_files:
+        bgr = cv2.imread(str(crop_path))
+        if bgr is None:
+            continue
+        group, group_conf, out_class, conf_2nd, prob_map = _classify(
+            clf, bgr, classify_conf=classify_conf,
+        )
+        rows.append({
+            "mono_s":     0.0,
+            "ts_epoch":   _crop_ts_epoch(crop_path),
+            "run_name":   "rebuilt",
+            "sub_run":    _detect_subrun(crop_path.name),
+            "cam":        _detect_source(crop_path.name),
+            "crop":       crop_path.name,
+            "group":      group,
+            "group_conf": round(group_conf, 3),
+            "conf_2nd":   round(conf_2nd, 3),
+            "margin":     round(group_conf - conf_2nd, 3),
+            **{f"p_{cls}": round(prob_map.get(cls, 0.0), 3) for cls in GROUP_CLASSES},
+            "out_class":  out_class,
+        })
+
+    csv_path = images_dir / "classifications.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=_csv_fields)
+        w.writeheader()
+        w.writerows(rows)
+
+    logger.info("[rebuild-csv] %d записей → %s", len(rows), csv_path)
+    from collections import Counter as _Counter
+    for cls, n in sorted(_Counter(r["out_class"] for r in rows).items()):
+        logger.info("  %s: %d", cls, n)
+    return len(rows)
+
 
 def _crop_ts_epoch(crop_path: Path) -> float | None:
     """Парсит дату-время из имени файла кропа (формат 5_2).
@@ -284,7 +361,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Офлайн классификация кропов по группам (Модель 1)"
     )
-    parser.add_argument("input_dir", type=Path,
+    parser.add_argument("input_dir", type=Path, nargs="?",
                         help="Конкретный run-каталог 2_yolo_boxes_files")
     parser.add_argument("--config",        type=Path, default=DEFAULT_CONFIG,
                         help="config.yaml с путями к ML-моделям")
@@ -296,6 +373,10 @@ def main() -> int:
     parser.add_argument("--ext",           default="jpg", metavar="EXT",
                         help="Расширение файлов кропов (default: jpg)")
     parser.add_argument("--cpu-interval",  type=float, default=2.0)
+    parser.add_argument("--rebuild-csv",   action="store_true",
+                        help="Перестроить classifications.csv из уже классифицированных файлов")
+    parser.add_argument("--date",          default=None, metavar="YYYYMMDD",
+                        help="Дата для --rebuild-csv (default: сегодня по МСК)")
     args = parser.parse_args()
 
     # ── Single-instance guard ──────────────────────────────────────────────
@@ -418,7 +499,7 @@ def main() -> int:
                         continue
 
                     t0 = time.monotonic()
-                    group, group_conf, out_class, conf_2nd = _classify(
+                    group, group_conf, out_class, conf_2nd, prob_map = _classify(
                         clf, bgr,
                         classify_conf=args.classify_conf,
                     )
@@ -444,6 +525,8 @@ def main() -> int:
                         "group_conf": round(group_conf, 3),
                         "conf_2nd":   round(conf_2nd, 3),
                         "margin":     round(group_conf - conf_2nd, 3),
+                        **{f"p_{cls}": round(prob_map.get(cls, 0.0), 3)
+                           for cls in GROUP_CLASSES},
                         "out_class":  out_class,
                     })
                     grand_classified[out_class] += 1
@@ -462,7 +545,9 @@ def main() -> int:
 
     _csv_fields = [
         "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
-        "group", "group_conf", "conf_2nd", "margin", "out_class",
+        "group", "group_conf", "conf_2nd", "margin",
+        *[f"p_{cls}" for cls in GROUP_CLASSES],
+        "out_class",
     ]
 
     if class_log:

@@ -31,12 +31,12 @@ case "$CMD" in
     *) echo "[!] Unknown command: $CMD (expected: build, apply, check, add, status)" >&2; exit 1 ;;
 esac
 
-LABELS="/home/tony/repos/video/.data/groups/v1/new/labels.json"
+LABELS="$REPO/.data/groups/v1/new/labels.json"
 VERSION=""
 OUT=""
 MOVE=1
-SRC="/home/tony/repos/video/.data/groups/v1/new"
-DATASET="/home/tony/repos/video/.data/groups/v1/dataset"
+SRC="$REPO/.data/groups/v1/new"
+DATASET="$REPO/.data/groups/v1/dataset"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

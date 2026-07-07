@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Стратегии 1,2,3,5,8: отбор кропов из одного каталога инференса.
 #
-# Вызывается для каждой даты отдельно (или из 2_dataset_build.sh циклом).
+# Вызывается для каждой даты отдельно (или из 3_dataset_build.sh циклом).
 #
 # Usage:
-#   ./sh/train/2_dataset_from_inference.sh <date_dir> --output <output_dir>
-#   ./sh/train/2_dataset_from_inference.sh .data/groups/v1/inference/images/20260705 \
+#   ./sh/train/3_dataset_from_inference.sh <date_dir> --output <output_dir>
+#   ./sh/train/3_dataset_from_inference.sh .data/groups/v1/inference/images/20260705 \
 #       --output .data/groups/v2/dataset
-#   ./sh/train/2_dataset_from_inference.sh ... --strategies 1,2 --dry-run
+#   ./sh/train/3_dataset_from_inference.sh ... --strategies 1,2 --dry-run
 
 set -euo pipefail
 

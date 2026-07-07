@@ -32,7 +32,8 @@ NMS="$(_ef YOLO_NMS 0.45)"
 
 # Список прогонов для обработки
 INPUT_DIRS=(
-    "/home/tony/repos/video/.output/transfer/diff"
+    "$REPO/.output/transfer/diff"
+    "$REPO/.output/transfer/service"
 )
 
 # Параметры watch-режима
@@ -151,7 +152,7 @@ while true; do
     done
 
     if [[ "$_any" -eq 0 ]]; then
-        echo "[$(date '+%H:%M:%S')] Файлов нет в $(IFS=,; echo "${INPUT_DIRS[*]}") — ожидание ${POLL_SEC}s…"
+        echo "[$(date '+%H:%M:%S')] ($(basename "$0" .sh)) Файлов нет в $(IFS=,; echo "${INPUT_DIRS[*]}") — ожидание ${POLL_SEC}s…"
         sleep "$POLL_SEC"
     fi
 done

@@ -153,21 +153,30 @@ video/
     transfer/
       server.py               — FastAPI-сервер приёма файлов (атомарная запись)
       client.py               — CLI-клиент (send / watch / health / runs)
-  sh/
-    pipeline/
-      1_motion_diff.sh/.ps1   — запуск 1_motion_diff.py
-      2_yolo_boxes_files.sh/.ps1 — запуск 2_yolo_boxes_files.py (watch + delete-after)
-      3_classify_groups.sh/.ps1
-      4_identify_residents.sh/.ps1
-    train/
-      1_1_dataset_groups_check.sh — watch: проверка 2_yolo_boxes_files → new/ (дубли против датасета)
-      1_2_dataset_groups_check_new.sh — watch: дедупликация внутри new/ по имени файла
-      1_dataset_groups.ps1/.sh  — ручное управление датасетом (Windows/Linux)
-      2_label_ui.ps1/.sh        — запуск веб-разметчика
-      3_train_groups.ps1/.sh    — обучение Модели 1
+  sh/                         — скрипты запуска (Windows .ps1 / Linux .sh по ОС)
+    pipeline/                 — Linux-сервер, кроме 1_motion_diff (Windows-камера)
+      1_motion_diff.ps1       — захват дифф-кадров (Windows)
+      2_yolo_boxes_files.sh   — YOLO-детекция кропов (watch + delete-after)
+      3_classify_groups.sh    — классификация групп (Модель 1)
+      4_identify_residents.sh — идентификация жителей (Модель 2)
+      5_track_direction.sh    — направление движения
+    train/                    — Linux-сервер
+      1_1_dataset_groups_check.sh    — watch: 2_yolo_boxes_files → new/ (дубли против датасета)
+      1_2_dataset_groups_check_new.sh — watch: дедупликация внутри new/
+      1_3_dataset_groups_inference_labels.sh — watch: обновление labels.json из inference/images/
+      1_dataset_groups.sh     — ручное управление датасетом
+      2_label_ui.sh           — запуск веб-разметчика
+      3_dataset_build.sh      — сборка датасета v2 (мастер-скрипт)
+      3_dataset_from_inference.sh — стратегии 1,2,3,5,8: из inference/images/YYYYMMDD/
+      3_dataset_from_prev.sh  — стратегии 4,7: прогон модели на предыдущем датасете
+      4_train_groups.sh       — обучение Модели 1
+      5_train_residents.sh    — обучение Модели 2
     transfer/
-      1_start_server.sh/.ps1    — запуск Transfer-сервера
-      2_send.sh/.ps1            — запуск Transfer-клиента (watch)
+      1_start_server.sh       — запуск Transfer-сервера (Linux-сервер)
+      2_send.ps1              — запуск Transfer-клиента watch (Windows-камера)
+    system/
+      watchdog.ps1            — Windows: авто-перезапуск процессов пайплайна
+                                (motion diff + transfer client); -Register для Task Scheduler
   tests/
     test_atomic.py              — атомарные записи (imwrite / copy)
     test_adaptive_rate.py       — AdaptiveRateLimiter

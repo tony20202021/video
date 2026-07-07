@@ -177,20 +177,17 @@ for r in results:
    → уникальные кропы в .data/groups/v1/new/
 
 2. Разметить:
-   ./sh/train/2_label_ui.sh           # Linux (сервер)
-   .\sh\train\2_label_ui.ps1          # Windows
+   ./sh/train/2_label_ui.sh
    Порт — LABEL_UI_PORT в .env (по умолчанию 8750).
    Три экрана с навигацией: / (разметчик) ↔ /gallery (галерея сессии) ↔ /gallery/dataset.
    Галерея /gallery: SHIFT+click для выделения диапазона (в рамках одной секции).
 
 3. Применить разметку в датасет:
    ./sh/train/1_dataset_groups.sh apply --move
-   .\sh\train\1_dataset_groups.ps1 apply -Move
    → файлы из v1/new/ → v1/dataset/1_resident/, v1/dataset/2_delivery/, … по меткам
 
 4. Обучить:
-   .\sh\train\3_train_groups.ps1        # Windows
-   ./sh/train/3_train_groups.sh         # Linux
+   ./sh/train/4_train_groups.sh
    → .models/classify/v1_1.onnx (+ v1_1.json манифест)
 
 5. (опционально) Проверить во время обучения:
@@ -321,13 +318,13 @@ sh/train/
   1_2_dataset_groups_check_new.sh          — (существует) watch: dedup new/
   1_3_dataset_groups_inference_labels.sh   — (существует) inference/ → labels.json
 
-  2_dataset_from_inference.sh              — стратегии 1,2,3,5,8: один каталог инференса за дату
+  3_dataset_from_inference.sh              — стратегии 1,2,3,5,8: один каталог инференса за дату
                                              принимает аргумент: inference/images/YYYYMMDD/
-  2_dataset_from_prev.sh                   — стратегии 4,7: прогон модели на предыдущем датасете
+  3_dataset_from_prev.sh                   — стратегии 4,7: прогон модели на предыдущем датасете
                                              принимает аргумент: путь к датасету (напр. v1/dataset)
-  2_dataset_build.sh                       — мастер-скрипт:
-                                             вызывает 2_dataset_from_prev.sh один раз
-                                             затем циклом по всем датам — 2_dataset_from_inference.sh
+  3_dataset_build.sh                       — мастер-скрипт:
+                                             вызывает 3_dataset_from_prev.sh один раз
+                                             затем циклом по всем датам — 3_dataset_from_inference.sh
 
 scripts/train/
   dataset_from_inference.py   — логика стратегий 1,2,3,5,8 (читает labels.json + classifications.csv)
@@ -335,17 +332,17 @@ scripts/train/
   # или один модуль dataset_v2.py с функциями для обоих сценариев
 ```
 
-`2_dataset_from_inference.sh` вызывается по одному разу на каждую дату — идемпотентен,
+`3_dataset_from_inference.sh` вызывается по одному разу на каждую дату — идемпотентен,
 можно перезапускать при изменении labels.json или порогов.
 
-`2_dataset_build.sh`:
+`3_dataset_build.sh`:
 ```bash
 # Старый датасет — один раз
-./sh/train/2_dataset_from_prev.sh .data/groups/vN/dataset
+./sh/train/3_dataset_from_prev.sh .data/groups/vN/dataset
 
 # Инференс — по каждой дате
 for date_dir in .data/groups/vN/inference/images/*/; do
-    ./sh/train/2_dataset_from_inference.sh "$date_dir"
+    ./sh/train/3_dataset_from_inference.sh "$date_dir"
 done
 ```
 
@@ -377,28 +374,20 @@ done
 | `sh/train/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes/images → v1/new/ (дубли против датасета) |
 | `sh/train/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри v1/new/ по имени файла |
 | `sh/train/1_3_dataset_groups_inference_labels.sh` | Watch: inference/images/YYYYMMDD/ → labels.json по структуре класс-каталогов |
-| `sh/train/1_dataset_groups.ps1/.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
-| `sh/train/2_label_ui.ps1` | Запуск веб-разметчика кропов (Windows) |
-| `sh/train/2_label_ui.sh` | То же на Linux-сервере |
-| `sh/train/3_train_groups.ps1/.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
-| `sh/train/5_train_residents.ps1/.sh` | Обучение Модели 2 |
+| `sh/train/1_dataset_groups.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
+| `sh/train/2_label_ui.sh` | Запуск веб-разметчика кропов |
+| `sh/train/4_train_groups.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
+| `sh/train/5_train_residents.sh` | Обучение Модели 2 |
 
 ---
 
 ## Веб-разметчик (2_label_ui)
 
-```powershell
-# Windows
-.\sh\train\2_label_ui.ps1
-.\sh\train\2_label_ui.ps1 -InputDir ".output\pipeline\2_yolo_boxes_files\run_XXX"
-.\sh\train\2_label_ui.ps1 -UnlabeledOnly $true   # только неразмеченные
-```
-
 ```bash
-# Linux (сервер)
 ./sh/train/2_label_ui.sh
 ./sh/train/2_label_ui.sh --input .output/pipeline/2_yolo_boxes_files/run_XXX
 ./sh/train/2_label_ui.sh --port 8789   # переопределяет LABEL_UI_PORT
+./sh/train/2_label_ui.sh --probs       # показывать вероятности из classifications.csv
 ```
 
 **Порт:** `LABEL_UI_PORT` в `.env` (дефолт — `8750`; на публичном сервере задайте `8750` или другой из диапазона `87**`, напр. `8789`).
@@ -439,15 +428,15 @@ done
 
 ## Обучение Модели 1 (3_train_groups)
 
-```powershell
+```bash
 # Стандартный запуск (данные из .data/groups/v1/dataset)
-.\sh\train\3_train_groups.ps1
+./sh/train/4_train_groups.sh
 
 # Явный путь и параметры
-.\sh\train\3_train_groups.ps1 -Data ".data\groups\v1\dataset" -Epochs 30
+./sh/train/4_train_groups.sh --data .data/groups/v1/dataset --epochs 30
 
 # Отключить коррекцию дисбаланса
-.\sh\train\3_train_groups.ps1 -ClassWeights $false -WeightedSampling $false
+./sh/train/4_train_groups.sh --no-class-weights --no-weighted-sampling
 ```
 
 **Параметры:**
@@ -541,12 +530,12 @@ transforms.RandomErasing(p=0.3)            # частичное перекрыт
 Цикл 3:  Модель 2 v2        → обучение на {неделя 1+2+3}   → Модель 2 v3
 ```
 
-```powershell
+```bash
 # Первый цикл — backbone от Модели 1
-.\sh\train\5_train_residents.ps1 -Data export.zip -Backbone .models\classify\backbone.pt
+./sh/train/5_train_residents.sh --data export.zip --backbone .models/classify/backbone.pt
 
 # Последующие циклы — веса предыдущей версии
-.\sh\train\5_train_residents.ps1 -Data export_full.zip -InitFrom .models\identify\v1.pt
+./sh/train/5_train_residents.sh --data export_full.zip --init-from .models/identify/v1.pt
 ```
 
 ### Трансфер между моделями

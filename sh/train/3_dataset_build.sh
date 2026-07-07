@@ -2,12 +2,12 @@
 # Мастер-скрипт: собирает новый датасет из всех источников.
 #
 # Вызывает:
-#   2_dataset_from_prev.sh    — один раз для старого датасета (стратегии 4,7)
-#   2_dataset_from_inference.sh — циклом по всем датам инференса (стратегии 1,2,3,5,8)
+#   3_dataset_from_prev.sh    — один раз для старого датасета (стратегии 4,7)
+#   3_dataset_from_inference.sh — циклом по всем датам инференса (стратегии 1,2,3,5,8)
 #
 # Usage:
-#   ./sh/train/2_dataset_build.sh --output .data/groups/v2/dataset
-#   ./sh/train/2_dataset_build.sh \
+#   ./sh/train/3_dataset_build.sh --output .data/groups/v2/dataset
+#   ./sh/train/3_dataset_build.sh \
 #       --prev     .data/groups/v1/dataset \
 #       --inference .data/groups/v1/inference/images \
 #       --output   .data/groups/v2/dataset \
@@ -18,15 +18,15 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
-FROM_INFERENCE="$REPO/sh/train/2_dataset_from_inference.sh"
-FROM_PREV="$REPO/sh/train/2_dataset_from_prev.sh"
+FROM_INFERENCE="$REPO/sh/train/3_dataset_from_inference.sh"
+FROM_PREV="$REPO/sh/train/3_dataset_from_prev.sh"
 
 export PYTHONIOENCODING=utf-8
 
 # Дефолты
 PREV_DATASET="$REPO/.data/groups/v1/dataset"
 INFERENCE_IMAGES="$REPO/.data/groups/v1/inference/images"
-OUTPUT=""
+OUTPUT="$REPO/.data/groups/v2/dataset"
 FROM_DATE=""
 EXTRA_ARGS=()
 
@@ -50,7 +50,7 @@ fi
 
 _ts() { date '+%H:%M:%S'; }
 
-echo "=== 2_dataset_build ==="
+echo "=== 3_dataset_build ==="
 echo "  prev dataset:      $PREV_DATASET"
 echo "  inference images:  $INFERENCE_IMAGES"
 echo "  output:            $OUTPUT"

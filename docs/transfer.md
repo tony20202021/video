@@ -47,10 +47,8 @@
 |------|-----------|
 | `scripts/transfer/server.py` | FastAPI-сервер приёма |
 | `scripts/transfer/client.py` | CLI-клиент (send / watch / health / runs) |
-| `sh/transfer/1_start_server.ps1` | Windows-обёртка: запустить сервер |
-| `sh/transfer/1_start_server.sh` | Linux-обёртка: запустить сервер |
-| `sh/transfer/2_send.ps1` | Windows-обёртка: запустить `watch` |
-| `sh/transfer/2_send.sh` | Linux-обёртка: запустить `watch` |
+| `sh/transfer/1_start_server.sh` | Linux-сервер: запустить сервер приёма |
+| `sh/transfer/2_send.ps1` | Windows-камера: запустить `watch` (отправка файлов) |
 
 ---
 

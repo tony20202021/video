@@ -279,7 +279,7 @@ YOLO_MAX_FPS=1
 MOTION_DIFF_THRESHOLD=3.3
 ```
 
-Параметры читаются из `.env` напрямую — PS1-скрипты (`5_2_yolo_boxes_files.ps1` и др.) парсят `.env` сами, не полагаясь на переменные окружения PowerShell. Приоритет: явный параметр CLI (`-Conf 0.3`) → `.env` → встроенный дефолт.
+Параметры читаются из `.env` напрямую. Приоритет: явный параметр CLI → `.env` → встроенный дефолт.
 
 #### Выходные файлы прогона
 
@@ -293,42 +293,33 @@ MOTION_DIFF_THRESHOLD=3.3
 | `pts_chart.png` | Метки времени (mono/wall/PTS) + дрейф + CPU внизу |
 | `frames.csv`, `diffs.csv`, `saves.csv`, `pts.csv`, `cpu.csv` | Сырые данные для анализа |
 
-#### Запуск в Windows (PowerShell) — sh/-скрипты
+#### Скрипты запуска
 
-В `sh/` лежат готовые ps1-обёртки для каждого скрипта:
+| Файл | ОС | Назначение |
+|------|-----|-----------|
+| `sh/pipeline/1_motion_diff.ps1` | Windows-камера | захват дифф-кадров + YOLO; отправляет кропы на сервер через `sh/transfer/2_send.ps1` |
+| `sh/pipeline/2_yolo_boxes_files.sh` | Linux-сервер | YOLO-детекция на принятых файлах (watch + delete-after) |
+| `sh/pipeline/3_classify_groups.sh` | Linux-сервер | классификация групп (Модель 1) |
+| `sh/pipeline/4_identify_residents.sh` | Linux-сервер | идентификация жителей (Модель 2) |
 
-| Файл | Скрипт | Назначение |
-|---|---|---|
-| `sh/cameras/4_motion_diff_low.ps1` | `4_motion_diff_low.py` | motion detection без YOLO, накопление baseline-кадров |
-| `sh/cameras/5_1_diff_yolo_boxes_low.ps1` | `5_1_diff_yolo_boxes_low.py` | motion → YOLO → сохранение bbox-кадров |
-| `sh/cameras/5_2_yolo_boxes_files.ps1` | `5_2_yolo_boxes_files.py` | офлайн: YOLO на сохранённых diff-кадрах |
-| `sh/cameras/6_2_classify_groups_files.ps1` | `6_2_classify_groups_files.py` | офлайн: GroupClassifier на кропах 5_2 |
-| `sh/cameras/6_3_identify_residents_files.ps1` | `6_3_identify_residents_files.py` | офлайн: PersonIdentifier на кропах `1_resident/` из 6_2 |
-
-**Синтаксис для живых скриптов (4, 5_1):**
 ```powershell
-.\sh\cameras\5_1_diff_yolo_boxes_low.ps1              # бесконечно
-.\sh\cameras\5_1_diff_yolo_boxes_low.ps1 7200         # на 2 часа (секунды)
-.\sh\cameras\5_1_diff_yolo_boxes_low.ps1 60           # на 1 минуту (для тестов)
-.\sh\cameras\5_1_diff_yolo_boxes_low.ps1 0 ".output\cameras\5_1_diff_yolo_boxes_low\run_20260627_205503_msk"  # перегенерация графиков
+# Windows: запуск захвата (1_motion_diff.ps1 + watchdog)
+.\sh\pipeline\1_motion_diff.ps1
+.\sh\system\watchdog.ps1 -Register   # авто-перезапуск при сбоях/пробуждении
 ```
 
-**Синтаксис для офлайн-скриптов (5_2, 6_2, 6_3):**
-```powershell
-.\sh\cameras\5_2_yolo_boxes_files.ps1                       # обрабатывает все InputDirs из ps1
-.\sh\cameras\5_2_yolo_boxes_files.ps1 -Conf 0.3             # явный порог (переопределяет .env)
-.\sh\cameras\6_2_classify_groups_files.ps1                  # классификация по группам
-.\sh\cameras\6_2_classify_groups_files.ps1 -ClassifyConf 0.70
-.\sh\cameras\6_3_identify_residents_files.ps1               # идентификация жителей
-.\sh\cameras\6_3_identify_residents_files.ps1 -IdentifyConf 0.75 -Model ".models\identify\v1.onnx"
+```bash
+# Linux: запуск обработки
+./sh/pipeline/2_yolo_boxes_files.sh
+./sh/pipeline/3_classify_groups.sh
+./sh/pipeline/4_identify_residents.sh
 ```
 
-Настройки (YOLO-параметры `YOLO_CONF`, `YOLO_NMS`, `YOLO_MAX_FPS`; ML-пороги `CLASSIFY_CONF`, `IDENTIFY_CONF`) читаются из `.env` — менять только там. Приоритет: явный параметр CLI → `.env` → встроенный дефолт.  
-Дополнительные флаги (`--tcp`, `--save-raw`, `--cam-ts`) раскомментировать в `$EXTRA` внутри ps1.
+Настройки (`YOLO_CONF`, `YOLO_NMS`, `YOLO_MAX_FPS`, `CLASSIFY_CONF`, `IDENTIFY_CONF`) читаются из `.env`.
 
 **Проверить что прогон запустился** — должна появиться новая директория через ~5 сек:
 ```powershell
-Get-ChildItem "E:\_Home\Tony\pet projects\video\.output\cameras\5_1_diff_yolo_boxes_low" | Sort-Object LastWriteTime -Descending | Select-Object -First 3 Name, LastWriteTime
+Get-ChildItem ".output\pipeline\1_motion_diff" | Sort-Object LastWriteTime -Descending | Select-Object -First 3 Name, LastWriteTime
 ```
 
 **Частые ошибки:**

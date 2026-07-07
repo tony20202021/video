@@ -31,6 +31,7 @@ DATASET="$REPO/.data/groups/v1/dataset"
 PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=0
 EXT="jpg"
+PROBS=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -41,6 +42,7 @@ while [[ $# -gt 0 ]]; do
         --ext)            EXT="$2";     shift 2 ;;
         --unlabeled-only) UNLABELED_ONLY=1; shift ;;
         --all)            UNLABELED_ONLY=0; shift ;;
+        --probs)          PROBS=1; shift ;;
         *) echo "[!] Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -63,5 +65,6 @@ args=("--input" "$INPUT" "--labels" "$LABELS" "--port" "$PORT")
 [[ -n "$DATASET" ]]           && args+=("--dataset" "$DATASET")
 [[ -n "$EXT" ]]               && args+=("--ext" "$EXT")
 [[ "$UNLABELED_ONLY" -eq 1 ]] && args+=("--unlabeled-only")
+[[ "$PROBS"          -eq 1 ]] && args+=("--probs")
 
 exec "$PYTHON" "$SCRIPT" "${args[@]}"

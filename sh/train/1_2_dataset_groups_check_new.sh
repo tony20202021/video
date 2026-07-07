@@ -36,6 +36,7 @@ if [[ ! -d "$NEW_DIR" ]]; then
 fi
 
 _ts() { date '+%H:%M:%S'; }
+SCRIPT_NAME="$(basename "$0" .sh)"
 
 echo "=== 1_2_dataset_groups_check_new ==="
 echo "  New dir:  $NEW_DIR"
@@ -100,7 +101,7 @@ while true; do
         _dedup
         echo ""
     else
-        echo "$(_ts)  INFO      Файлов нет в $NEW_DIR — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      ($SCRIPT_NAME) Файлов нет в $NEW_DIR — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

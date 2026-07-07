@@ -58,6 +58,7 @@ _count_crops() {
 }
 
 _ts() { date '+%H:%M:%S'; }
+SCRIPT_NAME="$(basename "$0" .sh)"
 
 _move_unique() {
     local unique_dir="$INPUT_DIR/unique"
@@ -106,7 +107,7 @@ while true; do
     n=$(_count_crops)
 
     if [[ "$n" -eq 0 ]]; then
-        echo "$(_ts)  INFO      Кропов нет в $INPUT_DIR — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      ($SCRIPT_NAME) Кропов нет в $INPUT_DIR — ожидание ${POLL_SEC}s…"
         sleep "$POLL_SEC"
         continue
     fi

@@ -2,8 +2,8 @@
 # Обучение классификатора групп (Модель 1)
 #
 # Usage:
-#   ./sh/train/3_train_groups.sh --data .data/groups/v1
-#   ./sh/train/3_train_groups.sh --data .output/training/export.zip --epochs 30
+#   ./sh/train/4_train_groups.sh --data .data/groups/v1
+#   ./sh/train/4_train_groups.sh --data .output/training/export.zip --epochs 30
 
 set -euo pipefail
 
@@ -45,7 +45,7 @@ fi
 
 [[ "$DATA" != /* ]] && DATA="$REPO/$DATA"
 
-echo "=== 3_train_groups (Model 1) ==="
+echo "=== 4_train_groups (Model 1) ==="
 echo "Repo:   $REPO"
 echo "Script: $SCRIPT"
 echo "Data:   $DATA"
