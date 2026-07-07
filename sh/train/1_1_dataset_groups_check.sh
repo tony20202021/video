@@ -106,7 +106,7 @@ while true; do
     n=$(_count_crops)
 
     if [[ "$n" -eq 0 ]]; then
-        echo "$(_ts)  INFO      Кропов нет — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      Кропов нет в $INPUT_DIR — ожидание ${POLL_SEC}s…"
         sleep "$POLL_SEC"
         continue
     fi

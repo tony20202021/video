@@ -163,10 +163,10 @@ for r in results:
 ./sh/pipeline/2_yolo_boxes_files.sh        # watch + delete-after по умолчанию
 
 # Терминал B — проверка кропов на дубли с датасетом → new/
-./sh/train/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files → .data/groups/new/
+./sh/train/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files/images → .data/groups/v1/new/
 
 # Терминал C — дедупликация внутри new/ (одинаковые имена из разных прогонов)
-./sh/train/1_2_dataset_groups_check_new.sh # watch: .data/groups/new/
+./sh/train/1_2_dataset_groups_check_new.sh # watch: .data/groups/v1/new/
 ```
 
 Полный цикл разметки и обучения:
@@ -174,18 +174,19 @@ for r in results:
 ```
 1. Накопить кропы:
    2_yolo_boxes_files.sh + 1_1_dataset_groups_check.sh + 1_2_dataset_groups_check_new.sh
-   → уникальные кропы в .data/groups/new/
+   → уникальные кропы в .data/groups/v1/new/
 
 2. Разметить:
    ./sh/train/2_label_ui.sh           # Linux (сервер)
    .\sh\train\2_label_ui.ps1          # Windows
    Порт — LABEL_UI_PORT в .env (по умолчанию 8750).
+   Три экрана с навигацией: / (разметчик) ↔ /gallery (галерея сессии) ↔ /gallery/dataset.
    Галерея /gallery: SHIFT+click для выделения диапазона (в рамках одной секции).
 
 3. Применить разметку в датасет:
    ./sh/train/1_dataset_groups.sh apply --move
    .\sh\train\1_dataset_groups.ps1 apply -Move
-   → файлы из new/ → 1_resident/, 2_delivery/, … по меткам
+   → файлы из v1/new/ → v1/dataset/1_resident/, v1/dataset/2_delivery/, … по меткам
 
 4. Обучить:
    .\sh\train\3_train_groups.ps1        # Windows
@@ -199,19 +200,173 @@ for r in results:
 Ручные операции с датасетом (при необходимости):
 
 ```bash
-# Добавить кропы из прогона в new/ (с проверкой дублей)
+# Добавить кропы из прогона в v1/new/ (с проверкой дублей против датасета)
 python scripts/train/dataset_groups.py add \
-    --src .output/pipeline/2_yolo_boxes_files/run_XXX \
-    --dataset .data/groups/v1
+    --src .output/pipeline/2_yolo_boxes_files/images \
+    --dataset .data/groups/v1/dataset
 
-# Проверить new/ против датасета (вручную)
+# Проверить v1/new/ против датасета (вручную)
 python scripts/train/dataset_groups.py check \
-    --src .data/groups/new \
-    --dataset .data/groups/v1
+    --src .data/groups/v1/new \
+    --dataset .data/groups/v1/dataset
 
 # Статус датасета
-python scripts/train/dataset_groups.py status --dataset .data/groups/v1
+python scripts/train/dataset_groups.py status --dataset .data/groups/v1/dataset
 ```
+
+---
+
+## Инференс Модели 1 (3_classify_groups.sh)
+
+Watch-скрипт непрерывно следит за кропами и классифицирует их:
+
+```bash
+# Терминал — инференс (запускать параллельно с 2_yolo_boxes_files.sh)
+./sh/pipeline/3_classify_groups.sh                  # watch, poll 60s, move по умолчанию
+./sh/pipeline/3_classify_groups.sh --poll-sec 30    # другой интервал
+./sh/pipeline/3_classify_groups.sh --copy           # копировать вместо перемещения
+./sh/pipeline/3_classify_groups.sh --once           # один прогон и выход
+./sh/pipeline/3_classify_groups.sh --classify-conf 0.70
+```
+
+**Источник:** `.output/pipeline/2_yolo_boxes_files/images` — все `*.jpg` рекурсивно (любая вложенность).
+
+**Выход:** `.data/groups/v1/inference/`
+```
+inference/
+  images/YYYYMMDD/
+    1_resident/crop.jpg
+    2_delivery/crop.jpg
+    unknown/crop.jpg        ← conf < CLASSIFY_CONF
+  meta/YYYYMMDD/
+    classifications.csv
+    run_params.json
+```
+
+По умолчанию файлы **перемещаются** из источника; `--copy` оставляет оригиналы.
+Расширение файлов: `--ext jpg` (по умолчанию).
+
+Порог уверенности: `CLASSIFY_CONF` из `.env` (дефолт `0.65`); ниже → класс `unknown`.
+
+Для автоматического формирования `labels.json` по итогам инференса (совместимого с `2_label_ui` и `apply`):
+
+```bash
+# Терминал — labels из инференса (watch-режим)
+./sh/train/1_3_dataset_groups_inference_labels.sh
+
+# Применить в датасет (вручную, после проверки)
+./sh/train/1_dataset_groups.sh apply \
+    --labels .data/groups/v1/inference/images/YYYYMMDD/labels.json \
+    --dataset .data/groups/v1/dataset --move
+```
+
+---
+
+## Сборка датасета v2 (итеративное улучшение)
+
+После накопления инференса Модели 1 собирается новый датасет для переобучения.
+Источники разбиты на 8 стратегий по ценности данных.
+
+### Пороги уверенности
+
+```dotenv
+# .env
+CLASSIFY_CONF=0.65        # основной порог инференса (conf < → uncertain/)
+CLASSIFY_CONF_HIGH=0.85   # второй порог: выше — псевдо-метки, ниже — переобучение
+```
+
+Зона между двумя порогами — «серая»: модель уверена достаточно чтобы не попасть в uncertain,
+но недостаточно чтобы быть надёжным псевдо-лейблом.
+
+### Стратегии отбора
+
+| # | Суть | Источник | Условие | Метка берётся из |
+|---|------|----------|---------|-----------------|
+| 1 | Модель ошиблась — мы исправили вручную | `inference/images/YYYYMMDD/<class>/` | класс в `labels.json` ≠ subdirectory | `labels.json` (ручная переразметка) |
+| 2 | Модель не была уверена — мы разметили вручную | `inference/images/YYYYMMDD/uncertain/` | файл есть в `labels.json` | `labels.json` (ручная разметка) |
+| 3 | Модель угадала, но без уверенности — серая зона | `classifications.csv` | `CLASSIFY_CONF ≤ conf < CLASSIFY_CONF_HIGH` | `labels.json` |
+| 4 | Старый датасет — модель на нём колеблется | `v1/dataset/` | инференс на датасете: `conf < CLASSIFY_CONF_HIGH` | имя подкаталога датасета |
+| 5 | Модель уверена и права — берём бесплатно | `classifications.csv` | `conf ≥ CLASSIFY_CONF_HIGH` И метка совпадает с subdirectory | subdirectory (псевдо-метка, без переразметки) |
+| 6 | То же что 1–3 но по другим дням (разная одежда, свет) | Другие даты `inference/images/YYYYMMDD/` | стратегии 1–3 по каждой дате | `labels.json` соответствующей даты |
+| 7 | Модель уверена, но систематически врёт | `v1/dataset/` | инференс: `conf ≥ CLASSIFY_CONF_HIGH` И predicted ≠ true\_class | имя подкаталога датасета |
+| 8 | Два класса почти одинаково вероятны — граничный случай | `classifications.csv` | `margin = conf_top1 − conf_top2 < порог` | `labels.json` |
+
+**Стратегия 7** (уверенные ошибки на датасете) — наиболее ценная из дополнительных:
+модель уверена, но систематически ошибается. Без таких примеров переобучение не исправит баг.
+
+**Стратегия 8** (margin sampling) — лучшая эвристика активного обучения.
+`clf.classify()` возвращает вероятности всех 4 классов — margin вычисляется из них.
+Малый margin = граничный случай между двумя классами, максимально информативен.
+
+Пример сравнения:
+```
+[0.68, 0.63, 0.05, 0.04]  conf=0.68, margin=0.05  ← брать (граница 4_guest/1_resident)
+[0.68, 0.15, 0.10, 0.07]  conf=0.68, margin=0.53  ← не брать (просто немного неуверен)
+```
+
+### Обязательные фильтры поверх всех стратегий
+
+**Временно́е дедублирование** — одна сцена за 5 минут даёт 200+ похожих кропов.
+Лимит: не более 1 кропа на камеру на 15-минутное окно (из имени файла).
+Применять к стратегиям 3, 5, 6.
+
+**Квота на класс** — не добавлять пропорционально текущему балансу (усилит дисбаланс).
+Целевое распределение: равное по классам или с перевесом в сторону дефицитных.
+
+### Предлагаемое распределение по скриптам
+
+```
+sh/train/
+  1_1_dataset_groups_check.sh              — (существует) watch: yolo → new/
+  1_2_dataset_groups_check_new.sh          — (существует) watch: dedup new/
+  1_3_dataset_groups_inference_labels.sh   — (существует) inference/ → labels.json
+
+  2_dataset_from_inference.sh              — стратегии 1,2,3,5,8: один каталог инференса за дату
+                                             принимает аргумент: inference/images/YYYYMMDD/
+  2_dataset_from_prev.sh                   — стратегии 4,7: прогон модели на предыдущем датасете
+                                             принимает аргумент: путь к датасету (напр. v1/dataset)
+  2_dataset_build.sh                       — мастер-скрипт:
+                                             вызывает 2_dataset_from_prev.sh один раз
+                                             затем циклом по всем датам — 2_dataset_from_inference.sh
+
+scripts/train/
+  dataset_from_inference.py   — логика стратегий 1,2,3,5,8 (читает labels.json + classifications.csv)
+  dataset_from_prev.py        — логика стратегий 4,7 (запускает инференс на датасете)
+  # или один модуль dataset_v2.py с функциями для обоих сценариев
+```
+
+`2_dataset_from_inference.sh` вызывается по одному разу на каждую дату — идемпотентен,
+можно перезапускать при изменении labels.json или порогов.
+
+`2_dataset_build.sh`:
+```bash
+# Старый датасет — один раз
+./sh/train/2_dataset_from_prev.sh .data/groups/vN/dataset
+
+# Инференс — по каждой дате
+for date_dir in .data/groups/vN/inference/images/*/; do
+    ./sh/train/2_dataset_from_inference.sh "$date_dir"
+done
+```
+
+### Структура датасета v2
+
+```
+.data/groups/
+  v1/
+    dataset/     ← исходный датасет, не трогать
+    inference/   ← накопленный инференс
+  v2/
+    dataset/     ← v1/dataset + новые примеры из стратегий 1–8
+      1_resident/
+      2_delivery/
+      3_utilities/
+      4_guest/
+    sources.csv  ← откуда взят каждый файл (стратегия, исходный путь, conf, margin)
+```
+
+`sources.csv` — аудит-лог: для каждого файла в v2/dataset фиксируется стратегия
+и метрики на момент отбора, чтобы потом понять что помогло, а что нет.
 
 ---
 
@@ -219,12 +374,13 @@ python scripts/train/dataset_groups.py status --dataset .data/groups/v1
 
 | Скрипт | Назначение |
 |--------|-----------|
-| `sh/train/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes → new/ (дубли против датасета) |
-| `sh/train/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри new/ по имени файла |
+| `sh/train/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes/images → v1/new/ (дубли против датасета) |
+| `sh/train/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри v1/new/ по имени файла |
+| `sh/train/1_3_dataset_groups_inference_labels.sh` | Watch: inference/images/YYYYMMDD/ → labels.json по структуре класс-каталогов |
 | `sh/train/1_dataset_groups.ps1/.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
 | `sh/train/2_label_ui.ps1` | Запуск веб-разметчика кропов (Windows) |
 | `sh/train/2_label_ui.sh` | То же на Linux-сервере |
-| `sh/train/3_train_groups.ps1/.sh` | Обучение Модели 1 |
+| `sh/train/3_train_groups.ps1/.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
 | `sh/train/5_train_residents.ps1/.sh` | Обучение Модели 2 |
 
 ---
@@ -284,11 +440,11 @@ python scripts/train/dataset_groups.py status --dataset .data/groups/v1
 ## Обучение Модели 1 (3_train_groups)
 
 ```powershell
-# Стандартный запуск (данные из .data/groups/v1)
+# Стандартный запуск (данные из .data/groups/v1/dataset)
 .\sh\train\3_train_groups.ps1
 
 # Явный путь и параметры
-.\sh\train\3_train_groups.ps1 -Data ".data\groups\v1" -Epochs 30
+.\sh\train\3_train_groups.ps1 -Data ".data\groups\v1\dataset" -Epochs 30
 
 # Отключить коррекцию дисбаланса
 .\sh\train\3_train_groups.ps1 -ClassWeights $false -WeightedSampling $false
@@ -298,7 +454,7 @@ python scripts/train/dataset_groups.py status --dataset .data/groups/v1
 
 | Параметр | По умолчанию | Описание |
 |----------|-------------|----------|
-| `-Data` | `.data\groups\v1` | Папка датасета или zip |
+| `-Data` | `.data\groups\v1\dataset` | Папка датасета или zip |
 | `-Epochs` | `20` | Число эпох |
 | `-BatchSize` | `32` | Размер батча |
 | `-Lr` | `1e-3` | Learning rate |

@@ -100,7 +100,7 @@ while true; do
         _dedup
         echo ""
     else
-        echo "$(_ts)  INFO      Файлов нет — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      Файлов нет в $NEW_DIR — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

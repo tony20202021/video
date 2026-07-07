@@ -63,6 +63,18 @@ UNKNOWN_CLASS  = "unknown_resident"
 
 
 
+def _has_resident_crops(run_dir: Path) -> bool:
+    """Проверяет наличие classified/1_resident/ или classified/resident/ в run_dir."""
+    try:
+        for pattern in (f"classified/{RESIDENT_CLASS}", "classified/resident"):
+            for d in run_dir.rglob(pattern):
+                if d.is_dir():
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _find_resident_crops(run_dir: Path) -> list[tuple[Path, Path]]:
     """Возвращает [(crop_path, rel_cam_dir)] из classified/<RESIDENT_CLASS>/ в 6_2 run.
 

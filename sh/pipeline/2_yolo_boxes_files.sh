@@ -151,7 +151,7 @@ while true; do
     done
 
     if [[ "$_any" -eq 0 ]]; then
-        echo "[$(date '+%H:%M:%S')] Файлов нет — ожидание ${POLL_SEC}s…"
+        echo "[$(date '+%H:%M:%S')] Файлов нет в $(IFS=,; echo "${INPUT_DIRS[*]}") — ожидание ${POLL_SEC}s…"
         sleep "$POLL_SEC"
     fi
 done

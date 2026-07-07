@@ -102,10 +102,11 @@ class TestFindCrops:
 class TestClassify:
     def test_no_classifier_returns_unknown(self, m62):
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        group, conf, out_class = m62._classify(None, crop, classify_conf=0.65)
+        group, conf, out_class, conf_2nd = m62._classify(None, crop, classify_conf=0.65)
         assert group == "unknown"
         assert conf == 0.0
         assert out_class == "unknown"
+        assert conf_2nd == 0.0
 
     def test_low_conf_goes_to_uncertain(self, m62):
         """Если classify() вернул conf ниже порога → uncertain."""
@@ -115,10 +116,11 @@ class TestClassify:
                 return "resident", 0.4, {}  # ниже порога 0.65
 
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        group, conf, out_class = m62._classify(_FakeClfLow(), crop, classify_conf=0.65)
+        group, conf, out_class, conf_2nd = m62._classify(_FakeClfLow(), crop, classify_conf=0.65)
         assert group == "resident"
         assert abs(conf - 0.4) < 1e-6
         assert out_class == "uncertain"
+        assert conf_2nd == 0.0
 
     def test_high_conf_uses_group_class(self, m62):
         class _FakeClfHigh:
@@ -127,7 +129,7 @@ class TestClassify:
                 return "2_delivery", 0.82, {}
 
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        group, conf, out_class = m62._classify(_FakeClfHigh(), crop, classify_conf=0.65)
+        group, conf, out_class, conf_2nd = m62._classify(_FakeClfHigh(), crop, classify_conf=0.65)
         assert group == "2_delivery"
         assert out_class == "2_delivery"
 
@@ -138,7 +140,7 @@ class TestClassify:
                 return "delivery", 0.65, {}
 
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        _, _, out_class = m62._classify(_FakeClf(), crop, classify_conf=0.65)
+        _, _, out_class, _ = m62._classify(_FakeClf(), crop, classify_conf=0.65)
         assert out_class == "delivery"
 
 

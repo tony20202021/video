@@ -178,15 +178,28 @@ video/
     test_ml_pipeline.py         — ML-пайплайн classify → identify
     (+ другие)
   .output/                — результаты скриптов (в .gitignore)
+    pipeline/
+      1_motion_diff/
+        images/YYYYMMDD/  — дифф-кадры по датам (MSK)
+        meta/YYYYMMDD/    — CSV, JSON, графики, run.log
+      2_yolo_boxes_files/
+        images/YYYYMMDD/  — кропы людей
+        annotated/YYYYMMDD/ — аннотированные кадры с боксами
+        meta/YYYYMMDD/    — crops.csv, run_params.json, run.log
+      transfer/
+        diff/YYYYMMDD/<cam>/  — принятые дифф-кадры
+        meta/YYYYMMDD/<cam>/  — sidecar JSON
   .data/
     groups/
-      v1/                 — датасет Модели 1 (по классам)
-      new/                — новые кропы для разметки
+      v1/
+        dataset/          — датасет Модели 1: 1_resident/, 2_delivery/, 3_utilities/, 4_guest/, skip/, unknown/
+        new/              — очередь кропов для разметки (→ dataset/ после apply)
+        inference/        — результаты 3_classify_groups: images/YYYYMMDD/<class>/, meta/YYYYMMDD/
   .models/
     detect/yolov8n.onnx   — детекция людей (~13 MB)
-    classify/v1_1.onnx    — Модель 1 (пример: датасет v1, прогон 1)
+    classify/v1_1.onnx    — Модель 1 (активная: датасет v1, прогон 1, val_acc 79%)
     classify/v1_1.json    — манифест модели
-    classify/backbone.pt  — backbone для Модели 2
+    classify/backbone.pt  — backbone для инициализации Модели 2
     identify/v*.onnx      — Модель 2 (идентификатор жителей)
   docs/
     overview.md           — этот файл

@@ -73,7 +73,7 @@ while true; do
 
         echo ""
     else
-        echo "$(_ts)  INFO      Кропов нет — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      Кропов нет в $S2DIR — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

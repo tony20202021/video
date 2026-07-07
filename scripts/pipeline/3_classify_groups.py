@@ -76,6 +76,20 @@ _CLASS_COLORS = GROUP_CLASS_COLORS
 
 
 
+def _has_crops(run_base: Path) -> bool:
+    """Проверяет наличие run_*/*/crops/ каталогов во входном каталоге."""
+    try:
+        for run_dir in run_base.iterdir():
+            if not run_dir.is_dir() or not run_dir.name.startswith("run_"):
+                continue
+            for cam_dir in run_dir.iterdir():
+                if cam_dir.is_dir() and (cam_dir / "crops").is_dir():
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _find_crops(run_dir: Path, ext: str = "jpg") -> dict[str, dict[str, list[Path]]]:
     """Возвращает {sub_run_name: {cam_name: [crop_path, ...]}}.
 
@@ -134,16 +148,19 @@ def _load_classifier(config_path: Path):
 
 
 def _classify(clf, bgr_crop, *, classify_conf: float):
-    """Возвращает (group_class, group_conf, out_class).
+    """Возвращает (group_class, group_conf, out_class, conf_2nd).
 
     out_class — имя подкаталога: group_class если уверенность >= classify_conf,
     иначе 'uncertain'.
+    conf_2nd  — вторая по величине вероятность (для margin = group_conf − conf_2nd).
     """
     if clf is None:
-        return "unknown", 0.0, "unknown"
-    group_class, group_conf, _ = clf.classify(bgr_crop)
+        return "unknown", 0.0, "unknown", 0.0
+    group_class, group_conf, prob_map = clf.classify(bgr_crop)
     out_class = group_class if group_conf >= classify_conf else "uncertain"
-    return group_class, group_conf, out_class
+    sorted_probs = sorted(prob_map.values(), reverse=True)
+    conf_2nd = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
+    return group_class, group_conf, out_class, conf_2nd
 
 
 # ─── Timestamp from crop filename ────────────────────────────────────────────
@@ -311,10 +328,11 @@ def main() -> int:
         return 1
     run_pairs = [(args.input_dir, "")]
 
-    _base   = args.output or DEFAULT_OUTPUT
-    _today  = datetime.now(MSK).strftime("%Y%m%d")
+    _base    = args.output or DEFAULT_OUTPUT
+    _today   = datetime.now(MSK).strftime("%Y%m%d")
+    _run_ts  = ts_for_dir()
     images_dir = _base / "images" / _today
-    meta_dir   = _base / "meta"   / _today
+    meta_dir   = _base / "meta"   / _today / _run_ts
     images_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
 
@@ -400,7 +418,7 @@ def main() -> int:
                         continue
 
                     t0 = time.monotonic()
-                    group, group_conf, out_class = _classify(
+                    group, group_conf, out_class, conf_2nd = _classify(
                         clf, bgr,
                         classify_conf=args.classify_conf,
                     )
@@ -418,12 +436,14 @@ def main() -> int:
                     class_log.append({
                         "mono_s":     round(t0 - t_start, 3),
                         "ts_epoch":   ts_ep,
-                        "run_name":   run_name,
+                        "run_name":   _run_ts,
                         "sub_run":    sub_run_name,
                         "cam":        cam_name,
                         "crop":       crop_path.name,
                         "group":      group,
                         "group_conf": round(group_conf, 3),
+                        "conf_2nd":   round(conf_2nd, 3),
+                        "margin":     round(group_conf - conf_2nd, 3),
                         "out_class":  out_class,
                     })
                     grand_classified[out_class] += 1
@@ -440,16 +460,48 @@ def main() -> int:
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
 
+    _csv_fields = [
+        "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
+        "group", "group_conf", "conf_2nd", "margin", "out_class",
+    ]
+
     if class_log:
+        # per-run CSV
         csv_path = meta_dir / "classifications.csv"
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=[
-                "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
-                "group", "group_conf", "out_class",
-            ])
+            w = csv.DictWriter(f, fieldnames=_csv_fields)
             w.writeheader()
             w.writerows(class_log)
         logger.info(f"classifications.csv: {len(class_log)} записей → {csv_path}")
+
+        # накопительный CSV рядом с images/YYYYMMDD/
+        cumulative_csv = images_dir / "classifications.csv"
+        write_header = not cumulative_csv.is_file()
+        with open(cumulative_csv, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=_csv_fields)
+            if write_header:
+                w.writeheader()
+            w.writerows(class_log)
+        logger.info(f"classifications.csv (накопит.): +{len(class_log)} → {cumulative_csv}")
+
+        # labels.json рядом с images/YYYYMMDD/ — накопительный, совместим с 2_label_ui
+        labels_json = images_dir / "labels.json"
+        existing_labels: dict[str, str] = {}
+        if labels_json.is_file():
+            try:
+                existing_labels = _json.loads(
+                    labels_json.read_text(encoding="utf-8")
+                ).get("labels", {})
+            except (_json.JSONDecodeError, KeyError):
+                pass
+        for row in class_log:
+            dest = (images_dir / row["out_class"] / row["crop"]).resolve()
+            existing_labels[str(dest)] = row["out_class"]
+        labels_json.write_text(
+            _json.dumps({"version": 1, "labels": existing_labels}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(f"labels.json: {len(existing_labels)} записей → {labels_json}")
     else:
         logger.info("Классификаций не найдено.")
 
