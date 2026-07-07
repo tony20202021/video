@@ -412,19 +412,15 @@ def train(
         "backbone_path": str(backbone_path.relative_to(REPO_ROOT)),
         "eval": {"full": eval_full, "val": eval_val},
     }
-    write_classify_manifest(
+    manifest_path = write_classify_manifest(
         model_tag,
         metrics=metrics,
         dataset_version=dataset_version,
         dataset_path=dataset_path_rel,
     )
-    results_path = (_dataset_dir / "training_results.json") if _dataset_dir else (output_dir / "training_results.json")
-    results_path.write_text(
-        json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
     print(f"\nЛучший val_acc: {best_val_acc:.3f}")
     print(f"Модель: {onnx_path}")
-    print(f"Результаты: {results_path}")
+    print(f"Результаты: {manifest_path}")
     return metrics
 
 

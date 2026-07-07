@@ -4,6 +4,7 @@
 # Вызывает:
 #   3_dataset_from_prev.sh    — один раз для старого датасета (стратегии 4,7)
 #   3_dataset_from_inference.sh — циклом по всем датам инференса (стратегии 1,2,3,5,8)
+#   3_dataset_fill_minor.sh   — после всех стратегий: дополняет классы где new < prev
 #
 # Usage:
 #   ./sh/train/3_dataset_build.sh --output .data/groups/v2/dataset
@@ -20,6 +21,7 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
 FROM_INFERENCE="$REPO/sh/train/3_dataset_from_inference.sh"
 FROM_PREV="$REPO/sh/train/3_dataset_from_prev.sh"
+FILL_MINOR="$REPO/sh/train/3_dataset_fill_minor.sh"
 
 export PYTHONIOENCODING=utf-8
 
@@ -28,6 +30,7 @@ PREV_DATASET="$REPO/.data/groups/v1/dataset"
 INFERENCE_IMAGES="$REPO/.data/groups/v1/inference/images"
 OUTPUT="$REPO/.data/groups/v2/dataset"
 FROM_DATE=""
+DRY_RUN=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -36,7 +39,7 @@ while [[ $# -gt 0 ]]; do
         --inference)  INFERENCE_IMAGES="$2";  shift 2 ;;
         --output|-o)  OUTPUT="$2";            shift 2 ;;
         --from-date)  FROM_DATE="$2";         shift 2 ;;
-        --dry-run)    EXTRA_ARGS+=("--dry-run"); shift ;;
+        --dry-run)    DRY_RUN="--dry-run"; EXTRA_ARGS+=("--dry-run"); shift ;;
         --strategies) EXTRA_ARGS+=("--strategies" "$2"); shift 2 ;;
         --max-per-class) EXTRA_ARGS+=("--max-per-class" "$2"); shift 2 ;;
         *) echo "[!] Unknown arg: $1" >&2; exit 1 ;;
@@ -98,5 +101,12 @@ for date_dir in "${date_dirs[@]}"; do
     "$FROM_INFERENCE" "$date_dir" --output "$OUTPUT" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
     echo ""
 done
+
+# ── Стратегия F: дополнить минорные классы из предыдущего датасета ────────────
+if [[ -d "$PREV_DATASET" ]]; then
+    echo "$(_ts)  INFO      Стратегия F: дополнение минорных классов из $PREV_DATASET"
+    "$FILL_MINOR" "$PREV_DATASET" --output "$OUTPUT" ${DRY_RUN:+"$DRY_RUN"}
+    echo ""
+fi
 
 echo "$(_ts)  INFO      Готово. Датасет: $OUTPUT"

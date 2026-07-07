@@ -108,8 +108,9 @@ def write_classify_manifest(
     dataset_version: str | None = None,
     dataset_path: str = "",
     notes: str = "",
-) -> None:
-    classify_manifest_path(tag).write_text(
+) -> Path:
+    path = classify_manifest_path(tag)
+    path.write_text(
         json.dumps({
             "tag": tag,
             "dataset_version": dataset_version,
@@ -120,6 +121,7 @@ def write_classify_manifest(
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    return path
 
 
 # ── Чтение состояния ──────────────────────────────────────────────────────────

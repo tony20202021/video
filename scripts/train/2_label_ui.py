@@ -286,6 +286,8 @@ _GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .btn-skip { background: #2d1b1b; color: #e74c3c; }
+  .btn-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
   .btn-bulk-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
@@ -498,6 +500,7 @@ function openModal(i) {
   }).join('');
   document.getElementById('modal-btns').innerHTML =
     btns +
+    `<button class="btn-skip" onclick="relabel('skip')">Пропустить</button>` +
     `<button class="btn-go" onclick="goLabel()">→ Разметка</button>` +
     `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
   document.getElementById('modal').classList.add('open');
@@ -581,6 +584,8 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   #modal .btn-class { background: #16213e; color: #eee; border-left: 4px solid #555; }
   #modal .btn-class.active { border-left-color: #f9ca24; background: #0f3460; color: #f9ca24; }
   #modal .btn-close { background: #2a2a4a; color: #aaa; }
+  #modal .btn-skip { background: #2d1b1b; color: #e74c3c; }
+  #modal .btn-skip:hover { background: #4a2020; color: #ff6b6b; }
   #modal .moving { opacity: 0.5; pointer-events: none; }
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
               cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
@@ -795,7 +800,9 @@ function buildModalBtns() {
       style="${active?'border-left-color:'+color+';color:'+color:''}">${cls}</button>`;
   }).join('');
   document.getElementById('modal-btns').innerHTML =
-    btns + `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
+    btns +
+    `<button class="btn-skip" onclick="moveTo('skip')">Пропустить</button>` +
+    `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
 }
 
 async function moveTo(toCls) {

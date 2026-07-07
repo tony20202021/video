@@ -38,22 +38,49 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
-    """Распаковывает zip если нужно, возвращает (images_dir, labels)."""
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+
+
+def _load_dataset(data_path: Path) -> tuple[Path, list[dict], Path | None]:
+    """Распаковывает zip если нужно, возвращает (images_dir, labels, dataset_dir|None).
+
+    Форматы:
+      1. Folder-based: data_path/<person_id>/img.jpg  →  person_id из имени папки
+      2. labels.json:  {"labels": [{"image": "...", "person_id": "..."}]}
+    """
     if data_path.suffix == ".zip":
         extract_dir = data_path.parent / data_path.stem
         with zipfile.ZipFile(data_path) as zf:
             zf.extractall(extract_dir)
         data_path = extract_dir
 
+    # Folder-based: подпапки = классы (имена жителей)
+    if data_path.is_dir():
+        class_dirs = [d for d in sorted(data_path.iterdir())
+                      if d.is_dir() and not d.name.startswith(".")]
+        if class_dirs:
+            labels = []
+            for cls_dir in class_dirs:
+                for f in sorted(cls_dir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
+                        labels.append({
+                            "image": str(f.relative_to(data_path)),
+                            "person_id": cls_dir.name,
+                        })
+            if labels:
+                return data_path, labels, data_path
+
     labels_file = data_path / "labels.json"
     if not labels_file.is_file():
-        raise FileNotFoundError(f"labels.json не найден в {data_path}")
+        raise FileNotFoundError(
+            f"labels.json не найден в {data_path}. "
+            f"Передайте папку с подпапками по жителям (person_01/, person_02/, …)"
+        )
 
     data = json.loads(labels_file.read_text(encoding="utf-8"))
     labels = data["labels"]
     images_dir = data_path / "images"
-    return images_dir, labels
+    return images_dir, labels, None
 
 
 def _collect_classes(labels: list[dict]) -> list[str]:
@@ -90,6 +117,72 @@ def _init_weights(model, init_source: Path | None, init_type: str, device) -> No
               f"пропущено {len(missing)}, лишних {len(unexpected)}")
     except Exception as e:
         print(f"  [!] Не удалось загрузить {init_type}: {e}", file=sys.stderr)
+
+
+def _eval_dataset(
+    model, items: list[dict], images_dir: Path, class_to_idx: dict,
+    device, batch_size: int, transform,
+) -> tuple[list[int], list[int]]:
+    """Инференс без аугментации. Возвращает (y_true, y_pred)."""
+    import torch
+    from torch.utils.data import DataLoader, Dataset
+    from PIL import Image
+
+    class _DS(Dataset):
+        def __init__(self, items, tf):
+            self.items, self.tf = items, tf
+        def __len__(self): return len(self.items)
+        def __getitem__(self, i):
+            it = self.items[i]
+            return self.tf(Image.open(images_dir / it["image"]).convert("RGB")), class_to_idx[it["person_id"]]
+
+    y_true: list[int] = []
+    y_pred: list[int] = []
+    model.eval()
+    with torch.no_grad():
+        for imgs, targets in DataLoader(_DS(items, transform), batch_size=batch_size):
+            y_pred.extend(model(imgs.to(device)).argmax(1).cpu().tolist())
+            y_true.extend(targets.tolist())
+    return y_true, y_pred
+
+
+def _compute_eval_metrics(y_true: list[int], y_pred: list[int], classes: list[str]) -> dict:
+    """Confusion matrix, per-class accuracy/precision/recall/F1, macro/weighted F1."""
+    n = len(classes)
+    cm = [[0] * n for _ in range(n)]
+    for t, p in zip(y_true, y_pred):
+        cm[t][p] += 1
+
+    by_class: dict[str, dict] = {}
+    correct_total = macro_f1 = weighted_f1 = support_total = 0
+
+    for i, cls in enumerate(classes):
+        support = sum(cm[i])
+        tp = cm[i][i]
+        fp = sum(cm[r][i] for r in range(n)) - tp
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall    = tp / support   if support  else 0.0
+        f1        = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        by_class[cls] = {
+            "accuracy":  round(tp / support if support else 0.0, 4),
+            "precision": round(precision, 4),
+            "recall":    round(recall, 4),
+            "f1":        round(f1, 4),
+            "support":   support,
+        }
+        correct_total += tp
+        macro_f1      += f1
+        weighted_f1   += f1 * support
+        support_total += support
+
+    return {
+        "total_samples": support_total,
+        "accuracy":      round(correct_total / support_total, 4) if support_total else 0.0,
+        "macro_f1":      round(macro_f1 / n, 4),
+        "weighted_f1":   round(weighted_f1 / support_total, 4) if support_total else 0.0,
+        "by_class":      by_class,
+        "confusion_matrix": {"classes": list(classes), "matrix": cm},
+    }
 
 
 def _embed_classes_in_onnx(onnx_path: Path, classes: list[str]) -> None:
@@ -132,7 +225,7 @@ def train(
         print("Нужен PyTorch: pip install torch torchvision pillow", file=sys.stderr)
         return {}
 
-    images_dir, labels = _load_dataset(data_path)
+    images_dir, labels, dataset_dir = _load_dataset(data_path)
 
     classes = _collect_classes(labels)
     if not classes:
@@ -185,9 +278,17 @@ def train(
             img = Image.open(images_dir / item["image"]).convert("RGB")
             return self.transform(img), class_to_idx[item["person_id"]]
 
-    n_val = max(1, int(len(valid) * val_split))
-    n_train = len(valid) - n_val
-    train_items, val_items = valid[:n_train], valid[n_train:]
+    # Стратифицированный сплит: val_split % от каждого класса
+    by_person: dict[str, list] = {}
+    for lb in valid:
+        by_person.setdefault(lb["person_id"], []).append(lb)
+    train_items, val_items = [], []
+    for pid, items in by_person.items():
+        n_v = max(1, int(len(items) * val_split))
+        val_items.extend(items[:n_v])
+        train_items.extend(items[n_v:])
+
+    n_train, n_val = len(train_items), len(val_items)
 
     train_loader = DataLoader(
         ResidentDataset(train_items, _train_tf), batch_size=batch_size, shuffle=True
@@ -223,7 +324,7 @@ def train(
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.5)
     criterion = nn.CrossEntropyLoss()
 
-    best_val_acc = 0.0
+    best_val_acc = -1.0
     history = []
 
     for epoch in range(1, epochs + 1):
@@ -295,7 +396,26 @@ def train(
 
     (output_dir / "best.pt").unlink(missing_ok=True)
 
+    # Полный инференс по датасету
+    print("\nИнференс по датасету…")
+    y_true_full, y_pred_full = _eval_dataset(model, valid, images_dir, class_to_idx, device, batch_size, _val_tf)
+    y_true_val,  y_pred_val  = _eval_dataset(model, val_items, images_dir, class_to_idx, device, batch_size, _val_tf)
+    eval_full = _compute_eval_metrics(y_true_full, y_pred_full, classes)
+    eval_val  = _compute_eval_metrics(y_true_val,  y_pred_val,  classes)
+    print(f"  full: accuracy={eval_full['accuracy']:.3f}  macro_f1={eval_full['macro_f1']:.3f}")
+    print(f"  val:  accuracy={eval_val['accuracy']:.3f}   macro_f1={eval_val['macro_f1']:.3f}")
+    for cls in classes:
+        mf, mv = eval_full["by_class"][cls], eval_val["by_class"][cls]
+        print(f"  {cls}: full acc={mf['accuracy']:.3f} f1={mf['f1']:.3f} | val acc={mv['accuracy']:.3f} f1={mv['f1']:.3f} (n={mv['support']})")
+
+    try:
+        dataset_path_rel = str(data_path.resolve().relative_to(REPO_ROOT))
+    except ValueError:
+        dataset_path_rel = str(data_path)
+
     metrics = {
+        "model_version": f"v{next_v}",
+        "dataset_path": dataset_path_rel,
         "best_val_acc": round(best_val_acc, 4),
         "epochs": epochs,
         "train_samples": n_train,
@@ -303,17 +423,20 @@ def train(
         "classes": classes,
         "num_classes": num_classes,
         "history": history,
-        "model_path": str(onnx_path),
-        "weights_path": str(pt_path),
+        "model_path": str(onnx_path.relative_to(REPO_ROOT)),
+        "weights_path": str(pt_path.relative_to(REPO_ROOT)),
         "backbone_used": str(backbone) if backbone else None,
         "init_from_used": str(init_from) if init_from else None,
+        "eval": {"full": eval_full, "val": eval_val},
     }
-    (output_dir / "training_results.json").write_text(
-        json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+
+    results_path = (dataset_dir.parent / "training_results.json") if dataset_dir else (output_dir / "training_results.json")
+    results_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+
     print(f"\nЛучший val_acc: {best_val_acc:.3f}")
     print(f"Модель: {onnx_path}")
     print(f"Веса:   {pt_path}  (для следующего --init-from)")
+    print(f"Результаты: {results_path}")
     return metrics
 
 

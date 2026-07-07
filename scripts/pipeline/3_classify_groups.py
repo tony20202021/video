@@ -404,6 +404,20 @@ def main() -> int:
     else:
         logger.info("  [ML] Классификатор не загружен — все кропы → unknown/")
 
+    if args.rebuild_csv:
+        _base = args.output or DEFAULT_OUTPUT
+        _date = args.date or datetime.now(MSK).strftime("%Y%m%d")
+        images_dir = _base / "images" / _date
+        if not images_dir.is_dir():
+            logger.error("[rebuild-csv] Не найдено: %s", images_dir)
+            return 1
+        _rebuild_csv(clf, images_dir, classify_conf=args.classify_conf, ext=args.ext)
+        return 0
+
+    if args.input_dir is None:
+        logger.error("input_dir обязателен (или используй --rebuild-csv)")
+        return 1
+
     if not args.input_dir.is_dir():
         logger.warning(f"[!] Не найдено: {args.input_dir}")
         return 1

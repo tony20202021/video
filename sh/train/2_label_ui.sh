@@ -25,13 +25,13 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-INPUT="$REPO/.data/groups/v1/inference/images/20260706"
-LABELS="$REPO/.data/groups/v1/inference/images/20260706/labels.json"
+INPUT="$REPO/.data/groups/v1/inference/images/20260707"
+LABELS="$REPO/.data/groups/v1/inference/images/20260707/labels.json"
 DATASET="$REPO/.data/groups/v1/dataset"
 PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=0
 EXT="jpg"
-PROBS=0
+PROBS=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

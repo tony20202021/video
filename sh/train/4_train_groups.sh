@@ -14,9 +14,9 @@ SCRIPT="$REPO/scripts/train/3_train_groups.py"
 
 export PYTHONIOENCODING=utf-8
 
-DATA="$REPO/.data/groups/v1/dataset"
+DATA="$REPO/.data/groups/v2/dataset"
 EPOCHS=20
-BATCH_SIZE=32
+BATCH_SIZE=64
 LR=1e-3
 VAL_SPLIT=0.2
 CLASS_WEIGHTS=1
