@@ -116,35 +116,35 @@ def _find_crops(run_dir: Path, ext: str = "jpg") -> dict[str, dict[str, list[Pat
 # ─── ML ──────────────────────────────────────────────────────────────────────
 
 def _load_classifier(config_path: Path):
-    """Загружает GroupClassifier из config.yaml."""
+    """Загружает GroupClassifier из config.yaml. Возвращает (clf, model_tag) или (None, None)."""
     if not config_path.is_file():
-        return None
+        return None, None
     try:
         import yaml
     except ImportError:
         logger.warning("  [ML] Нужен pyyaml: pip install pyyaml")
-        return None
+        return None, None
     try:
         cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     except Exception as e:
         logger.warning(f"  [ML] Ошибка чтения {config_path}: {e}")
-        return None
+        return None, None
     models = cfg.get("models", {})
     classify_path = models.get("classify")
     if not classify_path:
         logger.warning("  [ML] config.yaml: нет models.classify")
-        return None
+        return None, None
     try:
         from ml.classify import GroupClassifier
         clf = GroupClassifier()
         resolved = Path(classify_path) if Path(classify_path).is_absolute() else REPO_ROOT / classify_path
         if not clf.load(resolved):
             logger.warning(f"  [ML] Не удалось загрузить: {resolved}")
-            return None
-        return clf
+            return None, None
+        return clf, Path(classify_path).stem
     except Exception as e:
         logger.warning(f"  [ML] Ошибка инициализации: {e}")
-        return None
+        return None, None
 
 
 def _classify(clf, bgr_crop, *, classify_conf: float):
@@ -398,9 +398,9 @@ def main() -> int:
     except ImportError:
         pass
 
-    clf = _load_classifier(args.config)
+    clf, model_tag = _load_classifier(args.config)
     if clf is not None:
-        logger.info(f"  [ML] GroupClassifier: {'готов' if clf.ready else 'не загружен'}")
+        logger.info(f"  [ML] GroupClassifier: {'готов' if clf.ready else 'не загружен'}  [{model_tag}]")
     else:
         logger.info("  [ML] Классификатор не загружен — все кропы → unknown/")
 
@@ -473,7 +473,7 @@ def main() -> int:
         _json.dumps(run_params, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"ML:        {'GroupClassifier готов' if clf and clf.ready else 'не загружен (unknown/)'}")
+    logger.info(f"ML:        {'GroupClassifier готов' if clf and clf.ready else 'не загружен (unknown/)'}  [{model_tag or '?'}]")
     logger.info(f"Порог M1:  {args.classify_conf}")
     logger.info(f"Вывод:     images={images_dir}  meta={meta_dir}")
     logger.info(f"Прогонов:  {len(run_pairs)}")

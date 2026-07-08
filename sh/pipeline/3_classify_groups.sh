@@ -52,10 +52,14 @@ _count_crops() {
     find "$S2DIR" -name "*.jpg" -type f 2>/dev/null | wc -l
 }
 
+MODEL_TAG=$(grep -E "^\s*classify\s*:" "$REPO/config.yaml" 2>/dev/null \
+    | sed 's|.*classify\s*:\s*||' | xargs basename 2>/dev/null | sed 's|\.onnx$||' || echo "?")
+
 echo "=== 3_classify_groups ==="
 echo "  Input:         $S2DIR"
 echo "  Output:        $OUT_DIR"
 echo "  classify_conf: $CLASSIFY_CONF"
+echo "  модель:        $MODEL_TAG"
 echo "  poll: ${POLL_SEC}s"
 echo ""
 echo "[classify] Ctrl+C для остановки"

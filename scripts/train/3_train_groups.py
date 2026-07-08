@@ -267,15 +267,18 @@ def train(
             img = Image.open(images_dir / item["image"]).convert("RGB")
             return self.transform(img), CLASS_TO_IDX[item["class"]]
 
-    # Стратифицированное разбиение: val_split % от каждого класса
+    # Стратифицированное разбиение: val_split % от каждого класса (с шаффлом)
+    import random as _random
     by_class: dict[str, list] = {}
     for lb in valid:
         by_class.setdefault(lb["class"], []).append(lb)
     train_items, val_items = [], []
     for cls, items in by_class.items():
-        n_v = max(1, int(len(items) * val_split))
-        val_items.extend(items[:n_v])
-        train_items.extend(items[n_v:])
+        shuffled = items[:]
+        _random.shuffle(shuffled)
+        n_v = max(1, int(len(shuffled) * val_split))
+        val_items.extend(shuffled[:n_v])
+        train_items.extend(shuffled[n_v:])
     n_train, n_val = len(train_items), len(val_items)
 
     train_ds = CropDataset(train_items, _train_tf)
