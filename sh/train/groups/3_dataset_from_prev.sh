@@ -4,14 +4,14 @@
 # Вызывается один раз для старого датасета (или из 3_dataset_build.sh).
 #
 # Usage:
-#   ./sh/train/3_dataset_from_prev.sh <dataset_dir> --output <output_dir>
-#   ./sh/train/3_dataset_from_prev.sh .data/groups/v1/dataset \
+#   ./sh/train/groups/3_dataset_from_prev.sh <dataset_dir> --output <output_dir>
+#   ./sh/train/groups/3_dataset_from_prev.sh .data/groups/v1/dataset \
 #       --output .data/groups/v2/dataset
-#   ./sh/train/3_dataset_from_prev.sh ... --strategies 7 --dry-run
+#   ./sh/train/groups/3_dataset_from_prev.sh ... --strategies 7 --dry-run
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/dataset_v2_from_prev.py"

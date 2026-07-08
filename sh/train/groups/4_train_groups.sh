@@ -2,12 +2,12 @@
 # Обучение классификатора групп (Модель 1)
 #
 # Usage:
-#   ./sh/train/4_train_groups.sh --data .data/groups/v1
-#   ./sh/train/4_train_groups.sh --data .output/training/export.zip --epochs 30
+#   ./sh/train/groups/4_train_groups.sh --data .data/groups/v1
+#   ./sh/train/groups/4_train_groups.sh --data .output/training/export.zip --epochs 30
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/3_train_groups.py"

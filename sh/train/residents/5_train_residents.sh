@@ -2,13 +2,13 @@
 # Обучение идентификатора жителей (Модель 2)
 #
 # Usage:
-#   ./sh/train/5_train_residents.sh --data .output/training/export.zip
-#   ./sh/train/5_train_residents.sh --data export_dir --backbone .models/classify/backbone.pt
-#   ./sh/train/5_train_residents.sh --data export_dir --init-from .models/identify/v1.pt
+#   ./sh/train/residents/5_train_residents.sh --data .output/training/export.zip
+#   ./sh/train/residents/5_train_residents.sh --data export_dir --backbone .models/classify/backbone.pt
+#   ./sh/train/residents/5_train_residents.sh --data export_dir --init-from .models/identify/v1.pt
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/5_train_residents.py"

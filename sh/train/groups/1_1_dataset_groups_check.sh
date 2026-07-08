@@ -3,25 +3,25 @@
 #
 # Поведение по умолчанию:
 #   - Дубли (уже есть в датасете) — удалять
-#   - Уникальные — перемещать в .data/groups/v1/new/ (с сохранением структуры подкаталогов)
+#   - Уникальные — перемещать в .data/groups/v2/new/ (с сохранением структуры подкаталогов)
 #   - Работает непрерывно (watch-режим)
 #
 # Usage:
-#   ./sh/train/1_1_dataset_groups_check.sh
-#   ./sh/train/1_1_dataset_groups_check.sh --no-delete-doubles   # дубли не удалять
-#   ./sh/train/1_1_dataset_groups_check.sh --no-delete-after     # не чистить пустые каталоги
-#   ./sh/train/1_1_dataset_groups_check.sh --poll-sec 30
+#   ./sh/train/groups/1_1_dataset_groups_check.sh
+#   ./sh/train/groups/1_1_dataset_groups_check.sh --no-delete-doubles   # дубли не удалять
+#   ./sh/train/groups/1_1_dataset_groups_check.sh --no-delete-after     # не чистить пустые каталоги
+#   ./sh/train/groups/1_1_dataset_groups_check.sh --poll-sec 30
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/dataset_groups.py"
 
 INPUT_DIR="$REPO/.output/pipeline/2_yolo_boxes_files"
-DATASET="$REPO/.data/groups/v1/dataset"
-DST_NEW="$REPO/.data/groups/v1/new"
+DATASET="$REPO/.data/groups/v2/dataset"
+DST_NEW="$REPO/.data/groups/v2/new"
 
 POLL_SEC=10
 DELETE_DOUBLES=1   # удалять дубли сразу

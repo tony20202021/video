@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Веб-разметчик кропов (Модель 1)
+# Веб-разметчик кропов (общий — Модель 1 и Модель 2)
 #
-# Usage:
+# Usage (жители — дефолт):
 #   ./sh/train/2_label_ui.sh
-#   ./sh/train/2_label_ui.sh --input .output/pipeline/2_yolo_boxes_files/run_xxx
-#   ./sh/train/2_label_ui.sh --port 8080
-#   ./sh/train/2_label_ui.sh --unlabeled-only
-#   ./sh/train/2_label_ui.sh --dataset .data/groups/v1
+# Usage (группы):
+#   ./sh/train/2_label_ui.sh --input .data/groups/v1/inference/images/20260707 --dataset .data/groups/v1/dataset
 
 set -euo pipefail
 
@@ -25,9 +23,16 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-INPUT="$REPO/.data/groups/v1/inference/images/20260707"
-LABELS="$REPO/.data/groups/v1/inference/images/20260707/labels.json"
-DATASET="$REPO/.data/groups/v1/dataset"
+# # groups
+# INPUT="$REPO/.data/groups/v1/inference/images/20260707"
+# LABELS="$REPO/.data/groups/v1/inference/images/20260707/labels.json"
+# DATASET="$REPO/.data/groups/v1/dataset"
+
+# residents
+INPUT="$REPO/.data/residents/v0/new"
+LABELS="$REPO/.data/residents/v0/new/labels.json"
+DATASET="$REPO/.data/residents/v1/dataset"
+
 PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=0
 EXT="jpg"

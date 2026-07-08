@@ -7,8 +7,8 @@
 #   3_dataset_fill_minor.sh   — после всех стратегий: дополняет классы где new < prev
 #
 # Usage:
-#   ./sh/train/3_dataset_build.sh --output .data/groups/v2/dataset
-#   ./sh/train/3_dataset_build.sh \
+#   ./sh/train/groups/3_dataset_build.sh --output .data/groups/v2/dataset
+#   ./sh/train/groups/3_dataset_build.sh \
 #       --prev     .data/groups/v1/dataset \
 #       --inference .data/groups/v1/inference/images \
 #       --output   .data/groups/v2/dataset \
@@ -17,11 +17,11 @@
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 
-FROM_INFERENCE="$REPO/sh/train/3_dataset_from_inference.sh"
-FROM_PREV="$REPO/sh/train/3_dataset_from_prev.sh"
-FILL_MINOR="$REPO/sh/train/3_dataset_fill_minor.sh"
+FROM_INFERENCE="$REPO/sh/train/groups/3_dataset_from_inference.sh"
+FROM_PREV="$REPO/sh/train/groups/3_dataset_from_prev.sh"
+FILL_MINOR="$REPO/sh/train/groups/3_dataset_fill_minor.sh"
 
 export PYTHONIOENCODING=utf-8
 

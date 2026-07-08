@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Автоматическое создание labels.json по результатам инференса (3_classify_groups).
 #
-# Следит за .data/groups/v1/inference/images/ — для каждого каталога с датой
+# Следит за .data/groups/v2/inference/images/ — для каждого каталога с датой
 # создаёт/обновляет labels.json внутри него на основе структуры подкаталогов-классов:
 #
 #   inference/images/YYYYMMDD/
@@ -11,20 +11,20 @@
 #     labels.json            ← создаётся/обновляется этим скриптом
 #
 # Формат labels.json идентичен выводу 2_label_ui и совместим с:
-#   ./sh/train/1_dataset_groups.sh apply --labels inference/images/YYYYMMDD/labels.json
+#   ./sh/train/groups/1_dataset_groups.sh apply --labels inference/images/YYYYMMDD/labels.json
 #
 # Usage:
-#   ./sh/train/1_3_dataset_groups_inference_labels.sh
-#   ./sh/train/1_3_dataset_groups_inference_labels.sh --poll-sec 30
-#   ./sh/train/1_3_dataset_groups_inference_labels.sh --once
+#   ./sh/train/groups/1_3_dataset_groups_inference_labels.sh
+#   ./sh/train/groups/1_3_dataset_groups_inference_labels.sh --poll-sec 30
+#   ./sh/train/groups/1_3_dataset_groups_inference_labels.sh --once
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 
-INFERENCE_IMAGES="$REPO/.data/groups/v1/inference/images"
+INFERENCE_IMAGES="$REPO/.data/groups/v2/inference/images"
 
 POLL_SEC=60
 ONCE=0

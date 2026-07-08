@@ -2,17 +2,17 @@
 # Управление датасетом групп (Модель 1)
 #
 # Usage:
-#   ./sh/train/1_dataset_groups.sh build
-#   ./sh/train/1_dataset_groups.sh build --labels .output/train/2_label_ui/labels.json
-#   ./sh/train/1_dataset_groups.sh apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1
-#   ./sh/train/1_dataset_groups.sh apply --labels .data/groups/v1/new/labels.json --dataset .data/groups/v1 --move
-#   ./sh/train/1_dataset_groups.sh check --src .data/groups/v1/new --dataset .data/groups/v1/dataset
-#   ./sh/train/1_dataset_groups.sh add --src .output/pipeline/2_yolo_boxes_files/run_xxx --dataset .data/groups/v1
-#   ./sh/train/1_dataset_groups.sh status --dataset .data/groups/v1
+#   ./sh/train/groups/1_dataset_groups.sh build
+#   ./sh/train/groups/1_dataset_groups.sh build --labels .output/train/2_label_ui/labels.json
+#   ./sh/train/groups/1_dataset_groups.sh apply --labels .data/groups/v2/new/labels.json --dataset .data/groups/v2
+#   ./sh/train/groups/1_dataset_groups.sh apply --labels .data/groups/v2/new/labels.json --dataset .data/groups/v2 --move
+#   ./sh/train/groups/1_dataset_groups.sh check --src .data/groups/v2/new --dataset .data/groups/v2/dataset
+#   ./sh/train/groups/1_dataset_groups.sh add --src .output/pipeline/2_yolo_boxes_files/run_xxx --dataset .data/groups/v2
+#   ./sh/train/groups/1_dataset_groups.sh status --dataset .data/groups/v2
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/dataset_groups.py"
@@ -31,12 +31,12 @@ case "$CMD" in
     *) echo "[!] Unknown command: $CMD (expected: build, apply, check, add, status)" >&2; exit 1 ;;
 esac
 
-LABELS="$REPO/.data/groups/v1/new/labels.json"
+LABELS="$REPO/.data/groups/v2/new/labels.json"
 VERSION=""
 OUT=""
 MOVE=1
-SRC="$REPO/.data/groups/v1/new"
-DATASET="$REPO/.data/groups/v1/dataset"
+SRC="$REPO/.data/groups/v2/new"
+DATASET="$REPO/.data/groups/v2/dataset"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

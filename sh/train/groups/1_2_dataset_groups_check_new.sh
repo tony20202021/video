@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Непрерывная дедупликация внутри .data/groups/v1/new/:
+# Непрерывная дедупликация внутри .data/groups/v2/new/:
 # находит файлы с одинаковым именем (из разных подкаталогов), удаляет лишние,
 # оставляя первый по алфавиту пути.
 #
 # Usage:
-#   ./sh/train/1_2_dataset_groups_check_new.sh
-#   ./sh/train/1_2_dataset_groups_check_new.sh --no-delete   # только показать, не удалять
-#   ./sh/train/1_2_dataset_groups_check_new.sh --poll-sec 30
-#   ./sh/train/1_2_dataset_groups_check_new.sh --once        # один прогон и выход
+#   ./sh/train/groups/1_2_dataset_groups_check_new.sh
+#   ./sh/train/groups/1_2_dataset_groups_check_new.sh --no-delete   # только показать, не удалять
+#   ./sh/train/groups/1_2_dataset_groups_check_new.sh --poll-sec 30
+#   ./sh/train/groups/1_2_dataset_groups_check_new.sh --once        # один прогон и выход
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 
-NEW_DIR="$REPO/.data/groups/v1/new"
+NEW_DIR="$REPO/.data/groups/v2/new"
 
 POLL_SEC=30
 DELETE=1   # удалять дубли

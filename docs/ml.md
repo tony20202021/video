@@ -163,10 +163,10 @@ for r in results:
 ./sh/pipeline/2_yolo_boxes_files.sh        # watch + delete-after по умолчанию
 
 # Терминал B — проверка кропов на дубли с датасетом → new/
-./sh/train/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files/images → .data/groups/v1/new/
+./sh/train/groups/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files/images → .data/groups/v1/new/
 
 # Терминал C — дедупликация внутри new/ (одинаковые имена из разных прогонов)
-./sh/train/1_2_dataset_groups_check_new.sh # watch: .data/groups/v1/new/
+./sh/train/groups/1_2_dataset_groups_check_new.sh # watch: .data/groups/v1/new/
 ```
 
 Полный цикл разметки и обучения:
@@ -183,11 +183,11 @@ for r in results:
    Галерея /gallery: SHIFT+click для выделения диапазона (в рамках одной секции).
 
 3. Применить разметку в датасет:
-   ./sh/train/1_dataset_groups.sh apply --move
+   ./sh/train/groups/1_dataset_groups.sh apply --move
    → файлы из v1/new/ → v1/dataset/1_resident/, v1/dataset/2_delivery/, … по меткам
 
 4. Обучить:
-   ./sh/train/4_train_groups.sh
+   ./sh/train/groups/4_train_groups.sh
    → .models/classify/v1_1.onnx (+ v1_1.json манифест)
 
 5. (опционально) Проверить во время обучения:
@@ -249,10 +249,10 @@ inference/
 
 ```bash
 # Терминал — labels из инференса (watch-режим)
-./sh/train/1_3_dataset_groups_inference_labels.sh
+./sh/train/groups/1_3_dataset_groups_inference_labels.sh
 
 # Применить в датасет (вручную, после проверки)
-./sh/train/1_dataset_groups.sh apply \
+./sh/train/groups/1_dataset_groups.sh apply \
     --labels .data/groups/v1/inference/images/YYYYMMDD/labels.json \
     --dataset .data/groups/v1/dataset --move
 ```
@@ -338,11 +338,11 @@ scripts/train/
 `3_dataset_build.sh`:
 ```bash
 # Старый датасет — один раз
-./sh/train/3_dataset_from_prev.sh .data/groups/vN/dataset
+./sh/train/groups/3_dataset_from_prev.sh .data/groups/vN/dataset
 
 # Инференс — по каждой дате
 for date_dir in .data/groups/vN/inference/images/*/; do
-    ./sh/train/3_dataset_from_inference.sh "$date_dir"
+    ./sh/train/groups/3_dataset_from_inference.sh "$date_dir"
 done
 ```
 
@@ -369,15 +369,29 @@ done
 
 ## Скрипты обучения
 
+**Модель 1 (классификация групп):**
+
 | Скрипт | Назначение |
 |--------|-----------|
-| `sh/train/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes/images → v1/new/ (дубли против датасета) |
-| `sh/train/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри v1/new/ по имени файла |
-| `sh/train/1_3_dataset_groups_inference_labels.sh` | Watch: inference/images/YYYYMMDD/ → labels.json по структуре класс-каталогов |
-| `sh/train/1_dataset_groups.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
-| `sh/train/2_label_ui.sh` | Запуск веб-разметчика кропов |
-| `sh/train/4_train_groups.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
-| `sh/train/5_train_residents.sh` | Обучение Модели 2 |
+| `sh/train/groups/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes/images → v1/new/ (дубли против датасета) |
+| `sh/train/groups/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри v1/new/ по имени файла |
+| `sh/train/groups/1_3_dataset_groups_inference_labels.sh` | Watch: inference/images/YYYYMMDD/ → labels.json по структуре класс-каталогов |
+| `sh/train/groups/1_dataset_groups.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
+| `sh/train/groups/4_train_groups.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
+
+**Модель 2 (идентификация жителей):**
+
+| Скрипт | Назначение |
+|--------|-----------|
+| `sh/train/residents/1_collect_residents.sh` | Сбор кропов из датасета и инференса (1_resident + 4_guest) |
+| `sh/train/residents/2_filter_residents.sh` | Фильтрация: blur, >1 чел., обрывки тела |
+| `sh/train/residents/5_train_residents.sh` | Обучение Модели 2 |
+
+**Общее:**
+
+| Скрипт | Назначение |
+|--------|-----------|
+| `sh/train/2_label_ui.sh` | Веб-разметчик кропов (группы и жители) |
 
 ---
 
@@ -430,13 +444,13 @@ done
 
 ```bash
 # Стандартный запуск (данные из .data/groups/v1/dataset)
-./sh/train/4_train_groups.sh
+./sh/train/groups/4_train_groups.sh
 
 # Явный путь и параметры
-./sh/train/4_train_groups.sh --data .data/groups/v1/dataset --epochs 30
+./sh/train/groups/4_train_groups.sh --data .data/groups/v1/dataset --epochs 30
 
 # Отключить коррекцию дисбаланса
-./sh/train/4_train_groups.sh --no-class-weights --no-weighted-sampling
+./sh/train/groups/4_train_groups.sh --no-class-weights --no-weighted-sampling
 ```
 
 **Параметры:**
@@ -509,15 +523,67 @@ transforms.RandomErasing(p=0.3)            # частичное перекрыт
 
 ## Идентификация жителей (Модель 2)
 
-### Добавить нового жителя
+### Структура датасета
 
 ```
-1. Накопить 15–30 кропов из разных дней (разная одежда)
-2. Разметить в 2_label_ui
-3. Запустить переобучение Модели 2
+.data/residents/
+  v0/
+    new/          ← собранные кропы до разметки (временный буфер)
+  v1/
+    dataset/      ← размеченный датасет (папки по person_id)
+      person_01/
+      person_02/
+      …
 ```
 
-До переобучения новый житель попадёт в `unknown_resident`.
+Источники кропов: `1_resident` + `4_guest` из датасета групп и инференса.
+Гости включены — они тоже ходят в конкретные квартиры и идентифицируемы.
+
+### Сбор и фильтрация кропов
+
+```bash
+# Шаг 1: собрать кропы
+./sh/train/residents/1_collect_residents.sh
+#   --out .data/residents/v0/new   (default)
+#   --interval 5                   (1 кадр на 5с на камеру, default)
+#   --max-persons 1                (только кадры где YOLO нашёл ровно 1 чел., default)
+#   --classes 1_resident 4_guest   (default)
+
+# Шаг 2: отфильтровать плохие кропы
+./sh/train/residents/2_filter_residents.sh
+#   --min-conf 0.5      (conf Model 1 из имени файла, default)
+#   --min-blur 40       (резкость по дисперсии Лапласиана, default)
+#   --yolo-persons 1    (max людей в кропе по YOLO, default; conf=0.12)
+#   --min-coverage 0.15 (min доля кадра под bbox человека, default)
+#   --min-body 0        (доля видимого тела по pose, default=отключён)
+#                       рекомендуется 0.15 чтобы отсечь "только рука/нога"
+```
+
+Фильтры по умолчанию убирают: кадры с несколькими людьми (YOLO пропустил слияние bbox),
+motion blur, низкий confidence Модели 1, кропы где детектор не нашёл человека.
+
+`--min-body` требует `yolov8n-pose.pt` (`.models/detect/`). Pose estimation даёт
+долю видимых keypoints из 17 (COCO). Из-за вида камеры сверху даже хорошие кадры
+дают ~35–65%, поэтому порог ставить не выше 0.25.
+
+```bash
+# Посмотреть что будет удалено без реального удаления:
+./sh/train/residents/2_filter_residents.sh --dry-run
+./sh/train/residents/2_filter_residents.sh --dry-run --min-body 0.15
+```
+
+### Разметка
+
+```bash
+# Дефолт — жители (v0/new → v1/dataset)
+./sh/train/2_label_ui.sh
+
+# Явно указать пути
+./sh/train/2_label_ui.sh --input .data/residents/v0/new --dataset .data/residents/v1/dataset
+```
+
+Классы (`person_01`, `person_02`, …) читаются из подпапок `v1/dataset/` автоматически.
+Чтобы добавить нового человека — создать папку `person_NN/` и обновить страницу в браузере.
 
 ### Переобучение
 
@@ -532,11 +598,22 @@ transforms.RandomErasing(p=0.3)            # частичное перекрыт
 
 ```bash
 # Первый цикл — backbone от Модели 1
-./sh/train/5_train_residents.sh --data export.zip --backbone .models/classify/backbone.pt
+./sh/train/residents/5_train_residents.sh --data .data/residents/v1/dataset --backbone .models/classify/backbone.pt
 
 # Последующие циклы — веса предыдущей версии
-./sh/train/5_train_residents.sh --data export_full.zip --init-from .models/identify/v1.pt
+./sh/train/residents/5_train_residents.sh --data .data/residents/v1/dataset --init-from .models/identify/v1.pt
 ```
+
+### Добавить нового жителя
+
+```
+1. Запустить 1_collect_residents.sh + 2_filter_residents.sh (подберут новые кропы)
+2. Создать папку .data/residents/v1/dataset/person_NN/
+3. Разметить новые кропы через 2_label_ui.sh
+4. Переобучить Модель 2 на полном датасете (--init-from предыдущей версии)
+```
+
+До переобучения новый житель попадёт в `unknown_resident`.
 
 ### Трансфер между моделями
 
@@ -563,10 +640,11 @@ fine-tune на датасете групп (1_resident / 2_delivery / 3_utilitie
 ```
 .models/
   detect/
-    yolov8n.onnx        — детекция людей (готово)
+    yolov8n.onnx        — детекция людей (пайплайн)
+    yolov8n-pose.pt     — pose estimation (filter_residents: доля тела в кадре)
   classify/
-    v1_1.onnx           — Модель 1: датасет v1, 1-й прогон (val_acc 79%)
-    v1_1.json           — манифест (dataset_version, metrics)
+    v2_3.onnx           — Модель 1 (активная): датасет v2, без балансировки
+    v2_3.json           — манифест (dataset_version, metrics)
     backbone.pt         — только features (PyTorch) для инициализации Модели 2
   identify/
     v1.onnx             — Модель 2: после первого обучения на жителях
