@@ -7,7 +7,7 @@
 | Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
 | Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Готово** `.models/detect/yolov8n.onnx` |
-| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Обучена** `.models/classify/v1_1.onnx` (датасет v1, val_acc 79%) |
+| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Обучена** `.models/classify/v2_3.onnx` (датасет v2) |
 | Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Нужно обучить |
 
 ---
@@ -163,10 +163,10 @@ for r in results:
 ./sh/pipeline/2_yolo_boxes_files.sh        # watch + delete-after по умолчанию
 
 # Терминал B — проверка кропов на дубли с датасетом → new/
-./sh/train/groups/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files/images → .data/groups/v1/new/
+./sh/train/groups/1_1_dataset_groups_check.sh     # watch: .output/pipeline/2_yolo_boxes_files/images → .data/groups/v2/new/
 
 # Терминал C — дедупликация внутри new/ (одинаковые имена из разных прогонов)
-./sh/train/groups/1_2_dataset_groups_check_new.sh # watch: .data/groups/v1/new/
+./sh/train/groups/1_2_dataset_groups_check_new.sh # watch: .data/groups/v2/new/
 ```
 
 Полный цикл разметки и обучения:
@@ -174,7 +174,7 @@ for r in results:
 ```
 1. Накопить кропы:
    2_yolo_boxes_files.sh + 1_1_dataset_groups_check.sh + 1_2_dataset_groups_check_new.sh
-   → уникальные кропы в .data/groups/v1/new/
+   → уникальные кропы в .data/groups/v2/new/
 
 2. Разметить:
    ./sh/train/2_label_ui.sh
@@ -184,11 +184,11 @@ for r in results:
 
 3. Применить разметку в датасет:
    ./sh/train/groups/1_dataset_groups.sh apply --move
-   → файлы из v1/new/ → v1/dataset/1_resident/, v1/dataset/2_delivery/, … по меткам
+   → файлы из v2/new/ → v1/dataset/1_resident/, v1/dataset/2_delivery/, … по меткам
 
 4. Обучить:
    ./sh/train/groups/4_train_groups.sh
-   → .models/classify/v1_1.onnx (+ v1_1.json манифест)
+   → .models/classify/v2_N.onnx (+ v2_N.json манифест)
 
 5. (опционально) Проверить во время обучения:
    python scripts/train/3a_eval_pt.py
@@ -197,18 +197,18 @@ for r in results:
 Ручные операции с датасетом (при необходимости):
 
 ```bash
-# Добавить кропы из прогона в v1/new/ (с проверкой дублей против датасета)
+# Добавить кропы из прогона в v2/new/ (с проверкой дублей против датасета)
 python scripts/train/dataset_groups.py add \
     --src .output/pipeline/2_yolo_boxes_files/images \
-    --dataset .data/groups/v1/dataset
+    --dataset .data/groups/v2/dataset
 
-# Проверить v1/new/ против датасета (вручную)
+# Проверить v2/new/ против датасета (вручную)
 python scripts/train/dataset_groups.py check \
     --src .data/groups/v1/new \
-    --dataset .data/groups/v1/dataset
+    --dataset .data/groups/v2/dataset
 
 # Статус датасета
-python scripts/train/dataset_groups.py status --dataset .data/groups/v1/dataset
+python scripts/train/dataset_groups.py status --dataset .data/groups/v2/dataset
 ```
 
 ---
@@ -228,7 +228,7 @@ Watch-скрипт непрерывно следит за кропами и кл
 
 **Источник:** `.output/pipeline/2_yolo_boxes_files/images` — все `*.jpg` рекурсивно (любая вложенность).
 
-**Выход:** `.data/groups/v1/inference/`
+**Выход:** `.data/groups/v2/inference/`
 ```
 inference/
   images/YYYYMMDD/
@@ -253,8 +253,8 @@ inference/
 
 # Применить в датасет (вручную, после проверки)
 ./sh/train/groups/1_dataset_groups.sh apply \
-    --labels .data/groups/v1/inference/images/YYYYMMDD/labels.json \
-    --dataset .data/groups/v1/dataset --move
+    --labels .data/groups/v2/inference/images/YYYYMMDD/labels.json \
+    --dataset .data/groups/v2/dataset --move
 ```
 
 ---
@@ -373,8 +373,8 @@ done
 
 | Скрипт | Назначение |
 |--------|-----------|
-| `sh/train/groups/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes/images → v1/new/ (дубли против датасета) |
-| `sh/train/groups/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри v1/new/ по имени файла |
+| `sh/train/groups/1_1_dataset_groups_check.sh` | Watch: кропы из 2_yolo_boxes/images → v2/new/ (дубли против датасета) |
+| `sh/train/groups/1_2_dataset_groups_check_new.sh` | Watch: дедуп внутри v2/new/ по имени файла |
 | `sh/train/groups/1_3_dataset_groups_inference_labels.sh` | Watch: inference/images/YYYYMMDD/ → labels.json по структуре класс-каталогов |
 | `sh/train/groups/1_dataset_groups.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
 | `sh/train/groups/4_train_groups.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
@@ -383,8 +383,9 @@ done
 
 | Скрипт | Назначение |
 |--------|-----------|
-| `sh/train/residents/1_collect_residents.sh` | Сбор кропов из датасета и инференса (1_resident + 4_guest) |
-| `sh/train/residents/2_filter_residents.sh` | Фильтрация: blur, >1 чел., обрывки тела |
+| `sh/train/residents/1_collect_residents.sh` | Сбор кропов из датасета и инференса (1_resident + 4_guest); `--interval 1 --conf-delta 0.1` |
+| `sh/train/residents/2_filter_residents.sh` | Фильтрация: conf, blur, >1 чел., покрытие, pixel-diff (`--min-diff 20`) |
+| `sh/train/residents/3_analyze_pool.sh` | Анализ пула до дедупликации: графики frames/window, conf, pixel-diff |
 | `sh/train/residents/5_train_residents.sh` | Обучение Модели 2 |
 
 **Общее:**
@@ -443,11 +444,11 @@ done
 ## Обучение Модели 1 (3_train_groups)
 
 ```bash
-# Стандартный запуск (данные из .data/groups/v1/dataset)
+# Стандартный запуск (данные из .data/groups/v2/dataset)
 ./sh/train/groups/4_train_groups.sh
 
 # Явный путь и параметры
-./sh/train/groups/4_train_groups.sh --data .data/groups/v1/dataset --epochs 30
+./sh/train/groups/4_train_groups.sh --data .data/groups/v2/dataset --epochs 30
 
 # Отключить коррекцию дисбаланса
 ./sh/train/groups/4_train_groups.sh --no-class-weights --no-weighted-sampling
@@ -545,9 +546,16 @@ transforms.RandomErasing(p=0.3)            # частичное перекрыт
 # Шаг 1: собрать кропы
 ./sh/train/residents/1_collect_residents.sh
 #   --out .data/residents/v0/new   (default)
-#   --interval 5                   (1 кадр на 5с на камеру, default)
-#   --max-persons 1                (только кадры где YOLO нашёл ровно 1 чел., default)
+#   --interval 1                   (1с окно на камеру, default)
+#   --conf-delta 0.1               (из окна брать все кадры с conf ≥ max-0.1, default)
+#   --max-persons 1                (только кадры где один человек, default)
 #   --classes 1_resident 4_guest   (default)
+
+# Шаг 1а: (опционально) анализ пула до дедупликации
+./sh/train/residents/3_analyze_pool.sh
+#   --interval 2   (размер окна для статистики)
+#   --out .data/residents/v0/analysis
+# → графики: frames_per_window, conf_distribution, pixel_diff
 
 # Шаг 2: отфильтровать плохие кропы
 ./sh/train/residents/2_filter_residents.sh
@@ -555,12 +563,18 @@ transforms.RandomErasing(p=0.3)            # частичное перекрыт
 #   --min-blur 40       (резкость по дисперсии Лапласиана, default)
 #   --yolo-persons 1    (max людей в кропе по YOLO, default; conf=0.12)
 #   --min-coverage 0.15 (min доля кадра под bbox человека, default)
+#   --min-diff 20       (pixel-diff фильтр: следующий кадр той же камеры/даты
+#                        берётся только если mean-abs-diff от предыдущего ≥ N, default)
 #   --min-body 0        (доля видимого тела по pose, default=отключён)
-#                       рекомендуется 0.15 чтобы отсечь "только рука/нога"
 ```
 
-Фильтры по умолчанию убирают: кадры с несколькими людьми (YOLO пропустил слияние bbox),
-motion blur, низкий confidence Модели 1, кропы где детектор не нашёл человека.
+Фильтры убирают: кадры с несколькими людьми (YOLO пропустил слияние bbox),
+motion blur, низкий confidence Модели 1, кропы где детектор не нашёл человека,
+и похожие соседние кадры (`--min-diff`).
+
+`--min-diff` — жадный greedy-алгоритм: кадры группируются по `(cam, date)`, сортируются
+по времени. Следующий кадр добавляется только если mean-abs-diff от последнего оставленного
+≥ порога. Работает глобально по дню, не ограничен окном из шага 1.
 
 `--min-body` требует `yolov8n-pose.pt` (`.models/detect/`). Pose estimation даёт
 долю видимых keypoints из 17 (COCO). Из-за вида камеры сверху даже хорошие кадры
@@ -569,7 +583,7 @@ motion blur, низкий confidence Модели 1, кропы где дете�
 ```bash
 # Посмотреть что будет удалено без реального удаления:
 ./sh/train/residents/2_filter_residents.sh --dry-run
-./sh/train/residents/2_filter_residents.sh --dry-run --min-body 0.15
+./sh/train/residents/2_filter_residents.sh --dry-run --min-diff 30
 ```
 
 ### Разметка
@@ -668,7 +682,7 @@ thresholds:
 
 models:
   detect:   .models/detect/yolov8n.onnx
-  classify: .models/classify/v1_1.onnx
+  classify: .models/classify/v2_3.onnx
   # identify: .models/identify/v1.onnx
 ```
 
