@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import re
 import sys
 import threading
 import webbrowser
@@ -909,7 +910,18 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
     labels: dict[str, str] = {}
     if labels_path.is_file():
         existing = json.loads(labels_path.read_text(encoding="utf-8"))
-        labels = existing.get("labels", {})
+        labels = existing.get("labels", existing)  # плоский или вложенный формат
+
+    # Нормализуем ключи labels к абсолютным путям кропов.
+    # labels.json может хранить: абсолютный путь, basename, или basename с префиксом scene0042_.
+    # Сопоставляем с реальными файлами в crops по stripped-basename.
+    _re_scene = re.compile(r"^scene\d+_")
+    _stripped_to_crop = {_re_scene.sub("", Path(c).name): c for c in crops}
+    for k, v in list(labels.items()):
+        stripped = _re_scene.sub("", Path(k).name)
+        crop_path = _stripped_to_crop.get(stripped)
+        if crop_path and crop_path not in labels:
+            labels[crop_path] = v
 
     if unlabeled_only:
         crops = [c for c in crops if c not in labels]

@@ -48,10 +48,9 @@ _RE_FRAME = re.compile(
 _RE_PERSONS = re.compile(r"_p\d+of(?P<total>\d+)_", re.IGNORECASE)
 
 
-def _load_labels(src_dir: Path) -> dict[str, str]:
-    """Загружает labels.json из родительского каталога (date_dir).
-    Возвращает словарь {filename: class_label}."""
-    lf = src_dir.parent / "labels.json"
+def _load_labels(date_dir: Path) -> dict[str, str]:
+    """Загружает labels.json из date_dir. Возвращает {filename: class_label}."""
+    lf = date_dir / "labels.json"
     if not lf.exists():
         return {}
     try:
@@ -124,7 +123,14 @@ def collect(
     out_dir.mkdir(parents=True, exist_ok=True)
     seen_names: set[str] = {f.name for f in out_dir.iterdir() if f.is_file()}
 
-    # Проход 1: собираем кандидатов (дедуп по имени + labels.json + фильтр по числу людей)
+    # Кэш labels.json: date_dir → {filename: class}
+    _labels_cache: dict[Path, dict[str, str]] = {}
+    def _get_labels(date_dir: Path) -> dict[str, str]:
+        if date_dir not in _labels_cache:
+            _labels_cache[date_dir] = _load_labels(date_dir)
+        return _labels_cache[date_dir]
+
+    # Проход 1: собираем кандидатов из source-каталогов (дедуп + labels.json + число людей)
     candidates: list[Path] = []
     skipped_persons = 0
     skipped_labels = 0
@@ -132,7 +138,7 @@ def collect(
         if not src_dir.is_dir():
             print(f"  [!] Не найдено: {src_dir}", file=sys.stderr)
             continue
-        labels = _load_labels(src_dir)
+        labels = _get_labels(src_dir.parent)
         for f in sorted(f for f in src_dir.iterdir()
                          if f.is_file() and f.suffix.lower() in ext):
             if f.name in seen_names:
@@ -145,6 +151,33 @@ def collect(
                 skipped_persons += 1
                 continue
             candidates.append(f)
+
+    # Дополнительный скан: «чужие» классы, переразмеченные в collect_classes через labels.json.
+    # Для каждого date_dir, встреченного в sources, сканируем все подкаталоги кроме уже обработанных.
+    src_names_by_parent: dict[Path, set[str]] = {}
+    for s in sources:
+        if s.is_dir():
+            src_names_by_parent.setdefault(s.parent, set()).add(s.name)
+
+    for date_dir, src_names in src_names_by_parent.items():
+        labels = _get_labels(date_dir)
+        if not labels:
+            continue
+        for sibling in sorted(date_dir.iterdir()):
+            if not sibling.is_dir() or sibling.name in src_names:
+                continue
+            for f in sorted(f for f in sibling.iterdir()
+                             if f.is_file() and f.suffix.lower() in ext):
+                if f.name in seen_names:
+                    continue
+                eff_class = labels.get(f.name)
+                if eff_class not in collect_classes:
+                    continue
+                seen_names.add(f.name)
+                if max_persons > 0 and _persons_in_frame(f.stem) > max_persons:
+                    skipped_persons += 1
+                    continue
+                candidates.append(f)
 
     # Проход 2: временна́я дедупликация
     if interval > 0:

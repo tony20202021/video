@@ -43,6 +43,10 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.classes import EXTRA_DATASET_DIRS, GROUP_CLASSES, RESIDENT_CLASS
+
+GUEST_CLASS = "4_guest"
+# Классы, кропы которых подаются на идентификацию
+_IDENTIFY_CLASSES = (RESIDENT_CLASS, GUEST_CLASS)
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
@@ -63,44 +67,84 @@ UNKNOWN_CLASS  = "unknown_resident"
 
 
 
-def _has_resident_crops(run_dir: Path) -> bool:
-    """Проверяет наличие classified/1_resident/ или classified/resident/ в run_dir."""
+def _has_identify_crops(run_dir: Path) -> bool:
+    """Проверяет наличие кропов для идентификации (resident + guest) в run_dir.
+
+    Форматы:
+      1. Старый (camera-run): run_dir/.../classified/<class>/*.jpg
+      2. Новый (inference):   run_dir/<class>/*.jpg
+    """
     try:
-        for pattern in (f"classified/{RESIDENT_CLASS}", "classified/resident"):
-            for d in run_dir.rglob(pattern):
-                if d.is_dir():
-                    return True
+        for cls in _IDENTIFY_CLASSES:
+            for pattern in (f"classified/{cls}", cls):
+                for d in run_dir.rglob(pattern) if "/" in pattern else [run_dir / pattern]:
+                    if d.is_dir() and any(f.suffix.lower() == ".jpg"
+                                          for f in d.iterdir() if f.is_file()):
+                        return True
     except OSError:
         pass
     return False
 
 
-def _find_resident_crops(run_dir: Path) -> list[tuple[Path, Path]]:
-    """Возвращает [(crop_path, rel_cam_dir)] из classified/<RESIDENT_CLASS>/ в 6_2 run.
+# Оставляем старое имя как алиас для совместимости
+_has_resident_crops = _has_identify_crops
 
-    rel_cam_dir — путь до каталога камеры относительно run_dir.
-    Поддерживает устаревший каталог classified/resident/.
+
+def _find_identify_crops(run_dir: Path) -> tuple[list[tuple[Path, Path]], bool]:
+    """Возвращает ([(crop_path, rel_cam_dir)], flat_format).
+
+    flat_format=True  → плоская структура inference (run_dir/<class>/*.jpg)
+    flat_format=False → camera-run структура (run_dir/.../classified/<class>/*.jpg)
     """
     results: list[tuple[Path, Path]] = []
     seen: set[Path] = set()
-    patterns = (f"classified/{RESIDENT_CLASS}", "classified/resident")
+
+    # Старый camera-run формат: classified/<class>/
+    patterns = []
+    for cls in _IDENTIFY_CLASSES:
+        patterns += [f"classified/{cls}"]
+    patterns += ["classified/resident"]  # устаревшее имя
+
     try:
         for pattern in patterns:
-            for resident_dir in sorted(run_dir.rglob(pattern)):
-                if not resident_dir.is_dir() or resident_dir in seen:
+            for cls_dir in sorted(run_dir.rglob(pattern)):
+                if not cls_dir.is_dir() or cls_dir in seen:
                     continue
-                seen.add(resident_dir)
-                cam_dir = resident_dir.parent.parent
+                seen.add(cls_dir)
+                cam_dir = cls_dir.parent.parent
                 try:
                     rel_cam = cam_dir.relative_to(run_dir)
                 except ValueError:
                     continue
-                for crop in sorted(resident_dir.iterdir()):
+                for crop in sorted(cls_dir.iterdir()):
                     if crop.suffix.lower() == ".jpg":
                         results.append((crop, rel_cam))
     except OSError:
         pass
-    return results
+
+    if results:
+        return results, False
+
+    # Новый плоский формат inference: run_dir/<class>/*.jpg
+    try:
+        for cls_name in list(_IDENTIFY_CLASSES) + ["resident"]:
+            cls_dir = run_dir / cls_name
+            if not cls_dir.is_dir() or cls_dir in seen:
+                continue
+            seen.add(cls_dir)
+            for crop in sorted(cls_dir.iterdir()):
+                if crop.is_file() and crop.suffix.lower() == ".jpg":
+                    results.append((crop, Path(".")))
+    except OSError:
+        pass
+
+    return results, True
+
+
+def _find_resident_crops(run_dir: Path) -> list[tuple[Path, Path]]:
+    """Обратная совместимость: возвращает только список кропов без flat-флага."""
+    crops, _ = _find_identify_crops(run_dir)
+    return crops
 
 
 # ─── ML ──────────────────────────────────────────────────────────────────────
@@ -302,14 +346,31 @@ def main() -> int:
     else:
         logger.info(f"  [ML] Идентификатор не загружен — все кропы → {UNKNOWN_CLASS}/")
 
-    out_dir = args.output or (DEFAULT_OUTPUT / f"run_{ts_for_dir()}")
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     if not args.input_dir.is_dir():
         logger.warning(f"[!] Не найдено: {args.input_dir}")
         return 1
     run_pairs = [(args.input_dir, "")]
 
+    # Определяем формат входных данных
+    _, flat_format = _find_identify_crops(args.input_dir)
+
+    # Пути вывода зависят от формата
+    _base_out = args.output or DEFAULT_OUTPUT
+    _run_name = args.input_dir.name   # дата (20260709) или имя run-dir
+    _run_ts   = ts_for_dir()
+    if flat_format:
+        # Новый формат: images/<date>/<person_id>/ + meta/<date>/<run_ts>/
+        images_root = _base_out / "images"
+        meta_dir    = _base_out / "meta" / _run_name / _run_ts
+        out_dir     = meta_dir   # логи, CSV, charts — сюда
+    else:
+        # Старый формат: всё в out_dir/run_<ts>/
+        out_dir     = _base_out / f"run_{_run_ts}"
+        images_root = out_dir
+        meta_dir    = out_dir
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    images_root.mkdir(parents=True, exist_ok=True)
 
     add_file_handler(out_dir / 'run.log')
 
@@ -356,14 +417,16 @@ def main() -> int:
     logger.info(f"ML:        {'PersonIdentifier готов' if ident and ident.ready else 'не загружен (unknown_resident/)'}")
     logger.info(f"Порог M2:  {args.identify_conf}")
     logger.info(f"Вывод:     {out_dir}")
+    logger.info(f"Формат:    {'плоский (inference)' if flat_format else 'camera-run'}")
     logger.info(f"Прогонов:  {len(run_pairs)}")
     for rd, ps in run_pairs:
         prefix = f"{ps}/" if ps else ""
-        resident_crops = _find_resident_crops(rd)
-        logger.info(f"  {prefix}{rd.name}  [{len(resident_crops)} кропов-жителей]")
+        crops, _ = _find_identify_crops(rd)
+        logger.info(f"  {prefix}{rd.name}  [{len(crops)} кропов]")
     logger.info('')
 
     grand_total = 0
+    grand_skipped = 0
     grand_identified = defaultdict(int)
 
     import cv2
@@ -374,28 +437,51 @@ def main() -> int:
         label = f"{_ps}/{run_name}"
         logger.info(f"── {label} ──────────────────────────────────────")
 
-        resident_crops = _find_resident_crops(run_dir)
-        if not resident_crops:
-            logger.info(f"  [!] Нет кропов жителей в {run_dir}")
+        crops, _ = _find_identify_crops(run_dir)
+        if not crops:
+            logger.info(f"  [!] Нет кропов в {run_dir}")
             continue
 
-        logger.info(f"  Кропов жителей: {len(resident_crops)}")
+        logger.info(f"  Кропов: {len(crops)}")
 
-        for crop_path, rel_cam in resident_crops:
+        for crop_path, rel_cam in crops:
+            t0 = time.monotonic()
+
+            if flat_format:
+                # Новый формат: images/<date>/<person_id>/
+                # Проверяем, не идентифицирован ли уже (в любом person_id подкаталоге)
+                date_out = images_root / run_name
+                if date_out.is_dir() and any(
+                    (sub / crop_path.name).exists()
+                    for sub in date_out.iterdir() if sub.is_dir()
+                ):
+                    grand_skipped += 1
+                    continue
+            else:
+                rel_cam_dest = out_dir / _ps / run_name / rel_cam / "classified"
+                if any(
+                    (rel_cam_dest / cls / crop_path.name).exists()
+                    for cls in rel_cam_dest.iterdir() if rel_cam_dest.is_dir() and cls.is_dir()
+                ) if rel_cam_dest.is_dir() else False:
+                    grand_skipped += 1
+                    continue
+
             bgr = cv2.imread(str(crop_path))
             if bgr is None:
                 continue
 
-            t0 = time.monotonic()
             person_id, id_conf, out_class = _identify(
                 ident, bgr, identify_conf=args.identify_conf
             )
             identify_ms = (time.monotonic() - t0) * 1000
             timing_log.append([round(t0 - t_start, 3), round(identify_ms, 1)])
 
-            dest = out_dir / _ps / run_name / rel_cam / "classified" / out_class
+            if flat_format:
+                dest = images_root / run_name / out_class
+            else:
+                dest = images_root / _ps / run_name / rel_cam / "classified" / out_class
             dest.mkdir(parents=True, exist_ok=True)
-            _copy(crop_path, dest / crop_path.name)
+            shutil.copy2(crop_path, dest / crop_path.name)
 
             ts_ep = _crop_ts_epoch(crop_path)
             id_log.append({
@@ -410,14 +496,15 @@ def main() -> int:
             grand_identified[out_class] += 1
             grand_total += 1
 
-        logger.info(f"  → обработано: {len(resident_crops)}")
+        logger.info(f"  → обработано: {len(crops) - grand_skipped}  пропущено (уже есть): {grand_skipped}")
         logger.info('')
 
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
 
     if id_log:
-        csv_path = out_dir / "identifications.csv"
+        csv_path = meta_dir / "identifications.csv"
+        meta_dir.mkdir(parents=True, exist_ok=True)
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=[
                 "mono_s", "ts_epoch", "rel_path", "crop",
@@ -429,16 +516,16 @@ def main() -> int:
     else:
         logger.info("Идентификаций не найдено.")
 
-    _save_cpu_csv(cpu_log, out_dir)
+    _save_cpu_csv(cpu_log, meta_dir)
 
     if timing_log:
-        with open(out_dir / "identify_timing.csv", "w", newline="", encoding="utf-8") as f:
+        with open(meta_dir / "identify_timing.csv", "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["mono_s", "identify_ms"])
             w.writerows(timing_log)
 
-    _save_timeline_chart(id_log, out_dir / "timeline_chart.png")
-    _save_cpu_chart(cpu_log, out_dir / "cpu_chart.png", timing_log or None)
+    _save_timeline_chart(id_log, meta_dir / "timeline_chart.png")
+    _save_cpu_chart(cpu_log, meta_dir / "cpu_chart.png", timing_log or None)
 
     stats = {
         "input_runs":           [f"{ps}/{rd.name}" if ps else str(rd) for rd, ps in run_pairs],
@@ -447,12 +534,11 @@ def main() -> int:
         "ml_active":            ident is not None,
         "duration_sec":         round(time.monotonic() - t_start, 1),
     }
-    (out_dir / "run_stats.json").write_text(
+    (meta_dir / "run_stats.json").write_text(
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-
-    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {out_dir}")
+    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {_base_out}")
     summary = "  ".join(f"{p}: {n}" for p, n in sorted(grand_identified.items()))
     if summary:
         logger.info(f"Итог: {summary}")

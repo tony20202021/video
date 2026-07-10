@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
-# Идентификация жителей из кропов 3_classify_groups (Модель 2)
+# Идентификация жителей и гостей из кропов 3_classify_groups (Модель 2) — watch-режим.
+#
+# Следит за .data/groups/v2/inference/images/<date>/{1_resident,4_guest}/,
+# запускает идентификацию при появлении новых кропов.
+# Пропуск уже обработанных файлов — на стороне Python (skip-if-exists).
+#
+# Структура вывода:
+#   .data/residents/v1/inference/
+#     images/<date>/<person_id>/   — идентифицированные кропы
+#     meta/<date>/<run_ts>/        — CSV, charts, run.log
 #
 # Usage:
 #   ./sh/pipeline/4_identify_residents.sh
+#   ./sh/pipeline/4_identify_residents.sh --poll-sec 30
+#   ./sh/pipeline/4_identify_residents.sh --once
 #   ./sh/pipeline/4_identify_residents.sh --identify-conf 0.75
-#   ./sh/pipeline/4_identify_residents.sh --model .models/identify/v1.onnx
+#   ./sh/pipeline/4_identify_residents.sh --model .models/identify/v2.onnx
 
 set -euo pipefail
 
@@ -23,37 +34,83 @@ _ef() {
     echo "${val:-$default}"
 }
 
+INFERENCE_IMAGES="$REPO/.data/groups/v2/inference/images"
+OUT_DIR="$REPO/.data/residents/v1/inference"
 IDENTIFY_CONF="$(_ef IDENTIFY_CONF 0.70)"
+POLL_SEC=60
+ONCE=0
+EXTRA_ARGS=()
 
-S3DIR="$REPO/.output/pipeline/3_classify_groups"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --poll-sec)      POLL_SEC="$2"; shift 2 ;;
+        --once)          ONCE=1; shift ;;
+        --identify-conf) IDENTIFY_CONF="$2"; shift 2 ;;
+        *) EXTRA_ARGS+=("$1"); shift ;;
+    esac
+done
 
-# Список входных каталогов
-INPUT_DIRS=(
-    "$S3DIR"
-    # "$S3DIR/run_20260628_202843_msk"
-)
+_ts() { date '+%H:%M:%S'; }
+SCRIPT_NAME="$(basename "$0" .sh)"
+
+MODEL_TAG=$(grep -E "^\s*identify\s*:" "$REPO/config.yaml" 2>/dev/null \
+    | grep -v '#' \
+    | sed 's|.*identify\s*:\s*||' | xargs basename 2>/dev/null | sed 's|\.onnx$||' || echo "?")
 
 echo "=== 4_identify_residents ==="
-echo "Repo:   $REPO"
-echo "Script: $SCRIPT"
-echo "identify_conf=$IDENTIFY_CONF"
-echo "Input:"
-for d in "${INPUT_DIRS[@]}"; do echo "  $d"; done
+echo "  Input:          $INFERENCE_IMAGES"
+echo "  Output:         $OUT_DIR"
+echo "  identify_conf:  $IDENTIFY_CONF"
+echo "  модель:         $MODEL_TAG"
+echo "  poll: ${POLL_SEC}s"
+echo "  (пропуск уже обработанных — на стороне Python)"
+echo ""
+echo "[identify] Ctrl+C для остановки"
 echo ""
 
-missing=0
-for d in "${INPUT_DIRS[@]}"; do
-    if [[ ! -e "$d" ]]; then
-        echo "[!] Not found: $d" >&2
-        missing=1
-    fi
-done
-[[ "$missing" -eq 1 ]] && exit 1
+_count_crops() {
+    local date_dir="$1"
+    local n=0
+    for cls in 1_resident 4_guest; do
+        local d="$date_dir/$cls"
+        if [[ -d "$d" ]]; then
+            n=$(( n + $(find "$d" -name "*.jpg" -type f 2>/dev/null | wc -l) ))
+        fi
+    done
+    echo "$n"
+}
 
-for input_dir in "${INPUT_DIRS[@]}"; do
-    echo "--- $(basename "$input_dir") ---"
-    "$PYTHON" "$SCRIPT" "$input_dir" \
-        --identify-conf "$IDENTIFY_CONF" \
-        "$@"
-    echo ""
+while true; do
+    _any=0
+
+    mapfile -t date_dirs < <(
+        find "$INFERENCE_IMAGES" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort
+    )
+
+    for date_dir in "${date_dirs[@]+"${date_dirs[@]}"}"; do
+        n=$(_count_crops "$date_dir")
+        [[ "$n" -eq 0 ]] && continue
+
+        _any=1
+        date=$(basename "$date_dir")
+        echo "$(_ts)  INFO      $date: $n кропов — запуск идентификации…"
+
+        "$PYTHON" "$SCRIPT" "$date_dir" \
+            --identify-conf "$IDENTIFY_CONF" \
+            --output        "$OUT_DIR" \
+            "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
+            || echo "$(_ts)  WARN      $date: идентификация завершилась с ошибкой" >&2
+
+        echo ""
+    done
+
+    if [[ "$_any" -eq 0 ]]; then
+        echo "$(_ts)  INFO      ($SCRIPT_NAME) Кропов нет — ожидание ${POLL_SEC}s…"
+    fi
+
+    if [[ "$ONCE" -eq 1 ]]; then
+        break
+    fi
+
+    sleep "$POLL_SEC"
 done

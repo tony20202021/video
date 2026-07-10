@@ -13,7 +13,7 @@ thresholds:
 models:
   detect:   .models/detect/yolov8n.onnx
   classify: .models/classify/v2_3.onnx
-  # identify: .models/identify/v1.onnx   # модель не обучена
+  identify: .models/identify/v2.onnx
 
 temporal:
   detection_window_size: 5   # M — размер скользящего окна

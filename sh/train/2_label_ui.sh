@@ -28,9 +28,9 @@ fi
 # LABELS="$REPO/.data/groups/v1/inference/images/20260707/labels.json"
 # DATASET="$REPO/.data/groups/v1/dataset"
 
-# residents
-INPUT="$REPO/.data/residents/v0/new"
-LABELS="$REPO/.data/residents/v0/new/labels.json"
+# residents v1
+INPUT="$REPO/.data/residents/v1/scene_pool/representatives"
+LABELS="$REPO/.data/residents/v1/scene_pool/labels.json"
 DATASET="$REPO/.data/residents/v1/dataset"
 
 PORT="${LABEL_UI_PORT:-8750}"

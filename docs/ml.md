@@ -367,6 +367,94 @@ done
 
 ---
 
+## Полу-автоматическая разметка датасета жителей
+
+### Проблема diff-фильтра
+
+`filter_residents.py --min-diff 40` убирает похожие соседние кадры — это нужно для датасета,
+но делает intra-person дифы (~49 медиана) неотличимыми от inter-person дифов (~61 медиана).
+Поэтому прямая полу-авторазметка "по порогу дифа" не работает.
+
+### Решение: сцены
+
+Без diff-фильтра intra-person дифы 5–15, inter-person 30–80 — разделение чистое.
+Сцена — непрерывный поток от одного человека (граница = большой разрыв по времени или diff).
+
+### Пайплайн (4 шага)
+
+**Шаг 1 — Собрать без diff-фильтра, разбить на сцены:**
+```bash
+./sh/train/residents/4_collect_scenes.sh
+# Опции:
+#   --scene-gap 120   # разрыв >120s → новая сцена
+#   --scene-diff 50   # pixel-diff >50 → новая сцена (только по времени: --scene-diff 0)
+#   --min-blur 40     # убираем совсем размытые
+#   --dry-run         # только статистика, без копирования
+
+# Выход: .data/residents/v0/scene_pool/
+#   *.jpg               — все кандидаты (без diff-фильтра)
+#   scenes.json         — разбивка на сцены + поля representative для каждой
+#   representatives/    — по 1 резкому кадру на сцену → для ручной разметки
+```
+
+**Шаг 2 — Разметить representatives/ (по 1 кадру на сцену):**
+```bash
+./sh/train/2_label_ui.sh --input .data/residents/v0/scene_pool/representatives
+# Размечаем каждый кадр → person_id (labels.json обновляется автоматически)
+# Кадры из representatives/ имеют вид: scene0042_cam01_9_d_...conf0.85.jpg
+# Разместить метку на representative → она распространится на всю сцену в шаге 3
+```
+
+**Шаг 3 — Авторазметка внутри сцен:**
+```bash
+./sh/train/residents/5_propagate_scenes.sh
+# Опции:
+#   --intra-diff 25   # опциональная проверка: кадры с diff>25 от представителя → пропустить
+#   --dry-run         # только статистика
+
+# Читает: scene_pool/scenes.json + scene_pool/labels.json
+# Пишет: дополняет scene_pool/labels.json для всех кадров сцены
+# Конфликт (2 метки в одной сцене) → сцена пропускается, выводится предупреждение
+```
+
+При необходимости шаги 2–3 повторяются для граничных / проблемных сцен.
+
+**Шаг 4 — Финальный diff-фильтр для разнообразия в датасете:**
+```bash
+./sh/train/residents/2_filter_residents.sh \
+    --src .data/residents/v0/scene_pool \
+    --out .data/residents/v1/dataset \
+    --min-diff 40
+```
+
+### Структура выхода
+
+```
+.data/residents/
+  v0/
+    scene_pool/
+      *.jpg                — кандидаты (без diff-фильтра, ~все кадры)
+      scenes.json          — сцены: scene_id, cam, date, frames[], representative
+      representatives/     — scene0001_<name>.jpg  ← размечать только эти
+      labels.json          — ручные + авто-метки (после шагов 2–3)
+  v1/
+    dataset/
+      person_01/           — после финального фильтра, готово для обучения
+      person_02/
+      ...
+```
+
+### Конфликты и граничные случаи
+
+- **Несколько person_id в одной сцене** — `propagate_scenes.py` выводит предупреждение
+  и пропускает сцену. Решение: уменьшить `--scene-diff` в шаге 1 и пересобрать.
+- **Смена одежды в длинной сцене** — если diff не изменился, авторазметка правильная
+  (одна сцена = один человек). Проверить визуально gallery в label_ui.
+- **Несколько человек подряд без разрыва** — сцена может быть "загрязнена".
+  `--intra-diff N` в шаге 3 отсечёт кадры с большим отклонением от representative.
+
+---
+
 ## Скрипты обучения
 
 **Модель 1 (классификация групп):**
@@ -386,6 +474,8 @@ done
 | `sh/train/residents/1_collect_residents.sh` | Сбор кропов из датасета и инференса (1_resident + 4_guest); `--interval 1 --conf-delta 0.1` |
 | `sh/train/residents/2_filter_residents.sh` | Фильтрация: conf, blur, >1 чел., покрытие, pixel-diff (`--min-diff 20`) |
 | `sh/train/residents/3_analyze_pool.sh` | Анализ пула до дедупликации: графики frames/window, conf, pixel-diff |
+| `sh/train/residents/4_collect_scenes.sh` | Сбор без diff-фильтра + разбивка на сцены (шаг 1 полу-авторазметки) |
+| `sh/train/residents/5_propagate_scenes.sh` | Авторазметка кадров внутри сцен по 1 ручной метке (шаг 3 полу-авторазметки) |
 | `sh/train/residents/5_train_residents.sh` | Обучение Модели 2 |
 
 **Общее:**
