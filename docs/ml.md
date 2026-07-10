@@ -380,78 +380,104 @@ done
 Без diff-фильтра intra-person дифы 5–15, inter-person 30–80 — разделение чистое.
 Сцена — непрерывный поток от одного человека (граница = большой разрыв по времени или diff).
 
+### Версионирование
+
+Рабочий каталог задаётся через `.env`:
+```dotenv
+RESIDENTS_VER=v1   # → .data/residents/v1/scene_pool/
+```
+
+Скрипты `1_b_1_collect_scenes.sh` и `1_b_2_propagate_scenes.sh` читают эту переменную автоматически.
+
 ### Пайплайн (4 шага)
 
-**Шаг 1 — Собрать без diff-фильтра, разбить на сцены:**
+**Шаг 1_b_1 — Собрать без diff-фильтра, разбить на сцены:**
 ```bash
-./sh/train/residents/4_collect_scenes.sh
+./sh/train/residents/1_b_1_collect_scenes.sh
 # Опции:
 #   --scene-gap 120   # разрыв >120s → новая сцена
 #   --scene-diff 50   # pixel-diff >50 → новая сцена (только по времени: --scene-diff 0)
 #   --min-blur 40     # убираем совсем размытые
 #   --dry-run         # только статистика, без копирования
 
-# Выход: .data/residents/v0/scene_pool/
+# Выход: .data/residents/$RESIDENTS_VER/scene_pool/
 #   *.jpg               — все кандидаты (без diff-фильтра)
-#   scenes.json         — разбивка на сцены + поля representative для каждой
+#   scenes.json         — сцены: scene_id, cam, date, frames[], representative
 #   representatives/    — по 1 резкому кадру на сцену → для ручной разметки
 ```
 
+Входные каталоги прописаны явно в `SOURCES=(...)` внутри скрипта.
+Для добавления новой даты — раскомментировать строку или добавить `--src`.
+
+**Перенос существующих меток (опционально, перед шагом 2):**
+
+Если есть уже размеченный пул (например, `.data/residents/v0/new_labeld/labels.json`),
+метки можно перенести в scene_pool двумя способами:
+1. По имени файла — прямое совпадение
+2. По (cam, date, sod) — файл из старого пула попадает во временной диапазон сцены → метка присваивается representative сцены
+
+После переноса запустить `1_b_2_propagate_scenes.sh` для распространения.
+
 **Шаг 2 — Разметить representatives/ (по 1 кадру на сцену):**
 ```bash
-./sh/train/2_label_ui.sh --input .data/residents/v0/scene_pool/representatives
-# Размечаем каждый кадр → person_id (labels.json обновляется автоматически)
+./sh/train/2_label_ui.sh \
+    --input   .data/residents/v1/scene_pool/representatives \
+    --labels  .data/residents/v1/scene_pool/labels.json \
+    --dataset .data/residents/v1/dataset \
+    --unlabeled-only
 # Кадры из representatives/ имеют вид: scene0042_cam01_9_d_...conf0.85.jpg
-# Разместить метку на representative → она распространится на всю сцену в шаге 3
+# Кнопки берутся из подпапок --dataset (реальные классы: 141_resident_man_1, ...)
+# labels.json — в корне scene_pool, НЕ в representatives/
 ```
 
-**Шаг 3 — Авторазметка внутри сцен:**
+**Шаг 1_b_2 — Авторазметка внутри сцен:**
 ```bash
-./sh/train/residents/5_propagate_scenes.sh
+./sh/train/residents/1_b_2_propagate_scenes.sh
 # Опции:
-#   --intra-diff 25   # опциональная проверка: кадры с diff>25 от представителя → пропустить
+#   --intra-diff 25   # кадры с diff>25 от representative → не распространять
 #   --dry-run         # только статистика
 
 # Читает: scene_pool/scenes.json + scene_pool/labels.json
 # Пишет: дополняет scene_pool/labels.json для всех кадров сцены
 # Конфликт (2 метки в одной сцене) → сцена пропускается, выводится предупреждение
+# Имена с префиксом scene0042_ (из representatives/) автоматически нормализуются
 ```
 
-При необходимости шаги 2–3 повторяются для граничных / проблемных сцен.
+При необходимости шаги 2 и 1_b_2 повторяются для граничных / проблемных сцен.
 
-**Шаг 4 — Финальный diff-фильтр для разнообразия в датасете:**
+**Шаг 1_b_3 — Финальный diff-фильтр для разнообразия в датасете:**
 ```bash
-./sh/train/residents/2_filter_residents.sh \
-    --src .data/residents/v0/scene_pool \
-    --out .data/residents/v1/dataset \
-    --min-diff 40
+./sh/train/residents/1_b_3_filter_scenes.sh
+# Дефолты: --min-diff 40, путь из RESIDENTS_VER
+# Опции:
+#   --min-diff 30     # другой порог
+#   --dry-run
 ```
 
 ### Структура выхода
 
 ```
 .data/residents/
-  v0/
+  v1/
     scene_pool/
-      *.jpg                — кандидаты (без diff-фильтра, ~все кадры)
+      *.jpg                — кандидаты (без diff-фильтра, все кадры)
       scenes.json          — сцены: scene_id, cam, date, frames[], representative
       representatives/     — scene0001_<name>.jpg  ← размечать только эти
-      labels.json          — ручные + авто-метки (после шагов 2–3)
-  v1/
+      labels.json          — {"version":1, "labels":{...}}  ручные + авто-метки
     dataset/
-      person_01/           — после финального фильтра, готово для обучения
-      person_02/
+      141_resident_man_1/  — после финального фильтра, готово для обучения
+      141_resident_woman_1/
       ...
 ```
 
 ### Конфликты и граничные случаи
 
 - **Несколько person_id в одной сцене** — `propagate_scenes.py` выводит предупреждение
-  и пропускает сцену. Решение: уменьшить `--scene-diff` в шаге 1 и пересобрать.
+  и пропускает сцену. Решение: уменьшить `--scene-diff` в шаге 1_b_1 и пересобрать.
 - **Смена одежды в длинной сцене** — если diff не изменился, авторазметка правильная
   (одна сцена = один человек). Проверить визуально gallery в label_ui.
 - **Несколько человек подряд без разрыва** — сцена может быть "загрязнена".
-  `--intra-diff N` в шаге 3 отсечёт кадры с большим отклонением от representative.
+  `--intra-diff N` в шаге 1_b_2 отсечёт кадры с большим отклонением от representative.
 
 ---
 
@@ -467,16 +493,27 @@ done
 | `sh/train/groups/1_dataset_groups.sh` | Ручное управление датасетом: `build / apply / check / add / status` |
 | `sh/train/groups/4_train_groups.sh` | Обучение Модели 1 (датасет из v1/dataset/) |
 
-**Модель 2 (идентификация жителей):**
+**Модель 2 (идентификация жителей) — Путь A (прямой сбор):**
 
 | Скрипт | Назначение |
 |--------|-----------|
-| `sh/train/residents/1_collect_residents.sh` | Сбор кропов из датасета и инференса (1_resident + 4_guest); `--interval 1 --conf-delta 0.1` |
-| `sh/train/residents/2_filter_residents.sh` | Фильтрация: conf, blur, >1 чел., покрытие, pixel-diff (`--min-diff 20`) |
-| `sh/train/residents/3_analyze_pool.sh` | Анализ пула до дедупликации: графики frames/window, conf, pixel-diff |
-| `sh/train/residents/4_collect_scenes.sh` | Сбор без diff-фильтра + разбивка на сцены (шаг 1 полу-авторазметки) |
-| `sh/train/residents/5_propagate_scenes.sh` | Авторазметка кадров внутри сцен по 1 ручной метке (шаг 3 полу-авторазметки) |
-| `sh/train/residents/5_train_residents.sh` | Обучение Модели 2 |
+| `sh/train/residents/1_a_1_collect_residents.sh` | Сбор сырого пула из датасета и инференса (1_resident + 4_guest) |
+| `sh/train/residents/1_a_2_filter_residents.sh` | Фильтрация пула: conf, blur, >1 чел., покрытие, pixel-diff (`--min-diff 20`) |
+
+**Модель 2 (идентификация жителей) — Путь B (полу-авторазметка через сцены):**
+
+| Скрипт | Назначение |
+|--------|-----------|
+| `sh/train/residents/1_b_1_collect_scenes.sh` | Сбор без diff-фильтра + разбивка на сцены; входные каталоги прописаны явно в `SOURCES` |
+| `sh/train/residents/1_b_2_propagate_scenes.sh` | Авторазметка кадров внутри сцен по 1 ручной метке; нормализует префикс `scene0042_` |
+| `sh/train/residents/1_b_3_filter_scenes.sh` | Финальный diff-фильтр (`--min-diff 40`), путь из `RESIDENTS_VER` в `.env` |
+
+**Модель 2 — общая цепочка:**
+
+| Скрипт | Назначение |
+|--------|-----------|
+| `sh/train/residents/2_analyze_pool.sh` | Анализ пула: графики frames/window, conf, pixel-diff |
+| `sh/train/residents/3_train_residents.sh` | Обучение Модели 2 → `.models/identify/v<N>.onnx` |
 
 **Общее:**
 
@@ -489,10 +526,21 @@ done
 ## Веб-разметчик (2_label_ui)
 
 ```bash
+# Группы (Модель 1)
 ./sh/train/2_label_ui.sh
 ./sh/train/2_label_ui.sh --input .output/pipeline/2_yolo_boxes_files/run_XXX
 ./sh/train/2_label_ui.sh --port 8789   # переопределяет LABEL_UI_PORT
 ./sh/train/2_label_ui.sh --probs       # показывать вероятности из classifications.csv
+
+# Жители — Путь B (сцены, representatives/)
+./sh/train/2_label_ui.sh \
+    --input   .data/residents/v1/scene_pool/representatives \
+    --labels  .data/residents/v1/scene_pool/labels.json \
+    --dataset .data/residents/v1/dataset \
+    --unlabeled-only
+# Кнопки классов берутся из подпапок --dataset (141_resident_man_1, ...)
+# labels.json поддерживает формат {"version":1,"labels":{...}} и плоский {name:class}
+# Имена файлов вида scene0042_cam_01_... нормализуются — уже размеченные не показываются
 ```
 
 **Порт:** `LABEL_UI_PORT` в `.env` (дефолт — `8750`; на публичном сервере задайте `8750` или другой из диапазона `87**`, напр. `8789`).
