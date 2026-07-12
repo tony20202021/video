@@ -446,7 +446,7 @@ def main() -> int:
     run_params = {
         "script":        "6_2_classify_groups_files",
         "inputs":        [str(args.input_dir)],
-        "config":        str(args.config),
+        "classify_model": os.environ.get("CLASSIFY_MODEL", ""),
         "ml_active":     clf is not None,
         "classify_conf": args.classify_conf,
         "cpu_interval":  args.cpu_interval,

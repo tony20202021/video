@@ -119,10 +119,10 @@ POST /models/{model_type}/activate
 
 | Сервис | Скрипт | Описание |
 |--------|--------|----------|
-| `video-transfer` | `sh/transfer/1_start_server.sh` | Приём файлов с Windows |
-| `video-yolo` | `sh/pipeline/2_yolo_boxes_files.sh` | YOLO детекция кропов |
-| `video-classify` | `sh/pipeline/3_classify_groups.sh` | Классификация групп (Модель 1) |
-| `video-identify` | `sh/pipeline/4_identify_residents.sh` | Идентификация жителей (Модель 2) |
+| `video-transfer` | `sh/transfer/1_start_server.sh` | Приём файлов с Windows (HTTP :8765) |
+| `video-yolo` | `sh/pipeline/2_yolo_boxes_files.sh` | YOLO детекция людей → кропы |
+| `video-classify` | `sh/pipeline/3_classify_groups.sh` | Классификация групп (Модель 1): 1_resident / 2_delivery / 3_utilities / 4_guest / uncertain |
+| `video-identify` | `sh/pipeline/4_identify_residents.sh` | Идентификация жителей (Модель 2): вход — 1_resident + 4_guest из classify |
 
 Опциональные (только во время обучения, `--with-data`):
 
@@ -131,6 +131,31 @@ POST /models/{model_type}/activate
 | `video-data-check` | `sh/train/groups/1_1_dataset_groups_check.sh` | Дедупликация кропов с датасетом |
 | `video-data-dedup` | `sh/train/groups/1_2_dataset_groups_check_new.sh` | Дедупликация внутри new/ |
 | `video-data-labels` | `sh/train/groups/1_3_dataset_groups_inference_labels.sh` | Авто-labels из инференса |
+
+Потоки данных:
+
+```
+Windows-клиент
+    │  HTTP POST → :8765
+    ▼
+video-transfer  →  .output/transfer/diff/
+                   .output/transfer/service/
+    ▼
+video-yolo      →  .output/pipeline/2_yolo_boxes_files/images/
+                   (исходники удаляются, poll 60s)
+    ▼
+video-classify  →  .data/groups/v3/inference/images/{date}/
+                   1_resident/ 2_delivery/ 3_utilities/ 4_guest/ uncertain/
+                   (poll 60s)
+    ▼
+video-identify  вход: 1_resident/ + 4_guest/
+             →  .data/residents/v1/inference/images/{date}/
+                {person_id}/  unknown_resident/
+                identifications.csv  labels.json
+                (poll 60s)
+```
+
+Версии каталогов (`v3`, `v1`) берутся из `.env`: `GROUPS_VER`, `RESIDENTS_VER`.
 
 Логи через journald:
 ```bash

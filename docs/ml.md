@@ -97,11 +97,11 @@ LEGACY_CLASS_MIGRATIONS  # resident → 1_resident, courier → unknown, …
 ┌─────────────────────────────────────┐
 │  Модель 1 — MobileNetV3-Small       │
 │  → 1_resident / 2_delivery /        │
-│    3_utilities                      │
+│    3_utilities / 4_guest            │
 │  conf < 0.65 → uncertain            │
 └───────────────┬─────────────────────┘
                 │
-        group == "1_resident"?
+   group == "1_resident" или "4_guest"?
                 │ да
                 ▼
 ┌─────────────────────────────────────┐
@@ -113,7 +113,7 @@ LEGACY_CLASS_MIGRATIONS  # resident → 1_resident, courier → unknown, …
                 │
           conf ≥ 0.70?
           ├─ да → person_id (авто-метка)
-          └─ нет → очередь на ручную разметку
+          └─ нет → labels.json с "" (очередь на ручную разметку в label_ui)
 ```
 
 ---
@@ -710,6 +710,23 @@ transforms.RandomErasing(p=0.3)            # частичное перекрыт
 
 Источники кропов: `1_resident` + `4_guest` из датасета групп и инференса.
 Гости включены — они тоже ходят в конкретные квартиры и идентифицируемы.
+
+### Inference output (4_identify_residents.py)
+
+```
+.data/residents/v1/inference/
+  images/
+    20260712/
+      141_resident_man_1/   ← опознан с conf ≥ IDENTIFY_CONF
+      unknown_resident/     ← conf < IDENTIFY_CONF
+      identifications.csv   ← все кропы: person_id, id_conf, probs по классам
+      labels.json           ← для label_ui: person_id → label
+                               опознанные: "141_resident_man_1"
+                               unknown_resident: "" (пустая строка = нужна ручная разметка)
+```
+
+Скрипт принимает на вход `1_resident` **и** `4_guest` из classify-output: гости прогоняются
+через Модель 2, чтобы поймать случаи когда Модель 1 ошиблась.
 
 ### Сбор и фильтрация кропов
 
