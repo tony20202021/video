@@ -28,16 +28,13 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 import logging
 
-from common.utils.access import is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
+from common.utils.access import is_ip_allowed, log_ip_denied, parse_allowed_ips
 from common.utils.time_msk import MSK, ts_iso
 
 logger = logging.getLogger(__name__)
 
-_SERVER_ENV = load_env_file(REPO_ROOT / ".env")
-API_KEY: str = os.environ.get("TRANSFER_API_KEY") or _SERVER_ENV.get("TRANSFER_API_KEY", "")
-ALLOWED_IPS = parse_allowed_ips(
-    os.environ.get("ALLOWED_IPS", _SERVER_ENV.get("ALLOWED_IPS", ""))
-)
+API_KEY: str = os.environ.get("TRANSFER_API_KEY", "")
+ALLOWED_IPS = parse_allowed_ips(os.environ.get("ALLOWED_IPS", ""))
 OUTPUT_DIR: Path = REPO_ROOT / ".output" / "transfer"
 
 app = FastAPI(title="Transfer Server", version="1.0")
@@ -313,8 +310,8 @@ def main() -> None:
     import uvicorn
 
     ap = argparse.ArgumentParser(description="Transfer server")
-    ap.add_argument("--host",   default=_SERVER_ENV.get("TRANSFER_HOST", "0.0.0.0"))
-    ap.add_argument("--port",   type=int, default=int(_SERVER_ENV.get("TRANSFER_PORT", "8765")))
+    ap.add_argument("--host",   default=os.environ.get("TRANSFER_HOST", "0.0.0.0"))
+    ap.add_argument("--port",   type=int, default=int(os.environ.get("TRANSFER_PORT", "8765")))
     ap.add_argument("--output", type=Path, default=None,
                     help="Корень для распаковки (default: .output/pipeline)")
     args = ap.parse_args()

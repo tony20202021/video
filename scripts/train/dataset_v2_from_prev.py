@@ -42,8 +42,6 @@ from common.utils.classes import GROUP_CLASSES
 logger = logging.getLogger(__name__)
 
 MSK          = timezone(timedelta(hours=3))
-DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
-
 _SOURCES_FIELDS = [
     "timestamp", "strategy", "date", "filename",
     "src_path", "dst_path", "true_class", "pred_class",
@@ -63,18 +61,10 @@ def _ef_float(key: str, default: float) -> float:
         return default
 
 
-def _load_classifier(config_path: Path):
-    if not config_path.is_file():
-        return None
-    try:
-        import yaml
-        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning("Ошибка чтения %s: %s", config_path, e)
-        return None
-    classify_path = cfg.get("models", {}).get("classify")
+def _load_classifier():
+    classify_path = os.environ.get("CLASSIFY_MODEL", "").strip()
     if not classify_path:
-        logger.warning("config.yaml: нет models.classify")
+        logger.warning("CLASSIFY_MODEL не задан в .env")
         return None
     try:
         from ml.classify import GroupClassifier
@@ -112,7 +102,6 @@ def main() -> int:
                         help="Предыдущий датасет (напр. .data/groups/v1/dataset)")
     parser.add_argument("--output", "-o", type=Path, required=True,
                         help="Выходной каталог нового датасета")
-    parser.add_argument("--config",       type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--conf-high",    type=float,
                         default=_ef_float("CLASSIFY_CONF_HIGH", 0.85))
     parser.add_argument("--max-per-class", type=int, default=None,
@@ -130,7 +119,7 @@ def main() -> int:
 
     strategies = {int(s.strip()) for s in args.strategies.split(",") if s.strip()}
 
-    clf = _load_classifier(args.config)
+    clf = _load_classifier()
     if clf is None or not clf.ready:
         logger.error("GroupClassifier не загружен — невозможно запустить инференс.")
         return 1

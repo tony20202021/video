@@ -183,6 +183,23 @@ def _compute_eval_metrics(y_true: list[int], y_pred: list[int]) -> dict:
     }
 
 
+def _export_onnx(model, path: Path, device) -> None:
+    """ONNX export без изменения режима модели."""
+    import torch
+    was_training = model.training
+    model.eval()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dummy = torch.zeros(1, 3, 224, 224, device=device)
+    with torch.no_grad():
+        torch.onnx.export(
+            model, dummy, str(path),
+            input_names=["input"], output_names=["output"],
+            opset_version=18, dynamo=False,
+        )
+    if was_training:
+        model.train()
+
+
 def train(
     data_path: Path,
     *,
@@ -212,10 +229,12 @@ def train(
     except ValueError:
         dataset_path_rel = str(data_path)
     model_tag = next_classify_model_tag(dataset_version)
+    onnx_path = classify_model_path(model_tag)
+    progress_path = onnx_path.with_name(f"{model_tag}_progress.json")
     if dataset_version:
-        print(f"Датасет: {dataset_version}  →  модель: {model_tag}")
+        print(f"Датасет: {dataset_version}  →  модель: {model_tag}", flush=True)
     else:
-        print(f"Датасет: (без версии)  →  модель: {model_tag}")
+        print(f"Датасет: (без версии)  →  модель: {model_tag}", flush=True)
 
     valid = [
         lb for lb in labels
@@ -226,12 +245,12 @@ def train(
         print("Нет валидных изображений.", file=sys.stderr)
         return {}
 
-    print(f"Изображений: {len(valid)}")
+    print(f"Изображений: {len(valid)}", flush=True)
     class_counts = {}
     for lb in valid:
         class_counts[lb["class"]] = class_counts.get(lb["class"], 0) + 1
     for cls, cnt in sorted(class_counts.items()):
-        print(f"  {cls}: {cnt}")
+        print(f"  {cls}: {cnt}", flush=True)
 
     counts_arr = np.array([class_counts.get(c, 0) for c in CLASSES], dtype=np.float32)
     total = counts_arr.sum()
@@ -288,7 +307,7 @@ def train(
         w_per_class = total / (NUM_CLASSES * np.where(counts_arr > 0, counts_arr, 1))
         sample_weights = [float(w_per_class[CLASS_TO_IDX[lb["class"]]]) for lb in train_items]
         sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_items), replacement=True)
-        print(f"WeightedRandomSampler включён")
+        print(f"WeightedRandomSampler включён", flush=True)
         train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler)
     else:
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -298,7 +317,7 @@ def train(
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Устройство: {device}")
+    print(f"Устройство: {device}", flush=True)
 
     model = _build_model(NUM_CLASSES, pretrained=True)
     if model is None:
@@ -315,7 +334,7 @@ def train(
     if class_weights:
         w = torch.tensor(total / (NUM_CLASSES * np.where(counts_arr > 0, counts_arr, 1)),
                          dtype=torch.float32, device=device)
-        print(f"class_weights: { {c: round(float(w[i]), 2) for i, c in enumerate(CLASSES)} }")
+        print(f"class_weights: { {c: round(float(w[i]), 2) for i, c in enumerate(CLASSES)} }", flush=True)
         criterion = nn.CrossEntropyLoss(weight=w)
     else:
         criterion = nn.CrossEntropyLoss()
@@ -329,7 +348,7 @@ def train(
             for param in model.parameters():
                 param.requires_grad = True
             optimizer = optim.Adam(model.parameters(), lr=lr * 0.1)
-            print(f"  epoch {epoch}: разморозка всех весов")
+            print(f"  epoch {epoch}: разморозка всех весов", flush=True)
 
         model.train()
         train_loss, train_correct, train_total = 0.0, 0, 0
@@ -358,48 +377,49 @@ def train(
         scheduler.step()
 
         history.append({"epoch": epoch, "train_acc": round(train_acc, 4), "val_acc": round(val_acc, 4)})
-        print(f"  epoch {epoch:3d}/{epochs}  train_acc={train_acc:.3f}  val_acc={val_acc:.3f}")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save(model.state_dict(), output_dir / "best.pt")
+            _export_onnx(model, onnx_path, device)
+            print(f"  epoch {epoch:3d}/{epochs}  train_acc={train_acc:.3f}  val_acc={val_acc:.3f}  ← best → {onnx_path.name}", flush=True)
+        else:
+            print(f"  epoch {epoch:3d}/{epochs}  train_acc={train_acc:.3f}  val_acc={val_acc:.3f}", flush=True)
 
-    # Загружаем лучшие веса
+        # progress.json после каждой эпохи
+        progress_path.write_text(json.dumps({
+            "model_tag": model_tag,
+            "epoch": epoch,
+            "epochs": epochs,
+            "best_val_acc": round(best_val_acc, 4),
+            "history": history,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Загружаем лучшие веса и делаем финальный экспорт
     model.load_state_dict(torch.load(output_dir / "best.pt", map_location=device))
     model.eval()
-
-    # Экспорт в ONNX
-    models_dir().mkdir(parents=True, exist_ok=True)
-    onnx_path = classify_model_path(model_tag)
-
-    dummy = torch.zeros(1, 3, 224, 224, device=device)
-    torch.onnx.export(
-        model, dummy, str(onnx_path),
-        input_names=["input"], output_names=["output"],
-        opset_version=18,
-        dynamo=False,
-    )
+    _export_onnx(model, onnx_path, device)
 
     # Сохраняем backbone для инициализации Модели 2 (5_train_residents.py)
     backbone_path = models_dir() / "backbone.pt"
     backbone_state = {k: v for k, v in model.state_dict().items()
                       if k.startswith("features.")}
     torch.save(backbone_state, backbone_path)
-    print(f"Backbone (для Модели 2): {backbone_path}")
+    print(f"Backbone (для Модели 2): {backbone_path}", flush=True)
 
     (output_dir / "best.pt").unlink(missing_ok=True)
 
     # Полный инференс по датасету после обучения
-    print("\nИнференс по датасету…")
+    print("\nИнференс по датасету…", flush=True)
     y_true_full, y_pred_full = _eval_dataset(model, valid, images_dir, device, batch_size, _val_tf)
     y_true_val,  y_pred_val  = _eval_dataset(model, val_items, images_dir, device, batch_size, _val_tf)
     eval_full = _compute_eval_metrics(y_true_full, y_pred_full)
     eval_val  = _compute_eval_metrics(y_true_val,  y_pred_val)
-    print(f"  full:  accuracy={eval_full['accuracy']:.3f}  macro_f1={eval_full['macro_f1']:.3f}")
-    print(f"  val:   accuracy={eval_val['accuracy']:.3f}   macro_f1={eval_val['macro_f1']:.3f}")
+    print(f"  full:  accuracy={eval_full['accuracy']:.3f}  macro_f1={eval_full['macro_f1']:.3f}", flush=True)
+    print(f"  val:   accuracy={eval_val['accuracy']:.3f}   macro_f1={eval_val['macro_f1']:.3f}", flush=True)
     for cls in CLASSES:
         mf, mv = eval_full["by_class"][cls], eval_val["by_class"][cls]
-        print(f"  {cls}: full acc={mf['accuracy']:.3f} f1={mf['f1']:.3f} | val acc={mv['accuracy']:.3f} f1={mv['f1']:.3f} (n={mv['support']})")
+        print(f"  {cls}: full acc={mf['accuracy']:.3f} f1={mf['f1']:.3f} | val acc={mv['accuracy']:.3f} f1={mv['f1']:.3f} (n={mv['support']})", flush=True)
 
     metrics = {
         "model_tag": model_tag,
@@ -456,7 +476,7 @@ def main() -> int:
         output_dir=args.output,
     )
     if result:
-        print(f"Время: {time.monotonic() - t0:.1f}с")
+        print(f"Время: {time.monotonic() - t0:.1f}с", flush=True)
         return 0
     return 1
 

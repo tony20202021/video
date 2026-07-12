@@ -3,7 +3,7 @@
 Usage:
     python scripts/pipeline/5_track_direction.py \
         .output/pipeline/2_yolo_boxes_files/run_20260629_XXX
-    python scripts/pipeline/5_track_direction.py run_XXX --config config.yaml
+    python scripts/pipeline/5_track_direction.py run_XXX --config zones.yaml
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from common.utils.log_setup import setup_logging
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "pipeline" / "5_track_direction"
 
 
@@ -35,7 +34,8 @@ def main() -> int:
     )
     ap.add_argument("input_dir", type=Path,
                     help="run_*-каталог из 2_yolo_boxes_files (содержит detections.csv)")
-    ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    ap.add_argument("--config", type=Path, default=None,
+                    help="Путь к YAML с настройками зон и трекера (опционально)")
     ap.add_argument("--output", type=Path, default=None)
     args = ap.parse_args()
 

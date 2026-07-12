@@ -217,5 +217,5 @@ video/
     ml.md                 — ML пайплайн, датасет, обучение
     transfer.md           — передача файлов клиент → сервер
     testing.md            — тестирование
-  .env                    — RTSP URL и секреты (в .gitignore)
+  .env                    — RTSP URL, секреты, пути к моделям (в .gitignore)
 ```

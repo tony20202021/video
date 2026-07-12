@@ -24,7 +24,10 @@ REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 
-INFERENCE_IMAGES="$REPO/.data/groups/v2/inference/images"
+_ef() { local k="$1" d="$2"; local v; v=$(grep -E "^\s*${k}\s*=" "$REPO/.env" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//' | tr -d $'\r'); echo "${v:-$d}"; }
+GROUPS_VER="$(_ef GROUPS_VER v3)"
+
+INFERENCE_IMAGES="$REPO/.data/groups/$GROUPS_VER/inference/images"
 
 POLL_SEC=60
 ONCE=0

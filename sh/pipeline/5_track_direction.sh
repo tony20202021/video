@@ -3,11 +3,11 @@
 #
 # Читает detections.csv из выхода 2_yolo_boxes_files.
 # Связывает боксы в треки, классифицирует: домой / из дома / неизвестно.
-# Зоны «дверь» и «лифт» — в config.yaml (tracking.zones).
+# Зоны «дверь» и «лифт» — опционально в YAML через --config (tracking.zones).
 #
 # Usage:
 #   ./sh/pipeline/5_track_direction.sh
-#   ./sh/pipeline/5_track_direction.sh --config config.yaml
+#   ./sh/pipeline/5_track_direction.sh --config zones.yaml
 
 set -euo pipefail
 

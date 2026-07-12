@@ -180,7 +180,9 @@ class TestHasResidentCrops:
         assert m63._has_resident_crops(tmp_path) is False
 
     def test_with_resident_dir(self, m63, tmp_path):
-        (tmp_path / "sub" / "cam" / "classified" / "resident").mkdir(parents=True)
+        d = tmp_path / "sub" / "cam" / "classified" / "1_resident"
+        d.mkdir(parents=True)
+        (d / "img.jpg").write_bytes(b"\xff\xd8\xff")
         assert m63._has_resident_crops(tmp_path) is True
 
     def test_only_other_class_dir_false(self, m63, tmp_path):
@@ -238,30 +240,31 @@ class TestFindResidentCrops:
 class TestIdentify:
     def test_no_identifier_returns_unknown_resident(self, m63):
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        pid, conf, out_class = m63._identify(None, crop, identify_conf=0.70)
+        pid, conf, out_class, probs = m63._identify(None, crop, identify_conf=0.70)
         assert pid is None
         assert conf == 0.0
         assert out_class == "unknown_resident"
+        assert probs == {}
 
     def test_low_conf_returns_unknown_resident(self, m63):
         class _FakeIdentLow:
             ready = True
-            def identify(self, bgr, threshold):
-                return None, 0.5  # ниже порога
+            def identify_with_probs(self, bgr, threshold):
+                return None, 0.5, {}  # ниже порога
 
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        pid, conf, out_class = m63._identify(_FakeIdentLow(), crop, identify_conf=0.70)
+        pid, conf, out_class, probs = m63._identify(_FakeIdentLow(), crop, identify_conf=0.70)
         assert pid is None
         assert out_class == "unknown_resident"
 
     def test_high_conf_returns_person_id(self, m63):
         class _FakeIdentHigh:
             ready = True
-            def identify(self, bgr, threshold):
-                return "person_01", 0.91
+            def identify_with_probs(self, bgr, threshold):
+                return "person_01", 0.91, {"person_01": 0.91}
 
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        pid, conf, out_class = m63._identify(_FakeIdentHigh(), crop, identify_conf=0.70)
+        pid, conf, out_class, probs = m63._identify(_FakeIdentHigh(), crop, identify_conf=0.70)
         assert pid == "person_01"
         assert abs(conf - 0.91) < 1e-6
         assert out_class == "person_01"

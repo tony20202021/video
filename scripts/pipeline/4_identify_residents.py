@@ -61,7 +61,6 @@ logger = logging.getLogger(__name__)
 MSK = timezone(timedelta(hours=3))
 
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "pipeline" / "4_identify_residents"
-DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 UNKNOWN_CLASS  = "unknown_resident"
 
 
@@ -149,27 +148,18 @@ def _find_resident_crops(run_dir: Path) -> list[tuple[Path, Path]]:
 
 # ─── ML ──────────────────────────────────────────────────────────────────────
 
-def _load_identifier(model_path: Path | None, config_path: Path):
-    """Загружает PersonIdentifier из явного пути или из config.yaml."""
+def _load_identifier(model_path: Path | None = None):
+    """Загружает PersonIdentifier из явного пути или из IDENTIFY_MODEL (.env)."""
     if model_path is not None:
         path = model_path
     else:
-        # Пробуем взять из config.yaml
-        if not config_path.is_file():
+        identify_path = os.environ.get("IDENTIFY_MODEL", "").strip()
+        if not identify_path:
+            logger.warning("  [ML] IDENTIFY_MODEL не задан в .env")
             return None
-        try:
-            import yaml
-            cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            identify_path = cfg.get("models", {}).get("identify")
-            if not identify_path:
-                logger.warning("  [ML] config.yaml: нет models.identify")
-                return None
-            path = Path(identify_path)
-            if not path.is_absolute():
-                path = config_path.parent / path
-        except Exception as e:
-            logger.warning(f"  [ML] Ошибка чтения {config_path}: {e}")
-            return None
+        path = Path(identify_path)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
 
     try:
         from ml.identify import PersonIdentifier
@@ -371,9 +361,7 @@ def main() -> int:
     parser.add_argument("input_dir", type=Path,
                         help="Конкретный run-каталог 3_classify_groups")
     parser.add_argument("--model",          type=Path, default=None,
-                        help="Явный путь к ONNX PersonIdentifier (иначе из config.yaml)")
-    parser.add_argument("--config",         type=Path, default=DEFAULT_CONFIG,
-                        help="config.yaml с путями к ML-моделям")
+                        help="Явный путь к ONNX PersonIdentifier (иначе из IDENTIFY_MODEL в .env)")
     parser.add_argument("--identify-conf",  type=float, default=0.70, metavar="CONF",
                         help="Порог PersonIdentifier (default: 0.70)")
     parser.add_argument("--output",         type=Path, default=None)
@@ -399,7 +387,7 @@ def main() -> int:
     except ImportError:
         pass
 
-    ident = _load_identifier(args.model, args.config)
+    ident = _load_identifier(args.model)
     if ident is not None:
         status = f"готов, классов: {ident.person_count}" if ident.ready else "не загружен"
         logger.info(f"  [ML] PersonIdentifier: {status}")
@@ -464,7 +452,7 @@ def main() -> int:
         "script":        "6_3_identify_residents_files",
         "inputs":        [str(args.input_dir)],
         "model":         str(args.model) if args.model else None,
-        "config":        str(args.config),
+        "identify_model": os.environ.get("IDENTIFY_MODEL", ""),
         "ml_active":     ident is not None,
         "identify_conf": args.identify_conf,
         "cpu_interval":  args.cpu_interval,

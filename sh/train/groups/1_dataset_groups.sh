@@ -31,12 +31,15 @@ case "$CMD" in
     *) echo "[!] Unknown command: $CMD (expected: build, apply, check, add, status)" >&2; exit 1 ;;
 esac
 
-LABELS="$REPO/.data/groups/v2/new/labels.json"
+_ef() { local k="$1" d="$2"; local v; v=$(grep -E "^\s*${k}\s*=" "$REPO/.env" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//' | tr -d $'\r'); echo "${v:-$d}"; }
+GROUPS_VER="$(_ef GROUPS_VER v3)"
+
+LABELS="$REPO/.data/groups/$GROUPS_VER/new/labels.json"
 VERSION=""
 OUT=""
 MOVE=1
-SRC="$REPO/.data/groups/v2/new"
-DATASET="$REPO/.data/groups/v2/dataset"
+SRC="$REPO/.data/groups/$GROUPS_VER/new"
+DATASET="$REPO/.data/groups/$GROUPS_VER/dataset"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

@@ -20,7 +20,14 @@ SCRIPT="$REPO/scripts/pipeline/3_classify_groups.py"
 
 export PYTHONIOENCODING=utf-8
 
-# Читаем .env
+ENV_FILE="$REPO/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(grep -v '^\s*#' "$ENV_FILE" | grep '=' | grep -v '<')
+    set +a
+fi
+
 _ef() {
     local key="$1" default="$2"
     local val
@@ -29,7 +36,8 @@ _ef() {
 }
 
 S2DIR="$REPO/.output/pipeline/2_yolo_boxes_files/images"
-OUT_DIR="$REPO/.data/groups/v2/inference"
+GROUPS_VER="$(_ef GROUPS_VER v3)"
+OUT_DIR="$REPO/.data/groups/$GROUPS_VER/inference"
 CLASSIFY_CONF="$(_ef CLASSIFY_CONF 0.65)"
 POLL_SEC=60
 ONCE=0
@@ -52,8 +60,7 @@ _count_crops() {
     find "$S2DIR" -name "*.jpg" -type f 2>/dev/null | wc -l
 }
 
-MODEL_TAG=$(grep -E "^\s*classify\s*:" "$REPO/config.yaml" 2>/dev/null \
-    | sed 's|.*classify\s*:\s*||' | xargs basename 2>/dev/null | sed 's|\.onnx$||' || echo "?")
+MODEL_TAG=$(basename "$(_ef CLASSIFY_MODEL ?)" .onnx)
 
 echo "=== 3_classify_groups ==="
 echo "  Input:         $S2DIR"

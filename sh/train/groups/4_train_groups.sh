@@ -14,7 +14,8 @@ SCRIPT="$REPO/scripts/train/3_train_groups.py"
 
 export PYTHONIOENCODING=utf-8
 
-DATA="$REPO/.data/groups/v2/dataset"
+_ef() { local k="$1" d="$2"; local v; v=$(grep -E "^\s*${k}\s*=" "$REPO/.env" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//' | tr -d $'\r'); echo "${v:-$d}"; }
+DATA="$REPO/.data/groups/$(_ef GROUPS_VER v3)/dataset"
 EPOCHS=20
 BATCH_SIZE=64
 LR=1e-3

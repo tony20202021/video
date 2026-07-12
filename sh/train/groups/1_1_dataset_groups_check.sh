@@ -19,9 +19,12 @@ CONDA_ENV="conda_video"
 PYTHON="$HOME/miniconda3/envs/$CONDA_ENV/bin/python"
 SCRIPT="$REPO/scripts/train/dataset_groups.py"
 
+_ef() { local k="$1" d="$2"; local v; v=$(grep -E "^\s*${k}\s*=" "$REPO/.env" 2>/dev/null | tail -1 | sed 's/.*=[[:space:]]*//' | tr -d $'\r'); echo "${v:-$d}"; }
+GROUPS_VER="$(_ef GROUPS_VER v3)"
+
 INPUT_DIR="$REPO/.output/pipeline/2_yolo_boxes_files"
-DATASET="$REPO/.data/groups/v2/dataset"
-DST_NEW="$REPO/.data/groups/v2/new"
+DATASET="$REPO/.data/groups/$GROUPS_VER/dataset"
+DST_NEW="$REPO/.data/groups/$GROUPS_VER/new"
 
 POLL_SEC=10
 DELETE_DOUBLES=1   # удалять дубли сразу

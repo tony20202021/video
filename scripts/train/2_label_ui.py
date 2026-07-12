@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import re
 import sys
 import threading
@@ -30,11 +31,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from common.utils.access import IpAllowlist, is_ip_allowed, load_env_file, log_ip_denied, parse_allowed_ips
+from common.utils.access import IpAllowlist, is_ip_allowed, log_ip_denied, parse_allowed_ips
 from common.utils.classes import EXTRA_DATASET_DIRS, GROUP_CLASSES
 
-_ENV = load_env_file(REPO_ROOT / ".env")
-_DEFAULT_PORT = int(_ENV.get("LABEL_UI_PORT", "8750"))
+_DEFAULT_PORT = int(os.environ.get("LABEL_UI_PORT", "8750"))
 
 DEFAULT_INPUT   = REPO_ROOT / ".output" / "pipeline" / "2_yolo_boxes_files"
 DEFAULT_LABELS  = REPO_ROOT / ".output" / "train" / "2_label_ui"
@@ -78,8 +78,11 @@ _HTML = """<!DOCTYPE html>
   .container { display: flex; height: 100%; }
 
   /* ── левая панель (кнопки) ── */
-  .panel-left { flex: 0 0 280px; padding: 14px 16px; overflow-y: auto;
+  .panel-left { flex: none; width: 360px; min-width: 160px; padding: 14px 16px; overflow-y: auto;
                 border-right: 1px solid #2a2a4a; display: flex; flex-direction: column; gap: 10px; }
+  .drag-handle { flex: none; width: 5px; cursor: col-resize; background: transparent;
+                 border-right: 1px solid #2a2a4a; transition: background .15s; }
+  .drag-handle:hover { background: #7ec8e3; }
   .progress { color: #7ec8e3; font-size: 13px; }
   .labeled-count { color: #27ae60; }
   .fname { color: #777; font-size: 11px; word-break: break-all; }
@@ -119,6 +122,30 @@ let crops = [];
 let labels = {};
 let classes = [];
 let probs = {};
+let panelW = 360;
+
+function _attachDrag() {
+  const handle = document.getElementById('drag-handle');
+  const panel  = document.getElementById('panel-left');
+  if (!handle || !panel) return;
+  panel.style.width = panelW + 'px';
+  handle.onmousedown = e => {
+    const startX = e.clientX, startW = panel.offsetWidth;
+    const onMove = e => {
+      panelW = Math.max(160, Math.min(window.innerWidth * 0.7, startW + e.clientX - startX));
+      panel.style.width = panelW + 'px';
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cssText = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+}
 
 async function loadState() {
   const r = await fetch('/api/state');
@@ -172,7 +199,7 @@ function render() {
 
   document.getElementById('app').innerHTML = `
     <div class="container">
-      <div class="panel-left">
+      <div class="panel-left" id="panel-left">
         <div class="progress">
           Кадр <b>${idx+1}</b> / ${crops.length}<br>
           <span class="labeled-count">Размечено: ${labeled}</span>
@@ -190,10 +217,12 @@ function render() {
           ${shortcuts}<br>← → = навигация<br>U = пропустить
         </div>
       </div>
+      <div class="drag-handle" id="drag-handle"></div>
       <div class="panel-right">
         <img src="/image/${encodeURIComponent(f)}" alt="${f}" />
       </div>
     </div>`;
+  _attachDrag();
 }
 
 function probBars(filename) {
@@ -205,11 +234,11 @@ function probBars(filename) {
     const val = p[cls] !== undefined ? p[cls] : 0;
     const pct = (val * 100).toFixed(0);
     return `<div style="display:flex;align-items:center;gap:5px;margin:2px 0">
-      <span style="width:86px;font-size:10px;text-align:right;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cls}</span>
-      <div style="flex:1;height:8px;background:#111120;border-radius:2px">
+      <span style="flex:0 0 40%;min-width:0;font-size:10px;color:${color};word-break:break-all;line-height:1.3">${cls}</span>
+      <div style="flex:1;min-width:30px;height:8px;background:#111120;border-radius:2px;align-self:center">
         <div style="width:${pct}%;height:100%;background:${color}bb;border-radius:2px"></div>
       </div>
-      <span style="width:34px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
+      <span style="flex:0 0 38px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
     </div>`;
   }).join('');
   return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
@@ -266,7 +295,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
   #modal.open { display: flex; }
   #modal img { max-width: 90vw; max-height: 70vh; object-fit: contain; border: 2px solid #444; }
   #modal .modal-fname { color: #aaa; font-size: 11px; }
-  #modal .modal-probs { min-width: 280px; }
+  #modal .modal-probs { width: 60vw; min-width: 300px; max-width: 560px; }
   #modal .modal-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
   #modal button { padding: 8px 16px; font-size: 13px; cursor: pointer; border: none;
                   border-radius: 4px; font-family: monospace; }
@@ -293,7 +322,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
   .btn-bulk-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
   .btn-bulk-desel:hover { color: #eee; }
-  #gallery { padding-bottom: 72px; }
+  #gallery { padding-bottom: 0; }
 </style>
 </head>
 <body>
@@ -356,11 +385,11 @@ function probBars(filename) {
     const val = p[cls] !== undefined ? p[cls] : 0;
     const pct = (val * 100).toFixed(0);
     return `<div style="display:flex;align-items:center;gap:5px;margin:2px 0">
-      <span style="width:86px;font-size:10px;text-align:right;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cls}</span>
-      <div style="flex:1;height:8px;background:#111120;border-radius:2px">
+      <span style="flex:0 0 40%;min-width:0;font-size:10px;color:${color};word-break:break-all;line-height:1.3">${cls}</span>
+      <div style="flex:1;min-width:30px;height:8px;background:#111120;border-radius:2px;align-self:center">
         <div style="width:${pct}%;height:100%;background:${color}bb;border-radius:2px"></div>
       </div>
-      <span style="width:34px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
+      <span style="flex:0 0 38px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
     </div>`;
   }).join('');
   return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
@@ -466,9 +495,16 @@ function updateSelectionDOM() {
   });
 }
 
+function _syncGalleryPadding() {
+  const bar = document.getElementById('bulk-bar');
+  document.getElementById('gallery').style.paddingBottom = bar.offsetHeight + 'px';
+}
+new ResizeObserver(_syncGalleryPadding).observe(document.getElementById('bulk-bar'));
+
 function updateBulkBar() {
   document.getElementById('bulk-count').textContent = 'Выбрано: ' + selected.size;
   document.getElementById('bulk-bar').classList.toggle('show', selected.size > 0);
+  requestAnimationFrame(_syncGalleryPadding);
 }
 
 async function applyBulk(cls) {
@@ -578,7 +614,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   #modal img { max-width: 90vw; max-height: 70vh; object-fit: contain; border: 2px solid #444; }
   #modal .modal-cls { font-size: 13px; color: #aaa; }
   #modal .modal-fname { color: #555; font-size: 11px; }
-  #modal .modal-probs { min-width: 280px; }
+  #modal .modal-probs { width: 60vw; min-width: 300px; max-width: 560px; }
   #modal .modal-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
   #modal button { padding: 8px 16px; font-size: 13px; cursor: pointer; border: none;
                   border-radius: 4px; font-family: monospace; }
@@ -603,7 +639,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
   .btn-bulk-desel:hover { color: #eee; }
-  #gallery { padding-bottom: 72px; }
+  #gallery { padding-bottom: 0; }
 </style>
 </head>
 <body>
@@ -667,11 +703,11 @@ function probBars(filename) {
     const val = p[cls] !== undefined ? p[cls] : 0;
     const pct = (val * 100).toFixed(0);
     return `<div style="display:flex;align-items:center;gap:5px;margin:2px 0">
-      <span style="width:86px;font-size:10px;text-align:right;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cls}</span>
-      <div style="flex:1;height:8px;background:#111120;border-radius:2px">
+      <span style="flex:0 0 40%;min-width:0;font-size:10px;color:${color};word-break:break-all;line-height:1.3">${cls}</span>
+      <div style="flex:1;min-width:30px;height:8px;background:#111120;border-radius:2px;align-self:center">
         <div style="width:${pct}%;height:100%;background:${color}bb;border-radius:2px"></div>
       </div>
-      <span style="width:34px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
+      <span style="flex:0 0 38px;font-size:10px;color:#888;text-align:right">${val.toFixed(3)}</span>
     </div>`;
   }).join('');
   return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
@@ -763,9 +799,16 @@ function updateSelectionDOM() {
   });
 }
 
+function _syncGalleryPadding() {
+  const bar = document.getElementById('bulk-bar');
+  document.getElementById('gallery').style.paddingBottom = bar.offsetHeight + 'px';
+}
+new ResizeObserver(_syncGalleryPadding).observe(document.getElementById('bulk-bar'));
+
 function updateBulkBar() {
   document.getElementById('bulk-count').textContent = 'Выбрано: ' + selected.size;
   document.getElementById('bulk-bar').classList.toggle('show', selected.size > 0);
+  requestAnimationFrame(_syncGalleryPadding);
 }
 
 async function applyBulk(toCls) {
@@ -1086,7 +1129,7 @@ def main() -> int:
 
     labels_path = args.labels or (DEFAULT_LABELS / "labels.json")
     image_exts = {f".{e.strip().lstrip('.')}" for e in args.ext.split(",")}
-    allowed_ips = parse_allowed_ips(_ENV.get("ALLOWED_IPS", ""))
+    allowed_ips = parse_allowed_ips(os.environ.get("ALLOWED_IPS", ""))
 
     probs: dict | None = None
     if args.probs_csv:

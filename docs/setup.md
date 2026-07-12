@@ -13,7 +13,7 @@
 | **Python** | В проекте ориентир **3.11+**. Для окружения удобно зафиксировать **3.11** или **3.12**. |
 | **conda** | Miniconda или Anaconda — на выбор; ниже команды одинаковы. |
 | **Репозиторий** | Клонированный каталог `video/` с файлом `requirements.txt`. |
-| **.env** | Скопировать `.env.example` → `.env`, заполнить RTSP URL камер, `BOT_TOKEN`; на сервере — `ALLOWED_IPS`, `TRANSFER_*`, `LABEL_UI_PORT`. |
+| **.env** | Скопировать `.env.example` → `.env`, заполнить RTSP URL камер, `BOT_TOKEN`, пути к моделям (`CLASSIFY_MODEL`, `IDENTIFY_MODEL`, `DETECT_MODEL`); на сервере — `ALLOWED_IPS`, `TRANSFER_*`, `LABEL_UI_PORT`. |
 
 Установщики Miniconda: [Windows](https://docs.conda.io/en/latest/miniconda.html) / [Linux x86_64](https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh) (актуальные ссылки — на сайте conda).
 
@@ -198,6 +198,6 @@ python scripts/setup_models.py
 
 - **Версия Python:** если пакет из `requirements.txt` не ставится на выбранную версию, создайте окружение с другой минорной версией Python (`python=3.12` и т.д.) и повторите `pip install -r requirements.txt`.
 - **pip внутри conda:** после `conda activate` команда `pip` относится к этому окружению — так и нужно для установки из `requirements.txt`.
-- **Секреты и конфиг:** скопируйте `.env.example` → `.env`, заполните RTSP URL камер, `BOT_TOKEN`, `ADMIN_IDS`. На публичном сервере дополнительно задайте `ALLOWED_IPS` (IP или CIDR через запятую), `TRANSFER_API_KEY` / `TRANSFER_PORT`, `LABEL_UI_PORT` — см. [transfer.md](transfer.md) и [remote.md](remote.md). Файлы `docker-compose.yml` и `config.yaml` не созданы — будут добавлены позже.
+- **Секреты и конфиг:** скопируйте `.env.example` → `.env`, заполните RTSP URL камер, `BOT_TOKEN`, `ADMIN_IDS`, пути к моделям (`CLASSIFY_MODEL`, `IDENTIFY_MODEL`, `DETECT_MODEL`). На публичном сервере дополнительно задайте `ALLOWED_IPS` (IP или CIDR через запятую), `TRANSFER_API_KEY` / `TRANSFER_PORT`, `LABEL_UI_PORT` — см. [transfer.md](transfer.md) и [remote.md](remote.md). Файл `docker-compose.yml` не создан — будет добавлен позже.
 - **Кодировка в Windows:** при запуске скриптов через `conda run` могут быть ошибки `UnicodeEncodeError`. Используйте Python напрямую: `PYTHONIOENCODING=utf-8 C:/Users/.../miniconda3/envs/conda_video/python.exe scripts/cameras/...`
 - **Кодировка PS1-скриптов:** все `.ps1` в репозитории сохранены с **UTF-8 BOM** (`EF BB BF`) — это позволяет PowerShell 5.x корректно читать кириллицу в строках скрипта. Дополнительно каждый скрипт содержит `$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8` для правильного вывода в консоль. При создании нового PS1-скрипта обязательно сохраняйте его как UTF-8 with BOM (в VS Code: правый нижний угол → «UTF-8» → «Save with Encoding» → «UTF-8 with BOM»).

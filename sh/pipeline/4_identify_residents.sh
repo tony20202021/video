@@ -26,7 +26,14 @@ SCRIPT="$REPO/scripts/pipeline/4_identify_residents.py"
 
 export PYTHONIOENCODING=utf-8
 
-# Читаем .env
+ENV_FILE="$REPO/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(grep -v '^\s*#' "$ENV_FILE" | grep '=' | grep -v '<')
+    set +a
+fi
+
 _ef() {
     local key="$1" default="$2"
     local val
@@ -34,7 +41,8 @@ _ef() {
     echo "${val:-$default}"
 }
 
-INFERENCE_IMAGES="$REPO/.data/groups/v2/inference/images"
+GROUPS_VER="$(_ef GROUPS_VER v3)"
+INFERENCE_IMAGES="$REPO/.data/groups/$GROUPS_VER/inference/images"
 OUT_DIR="$REPO/.data/residents/v1/inference"
 IDENTIFY_CONF="$(_ef IDENTIFY_CONF 0.70)"
 POLL_SEC=60
@@ -53,9 +61,7 @@ done
 _ts() { date '+%H:%M:%S'; }
 SCRIPT_NAME="$(basename "$0" .sh)"
 
-MODEL_TAG=$(grep -E "^\s*identify\s*:" "$REPO/config.yaml" 2>/dev/null \
-    | grep -v '#' \
-    | sed 's|.*identify\s*:\s*||' | xargs basename 2>/dev/null | sed 's|\.onnx$||' || echo "?")
+MODEL_TAG=$(basename "$(_ef IDENTIFY_MODEL ?)" .onnx)
 
 echo "=== 4_identify_residents ==="
 echo "  Input:          $INFERENCE_IMAGES"

@@ -315,7 +315,7 @@ MOTION_DIFF_THRESHOLD=3.3
 ./sh/pipeline/4_identify_residents.sh
 ```
 
-Настройки (`YOLO_CONF`, `YOLO_NMS`, `YOLO_MAX_FPS`, `CLASSIFY_CONF`, `IDENTIFY_CONF`) читаются из `.env`.
+Пути к моделям (`CLASSIFY_MODEL`, `IDENTIFY_MODEL`, `DETECT_MODEL`) и пороги (`YOLO_CONF`, `YOLO_NMS`, `YOLO_MAX_FPS`, `CLASSIFY_CONF`, `IDENTIFY_CONF`) читаются из `.env`.
 
 **Проверить что прогон запустился** — должна появиться новая директория через ~5 сек:
 ```powershell

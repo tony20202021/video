@@ -7,7 +7,7 @@
 | Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
 | Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Готово** `.models/detect/yolov8n.onnx` |
-| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Обучена** `.models/classify/v2_3.onnx` (датасет v2) → v3 в работе |
+| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Активна** `.models/classify/v3_1.onnx` (датасет v3, 10 015 файлов) |
 | Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Нужно обучить |
 
 ---
@@ -125,7 +125,7 @@ src/ml/
   classify.py     — GroupClassifier (Модель 1: MobileNetV3-Small ONNX wrapper)
   identify.py     — PersonIdentifier (Модель 2: MobileNetV3-Small ONNX wrapper)
   pipeline.py     — MLPipeline: оркестрация classify → identify
-  versions.py     — версии моделей: v1_1.onnx, манифесты, activate
+  versions.py     — версии моделей: v1_1.onnx, манифесты, activate (пишет в .env)
 ```
 
 ### Использование
@@ -647,7 +647,8 @@ RESIDENTS_VER=v1   # → .data/residents/v1/scene_pool/
 **Результаты:**
 ```
 .models/classify/v3_1.onnx            — ONNX (opset 18, один файл ~6 MB)
-.models/classify/v3_1.json            — манифест: dataset_version, metrics
+.models/classify/v3_1.json            — манифест: dataset_version, metrics, confusion matrix
+.models/classify/v3_1_progress.json   — история эпох (обновляется в реальном времени)
 .models/classify/backbone.pt          — backbone для инициализации Модели 2
 .output/train/3_train_groups/run/training_results.json
 ```
@@ -657,16 +658,18 @@ RESIDENTS_VER=v1   # → .data/residents/v1/scene_pool/
 | Датасет | 1-й прогон | 2-й прогон на том же датасете |
 |---------|------------|-------------------------------|
 | `.data/groups/v1` | `v1_1.onnx` | `v1_2.onnx` |
-| `.data/groups/v2` | `v2_1.onnx` | `v2_2.onnx` |
-| `.data/groups/v3` | `v3_1.onnx` | `v3_2.onnx` |
+| `.data/groups/v2` | `v2_1.onnx` (3 996 файлов) | `v2_2.onnx`, `v2_3.onnx` |
+| `.data/groups/v3` | **`v3_1.onnx`** ← текущая (10 015 файлов, 30 эпох) | `v3_2.onnx` |
 | export.zip (без версии) | `v4.onnx` (legacy) | `v5.onnx` |
 
 CLI:
 ```bash
 python scripts/train/0_model_versions.py list
-python scripts/train/0_model_versions.py activate v1_1
-python scripts/train/0_model_versions.py info v1_1
+python scripts/train/0_model_versions.py activate v3_1   # → обновляет CLASSIFY_MODEL в .env
+python scripts/train/0_model_versions.py info v3_1
 ```
+
+`activate` обновляет строку `CLASSIFY_MODEL=` в `.env` (единственный источник правды для активной модели).
 
 **ONNX export:** `opset_version=18`, `dynamo=False` — один `.onnx` без внешнего `.onnx.data`.
 
@@ -825,12 +828,15 @@ fine-tune на датасете групп (1_resident / 2_delivery / 3_utilitie
     yolov8n.onnx        — детекция людей (пайплайн)
     yolov8n-pose.pt     — pose estimation (filter_residents: доля тела в кадре)
   classify/
-    v2_3.onnx           — Модель 1 (текущая): датасет v2
-    v3_1.onnx           — Модель 1 (новая, датасет v3, 10 015 файлов)
-    v2_3.json, v3_1.json — манифесты (dataset_version, metrics)
+    v3_1.onnx           — Модель 1 (активная): датасет v3, 10 015 файлов
+    v3_1.json           — манифест: метрики, confusion matrix, история эпох
+    v2_3.onnx           — Модель 1 (предыдущая): датасет v2, 3 996 файлов
     backbone.pt         — только features (PyTorch) для инициализации Модели 2
+  downloaded/
+    yolov8n.pt          — исходные веса YOLOv8n (промежуточный, setup_models.py)
+    yolov8n.onnx.data   — внешние данные от первичного ONNX-экспорта
   identify/
-    v1.onnx             — Модель 2: после первого обучения на жителях
+    v5.onnx             — Модель 2 (активная): идентификация жителей
   osd/
     osd_templates.npz     — шаблоны цифр OSD (HI-поток)
     osd_templates_low.npz — шаблоны цифр OSD (LOW-поток)
@@ -838,24 +844,21 @@ fine-tune на датасете групп (1_resident / 2_delivery / 3_utilitie
 
 ---
 
-## Параметры качества (config.yaml)
+## Параметры качества (.env)
 
-```yaml
-thresholds:
-  detection:
-    min_confidence: 0.35   # YOLO — порог детекции человека
-  classification:
-    min_confidence: 0.65   # Модель 1 — ниже → "uncertain"
-  identification:
-    min_confidence: 0.70   # Модель 2 — ниже → unknown_resident
+```dotenv
+# Модели ML
+CLASSIFY_MODEL=.models/classify/v3_1.onnx
+IDENTIFY_MODEL=.models/identify/v5.onnx
+DETECT_MODEL=.models/detect/yolov8n.onnx
 
-models:
-  detect:   .models/detect/yolov8n.onnx
-  classify: .models/classify/v2_3.onnx
-  # identify: .models/identify/v1.onnx
+# Пороги уверенности
+YOLO_CONF=0.25             # YOLO — порог детекции человека
+CLASSIFY_CONF=0.65         # Модель 1 — ниже → "uncertain"
+IDENTIFY_CONF=0.70         # Модель 2 — ниже → unknown_resident
 ```
 
-На ранних версиях Модели 2 (мало данных) стоит поднять порог идентификации до 0.80.
+На ранних версиях Модели 2 (мало данных) стоит поднять `IDENTIFY_CONF` до 0.80.
 
 ---
 

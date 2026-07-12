@@ -105,30 +105,61 @@ POST /models/{model_type}/activate
 
 ---
 
-## Конфигурация (config.yaml)
+## Systemd (Linux)
 
-```yaml
-thresholds:
-  detection:
-    min_confidence: 0.55      # детекция человека в кадре
-  classification:
-    min_confidence: 0.65      # классификация группы
-  identification:
-    min_confidence: 0.75      # идентификация жителя
+Все постоянные процессы запускаются как systemd-сервисы. Установка:
 
-sampling:
-  fps: 2                      # анализировать 2 кадра в секунду на камеру
-  substream: true             # субпоток для анализа, основной для сохранения
+```bash
+./sh/setup_systemd.sh            # установить и запустить
+./sh/setup_systemd.sh --with-data  # + data-pipeline (watch-скрипты обучения)
+./sh/setup_systemd.sh --remove   # удалить
+./sh/setup_systemd.sh --status   # статус
+./sh/setup_systemd.sh --logs video-classify --follow  # логи
+```
 
-temporal:
-  detection_window_size: 5    # M — размер скользящего окна
-  detection_min_hits: 3       # N — минимум срабатываний для фиксации события
-  event_end_silence_frames: 10
+| Сервис | Скрипт | Описание |
+|--------|--------|----------|
+| `video-transfer` | `sh/transfer/1_start_server.sh` | Приём файлов с Windows |
+| `video-yolo` | `sh/pipeline/2_yolo_boxes_files.sh` | YOLO детекция кропов |
+| `video-classify` | `sh/pipeline/3_classify_groups.sh` | Классификация групп (Модель 1) |
+| `video-identify` | `sh/pipeline/4_identify_residents.sh` | Идентификация жителей (Модель 2) |
 
-models:
-  detect:   .models/detect/yolov8n.onnx
-  classify: .models/classify/v1_1.onnx
-  identify: .models/identify/v1.onnx
+Опциональные (только во время обучения, `--with-data`):
+
+| Сервис | Скрипт | Описание |
+|--------|--------|----------|
+| `video-data-check` | `sh/train/groups/1_1_dataset_groups_check.sh` | Дедупликация кропов с датасетом |
+| `video-data-dedup` | `sh/train/groups/1_2_dataset_groups_check_new.sh` | Дедупликация внутри new/ |
+| `video-data-labels` | `sh/train/groups/1_3_dataset_groups_inference_labels.sh` | Авто-labels из инференса |
+
+Логи через journald:
+```bash
+journalctl -u video-classify -f          # live
+journalctl -u video-classify -n 200      # последние 200 строк
+journalctl -u video-classify --since "1h ago"
+```
+
+Управление отдельным сервисом:
+```bash
+sudo systemctl restart video-classify
+sudo systemctl status  video-classify
+sudo systemctl stop    video-yolo
+```
+
+---
+
+## Конфигурация (.env)
+
+Модели и пороги задаются в `.env`:
+
+```dotenv
+CLASSIFY_MODEL=.models/classify/v3_1.onnx
+IDENTIFY_MODEL=.models/identify/v5.onnx
+DETECT_MODEL=.models/detect/yolov8n.onnx
+
+CLASSIFY_CONF=0.65
+IDENTIFY_CONF=0.70
+YOLO_CONF=0.25
 ```
 
 ---

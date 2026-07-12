@@ -18,7 +18,14 @@ SCRIPT="$REPO/scripts/pipeline/2_yolo_boxes_files.py"
 
 export PYTHONIOENCODING=utf-8
 
-# Читаем .env
+ENV_FILE="$REPO/.env"
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source <(grep -v '^\s*#' "$ENV_FILE" | grep '=' | grep -v '<')
+    set +a
+fi
+
 _ef() {
     local key="$1" default="$2"
     local val

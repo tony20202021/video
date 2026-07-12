@@ -69,7 +69,6 @@ logger = logging.getLogger(__name__)
 MSK = timezone(timedelta(hours=3))
 
 DEFAULT_OUTPUT = REPO_ROOT / ".data" / "groups" / "v1" / "inference"
-DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 
 _CLASS_COLORS = GROUP_CLASS_COLORS
 
@@ -115,24 +114,11 @@ def _find_crops(run_dir: Path, ext: str = "jpg") -> dict[str, dict[str, list[Pat
 
 # ─── ML ──────────────────────────────────────────────────────────────────────
 
-def _load_classifier(config_path: Path):
-    """Загружает GroupClassifier из config.yaml. Возвращает (clf, model_tag) или (None, None)."""
-    if not config_path.is_file():
-        return None, None
-    try:
-        import yaml
-    except ImportError:
-        logger.warning("  [ML] Нужен pyyaml: pip install pyyaml")
-        return None, None
-    try:
-        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning(f"  [ML] Ошибка чтения {config_path}: {e}")
-        return None, None
-    models = cfg.get("models", {})
-    classify_path = models.get("classify")
+def _load_classifier():
+    """Загружает GroupClassifier из CLASSIFY_MODEL (.env). Возвращает (clf, model_tag) или (None, None)."""
+    classify_path = os.environ.get("CLASSIFY_MODEL", "").strip()
     if not classify_path:
-        logger.warning("  [ML] config.yaml: нет models.classify")
+        logger.warning("  [ML] CLASSIFY_MODEL не задан в .env")
         return None, None
     try:
         from ml.classify import GroupClassifier
@@ -363,8 +349,6 @@ def main() -> int:
     )
     parser.add_argument("input_dir", type=Path, nargs="?",
                         help="Конкретный run-каталог 2_yolo_boxes_files")
-    parser.add_argument("--config",        type=Path, default=DEFAULT_CONFIG,
-                        help="config.yaml с путями к ML-моделям")
     parser.add_argument("--classify-conf", type=float, default=0.65, metavar="CONF",
                         help="Порог GroupClassifier (default: 0.65)")
     parser.add_argument("--output",        type=Path, default=None)
@@ -398,7 +382,7 @@ def main() -> int:
     except ImportError:
         pass
 
-    clf, model_tag = _load_classifier(args.config)
+    clf, model_tag = _load_classifier()
     if clf is not None:
         logger.info(f"  [ML] GroupClassifier: {'готов' if clf.ready else 'не загружен'}  [{model_tag}]")
     else:

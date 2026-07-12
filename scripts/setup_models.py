@@ -20,6 +20,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = REPO_ROOT / ".models"
+DOWNLOAD_DIR = MODELS_DIR / "downloaded"
 
 
 def export_onnx(model_name: str, out_path: Path) -> bool:
@@ -29,8 +30,8 @@ def export_onnx(model_name: str, out_path: Path) -> bool:
         print("Нужен пакет ultralytics: pip install ultralytics", file=sys.stderr)
         return False
 
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    pt_path = MODELS_DIR / f"{model_name}.pt"
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    pt_path = DOWNLOAD_DIR / f"{model_name}.pt"
     print(f"Скачиваю и экспортирую {model_name} → ONNX …")
     model = YOLO(str(pt_path))  # скачивает .pt в models/ если нет
     export_result = model.export(format="onnx", imgsz=640)

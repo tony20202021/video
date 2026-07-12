@@ -55,7 +55,6 @@ from common.utils.classes import GROUP_CLASSES
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIG = REPO_ROOT / "config.yaml"
 UNCERTAIN_DIR = "uncertain"
 _VALID_CLASSES = set(GROUP_CLASSES)
 
@@ -75,18 +74,10 @@ def _ef_float(key: str, default: float) -> float:
         return default
 
 
-def _load_classifier(config_path: Path):
-    if not config_path.is_file():
-        return None
-    try:
-        import yaml
-        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning("Ошибка чтения %s: %s", config_path, e)
-        return None
-    classify_path = cfg.get("models", {}).get("classify")
+def _load_classifier():
+    classify_path = os.environ.get("CLASSIFY_MODEL", "").strip()
     if not classify_path:
-        logger.warning("config.yaml: нет models.classify")
+        logger.warning("CLASSIFY_MODEL не задан в .env")
         return None
     try:
         from ml.classify import GroupClassifier
@@ -129,7 +120,6 @@ def main() -> int:
                         help="Исходный датасет (напр. .data/groups/v1/dataset)")
     parser.add_argument("--output", "-o", type=Path, required=True,
                         help="Выходной каталог (напр. .data/groups/v1/inference/images/dataset)")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--conf-low", type=float,
                         default=_ef_float("CLASSIFY_CONF", 0.65),
                         help="Порог uncertain: conf < conf_low → uncertain/ (default: 0.65)")
@@ -144,7 +134,7 @@ def main() -> int:
         logger.error("Не найден: %s", dataset_dir)
         return 1
 
-    clf = _load_classifier(args.config)
+    clf = _load_classifier()
     if clf is None or not clf.ready:
         logger.error("GroupClassifier не загружен.")
         return 1

@@ -14,6 +14,7 @@ JSON-манифест:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime
@@ -24,7 +25,7 @@ from common.utils.atomic import copy as _copy
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODELS_DIR = _REPO_ROOT / ".models" / "classify"
-_CONFIG_YAML = _REPO_ROOT / "config.yaml"
+_ENV_FILE = _REPO_ROOT / ".env"
 
 _DATASET_DIR_RE = re.compile(r"^v\d+$")
 _TAG_DATASET_RE = re.compile(r"^(v\d+)_(\d+)$")
@@ -161,7 +162,7 @@ def list_versions() -> list[dict]:
 
 
 def get_active_tag() -> Optional[str]:
-    """Тег активной модели (stem файла из config.yaml)."""
+    """Тег активной модели (stem CLASSIFY_MODEL из .env)."""
     p = get_active_model_path()
     return p.stem if p else None
 
@@ -176,33 +177,34 @@ def get_active_version() -> Optional[int]:
 
 
 def get_active_model_path() -> Optional[Path]:
-    """Путь к активной модели из config.yaml. None если не настроено или файл не найден."""
-    if not _CONFIG_YAML.is_file():
+    """Путь к активной модели из CLASSIFY_MODEL (.env). None если не задано или файл не найден."""
+    raw = os.environ.get("CLASSIFY_MODEL", "").strip()
+    if not raw:
         return None
-    try:
-        import yaml
-        cfg = yaml.safe_load(_CONFIG_YAML.read_text(encoding="utf-8"))
-        raw = cfg.get("models", {}).get("classify")
-        if not raw:
-            return None
-        p = Path(raw) if Path(raw).is_absolute() else _REPO_ROOT / raw
-        return p if p.is_file() else None
-    except Exception:
-        return None
+    p = Path(raw) if Path(raw).is_absolute() else _REPO_ROOT / raw
+    return p if p.is_file() else None
 
 
 # ── Изменение состояния ───────────────────────────────────────────────────────
 
 def activate_tag(tag: str) -> bool:
-    """Устанавливает модель по тегу (v1_2, v3, …) как активную в config.yaml."""
+    """Устанавливает модель по тегу (v1_2, v3, …) как активную в .env."""
     mp = classify_model_path(tag)
-    if not mp.is_file() or not _CONFIG_YAML.is_file():
+    if not mp.is_file() or not _ENV_FILE.is_file():
         return False
     try:
-        text = _CONFIG_YAML.read_text(encoding="utf-8")
-        new_path = str(mp.relative_to(_REPO_ROOT)).replace("\\", "/")
-        new_text = re.sub(r"(classify\s*:\s*).*", lambda m: m.group(1) + new_path, text)
-        _CONFIG_YAML.write_text(new_text, encoding="utf-8")
+        new_val = str(mp.relative_to(_REPO_ROOT)).replace("\\", "/")
+        text = _ENV_FILE.read_text(encoding="utf-8")
+        new_text = re.sub(
+            r"^(CLASSIFY_MODEL\s*=).*$",
+            lambda m: m.group(1) + new_val,
+            text,
+            flags=re.MULTILINE,
+        )
+        if new_text == text:
+            new_text = text.rstrip() + f"\nCLASSIFY_MODEL={new_val}\n"
+        _ENV_FILE.write_text(new_text, encoding="utf-8")
+        os.environ["CLASSIFY_MODEL"] = new_val
         return True
     except Exception:
         return False
