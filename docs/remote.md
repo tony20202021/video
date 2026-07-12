@@ -31,7 +31,7 @@ SSH по локальному IP — доступен напрямую с дев
 ```
 Host video-home
     HostName 192.168.1.XXX
-    User Anton
+    User <username>
     IdentityFile ~/.ssh/id_ed25519
 ```
 
@@ -67,7 +67,7 @@ Start-Service sshd
 ```
 Host video-entryway
     HostName 100.x.x.x        # Tailscale IP подъездного клиента
-    User Anton
+    User <username>
     IdentityFile ~/.ssh/id_ed25519
 ```
 
@@ -78,7 +78,7 @@ Tailscale IP стабилен — не меняется при смене роу
 С дев-машины (один раз):
 ```powershell
 # Скопировать публичный ключ на подъездный клиент
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh Anton@100.x.x.x "cat >> C:\Users\Anton\.ssh\authorized_keys"
+type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <username>@100.x.x.x "cat >> C:\Users\<username>\.ssh\authorized_keys"
 ```
 
 ---
@@ -93,12 +93,12 @@ Host video-server
 
 Host video-home
     HostName 192.168.1.XXX
-    User Anton
+    User <username>
     IdentityFile ~/.ssh/id_ed25519
 
 Host video-entryway
     HostName 100.x.x.x
-    User Anton
+    User <username>
     IdentityFile ~/.ssh/id_ed25519
 ```
 
@@ -119,7 +119,7 @@ Host video-entryway
 Пример `.env` на сервере:
 
 ```dotenv
-ALLOWED_IPS=109.252.161.0/24   # домашняя подсеть провайдера (/24 переживает смену последнего октета)
+ALLOWED_IPS=<домашняя-подсеть>/24   # домашняя подсеть провайдера (/24 переживает смену последнего октета)
 TRANSFER_PORT=8765
 TRANSFER_API_KEY=<secret>
 LABEL_UI_PORT=8789
@@ -149,7 +149,7 @@ ssh -N -R 2222:localhost:22 -o ServerAliveInterval=60 -o ExitOnForwardFailure=ye
 Host video-entryway-tunnel
     HostName localhost
     Port 2222
-    User Anton
+    User <username>
     ProxyJump video-server
     IdentityFile ~/.ssh/id_ed25519
 ```

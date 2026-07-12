@@ -90,9 +90,9 @@ conda run -n conda_video python scripts/bench/1_fps_bench.py --duration 60 ...
 ```powershell
 # 1. Переменные
 $env:PYTHONUTF8="1"
-$py = "C:\Users\Anton\miniconda3\envs\conda_video\python.exe"
-$out = "C:\Users\Anton\AppData\Local\Temp\bench_run.txt"
-$err = "C:\Users\Anton\AppData\Local\Temp\bench_err.txt"
+$py = "C:\Users\<username>\miniconda3\envs\conda_video\python.exe"
+$out = "C:\Users\<username>\AppData\Local\Temp\bench_run.txt"
+$err = "C:\Users\<username>\AppData\Local\Temp\bench_err.txt"
 
 # 2. Запуск (флаг -u = unbuffered, иначе файл будет пустым пока скрипт не закончится)
 $proc = Start-Process -FilePath $py `
@@ -102,7 +102,7 @@ $proc = Start-Process -FilePath $py `
 $proc.Id   # сохранить PID
 
 # 3. Мониторинг прогресса (в другом терминале или через Bash-инструмент)
-tail -f /c/Users/Anton/AppData/Local/Temp/bench_run.txt
+tail -f /c/Users/<username>/AppData/Local/Temp/bench_run.txt
 
 # 4. Проверка ошибок
 Get-Content $err

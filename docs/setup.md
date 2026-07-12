@@ -111,7 +111,7 @@ python -c "import fastapi; print('OK')"
 ### Полный путь к Python (Windows)
 
 ```
-C:\Users\Anton\miniconda3\envs\conda_video\python.exe
+C:\Users\<username>\miniconda3\envs\conda_video\python.exe
 ```
 
 ### Почему `conda` не находится в некоторых терминалах
@@ -119,7 +119,7 @@ C:\Users\Anton\miniconda3\envs\conda_video\python.exe
 `conda init` прописывает хук активации в профиль PowerShell:
 
 ```
-C:\Users\Anton\Documents\WindowsPowerShell\profile.ps1
+C:\Users\<username>\Documents\WindowsPowerShell\profile.ps1
 ```
 
 Профиль загружается только в **интерактивных** сессиях. Неинтерактивные сессии (скрипты, IDE, Claude Code) профиль не запускают → `conda` нет в PATH.
@@ -131,7 +131,7 @@ C:\Users\Anton\Documents\WindowsPowerShell\profile.ps1
 **1. Прямой путь — самый надёжный, работает везде:**
 
 ```powershell
-$py = "C:\Users\Anton\miniconda3\envs\conda_video\python.exe"
+$py = "C:\Users\<username>\miniconda3\envs\conda_video\python.exe"
 & $py scripts/cameras/5_diff_yolo_boxes_low.py
 & $py -m pytest tests/ -v
 ```
@@ -139,7 +139,7 @@ $py = "C:\Users\Anton\miniconda3\envs\conda_video\python.exe"
 **2. Через conda.exe по полному пути (форегранд):**
 
 ```powershell
-& "C:\Users\Anton\miniconda3\Scripts\conda.exe" run -n conda_video python scripts/...
+& "C:\Users\<username>\miniconda3\Scripts\conda.exe" run -n conda_video python scripts/...
 ```
 
 > `conda run` в фоне (с `Start-Process`) не работает — завершается с exit 255.  
@@ -148,7 +148,7 @@ $py = "C:\Users\Anton\miniconda3\envs\conda_video\python.exe"
 **3. Добавить conda в PATH на время сессии:**
 
 ```powershell
-$env:PATH = "C:\Users\Anton\miniconda3\condabin;" + $env:PATH
+$env:PATH = "C:\Users\<username>\miniconda3\condabin;" + $env:PATH
 conda activate conda_video
 # теперь python и pytest доступны напрямую
 ```

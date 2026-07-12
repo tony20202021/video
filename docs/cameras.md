@@ -176,7 +176,7 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
 2. **Через роутер**: DHCP-таблица в интерфейсе роутера, MAC-адрес камеры начинается на `DC:` или `AC:` (производитель XMTech)
 3. **nmap**:
    ```bash
-   nmap -p 554,8899,34567 192.168.1.0/24
+   nmap -p 554,8899,34567 192.168.X.0/24
    ```
    Открытые порты 554 или 8899 = iCSee камера
 
@@ -191,7 +191,7 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
 **Хранение** в проекте — файл `.env` (в `.gitignore`):
 
 ```
-CAM_01_URL=rtsp://192.168.1.101:554/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
+CAM_01_URL=rtsp://192.168.1.XXX:554/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 CAM_02_URL=rtsp://<external_ip>:8741/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 CAM_03_URL=rtsp://<external_ip>:8742/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
 CAM_04_URL=rtsp://<external_ip>:8743/user=admin&password=XXXX&channel=1&stream=1.sdp?real_stream
