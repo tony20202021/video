@@ -329,6 +329,13 @@ def train(
     best_val_acc = -1.0
     history = []
 
+    identify_dir = REPO_ROOT / ".models" / "identify"
+    identify_dir.mkdir(parents=True, exist_ok=True)
+    existing = sorted(identify_dir.glob("v*.onnx"))
+    next_v = len(existing) + 1
+    onnx_path = identify_dir / f"v{next_v}.onnx"
+    progress_path = onnx_path.with_name(f"v{next_v}_progress.json")
+
     for epoch in range(1, epochs + 1):
         # Фаза 2: вся сеть с середины обучения
         if has_pretrained and epoch == epochs // 2 + 1:
@@ -369,16 +376,19 @@ def train(
             best_val_acc = val_acc
             torch.save(model.state_dict(), output_dir / "best.pt")
 
+        progress_path.write_text(json.dumps({
+            "model_version": f"v{next_v}",
+            "epoch": epoch,
+            "epochs": epochs,
+            "best_val_acc": round(best_val_acc, 4),
+            "history": history,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
     # Загружаем лучшие веса
     model.load_state_dict(torch.load(output_dir / "best.pt", map_location=device))
     model.eval()
 
     # Экспорт в ONNX
-    identify_dir = REPO_ROOT / ".models" / "identify"
-    identify_dir.mkdir(parents=True, exist_ok=True)
-    existing = sorted(identify_dir.glob("v*.onnx"))
-    next_v = len(existing) + 1
-    onnx_path = identify_dir / f"v{next_v}.onnx"
 
     dummy = torch.zeros(1, 3, 224, 224, device=device)
     torch.onnx.export(
@@ -432,7 +442,7 @@ def train(
         "eval": {"full": eval_full, "val": eval_val},
     }
 
-    results_path = (dataset_dir.parent / "training_results.json") if dataset_dir else (output_dir / "training_results.json")
+    results_path = onnx_path.with_name(onnx_path.stem + "_training_results.json")
     results_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"\nЛучший val_acc: {best_val_acc:.3f}")
