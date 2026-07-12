@@ -23,13 +23,13 @@ from common.utils.motion_utils import (
 # ─── redact_url ───────────────────────────────────────────────────────────────
 
 def test_redact_url_query_style():
-    url = "rtsp://192.168.1.9:554/user=hxdx&password=secret123&channel=0"
+    url = "rtsp://192.168.0.42:554/user=admin&password=secret123&channel=0"
     assert "secret123" not in redact_url(url)
     assert "password=***" in redact_url(url)
 
 
 def test_redact_url_basic_auth_style():
-    url = "rtsp://admin:p@ssw0rd@192.168.1.9:554/stream"
+    url = "rtsp://admin:p@ssw0rd@192.168.0.42:554/stream"
     out = redact_url(url)
     assert "p@ssw0rd" not in out
     assert "***:***@" in out
@@ -46,7 +46,7 @@ def test_redact_url_empty():
     ("# comment", True),
     ("rtsp://<external_ip>:554/stream", True),
     ("http://192.168.1.1/stream", True),
-    ("rtsp://192.168.1.9:554/stream", False),
+    ("rtsp://192.168.0.42:554/stream", False),
 ])
 def test_skip_url(url, expected):
     assert skip_url(url) == expected
