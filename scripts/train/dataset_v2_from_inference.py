@@ -3,7 +3,7 @@
 
   1 — ошибки: labels.json класс ≠ подкаталог (ручная переразметка)
   2 — uncertain: файл размечен вручную в labels.json
-  3 — серая зона: CLASSIFY_CONF ≤ conf < CLASSIFY_CONF_HIGH, есть в labels.json
+  3 — серая зона: conf < CLASSIFY_CONF_HIGH, есть в labels.json
   5 — псевдо-метки: conf ≥ CLASSIFY_CONF_HIGH, модель права (без ручной проверки)
   8 — margin: conf_top1 − conf_top2 < MARGIN_THRESH, есть в labels.json
 
@@ -29,6 +29,7 @@ import shutil
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from math import prod
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -149,6 +150,97 @@ def _apply_quota(candidates: list[dict], max_per_class: int) -> list[dict]:
     return result
 
 
+def _count_class_sizes(output_dir: Path) -> dict[str, int]:
+    sizes: dict[str, int] = {}
+    for cls in _VALID_CLASSES:
+        d = output_dir / cls
+        sizes[cls] = len(list(d.glob("*.jpg"))) if d.is_dir() else 0
+    return sizes
+
+
+def _compute_target(sizes: dict[str, int], mode: str) -> float:
+    vals = [v for v in sizes.values() if v > 0]
+    if not vals:
+        return 0.0
+    if mode == "max":
+        return float(max(sizes.values()))
+    elif mode == "mean":
+        return sum(sizes.values()) / len(sizes)
+    elif mode == "median":
+        s = sorted(sizes.values())
+        n = len(s)
+        return (s[n // 2 - 1] + s[n // 2]) / 2.0 if n % 2 == 0 else float(s[n // 2])
+    else:  # geomean
+        return prod(vals) ** (1.0 / len(vals))
+
+
+def _split_errors_with_quota(
+    candidates: list[dict],
+    output_dir: Path,
+    conf_high: float,
+    target_mode: str,
+) -> tuple[list[dict], float]:
+    """Split strat-1 into strat-7 (confident, always include) + strat-1 (deficit quota).
+
+    Returns (new_candidates, target_size).
+    """
+    non_errors = [c for c in candidates if c["strategy"] != 1]
+    errors = [c for c in candidates if c["strategy"] == 1]
+    if not errors:
+        return candidates, 0.0
+
+    current = _count_class_sizes(output_dir)
+    target = _compute_target(current, target_mode)
+
+    # If dataset is empty there's nothing to balance against — keep everything
+    if target == 0.0:
+        result = list(non_errors)
+        for c in errors:
+            c = dict(c)
+            try:
+                if float(c["conf"]) >= conf_high:
+                    c["strategy"] = 7
+            except (TypeError, ValueError):
+                pass
+            result.append(c)
+        return result, target
+
+    confident: list[dict] = []
+    uncertain: list[dict] = []
+    for c in errors:
+        try:
+            c_conf = float(c["conf"])
+        except (TypeError, ValueError):
+            c_conf = None
+        if c_conf is not None and c_conf >= conf_high:
+            c = dict(c)
+            c["strategy"] = 7
+            confident.append(c)
+        else:
+            c = dict(c)
+            # score: prefer high-conf errors in underrepresented classes
+            c_conf_f = c_conf if c_conf is not None else 0.5
+            cur = max(1.0, float(current.get(c["true_class"], 0)))
+            c["_score"] = c_conf_f * (target / cur)
+            uncertain.append(c)
+
+    uncertain.sort(key=lambda x: -x["_score"])
+
+    quota_used: dict[str, int] = defaultdict(int)
+    selected: list[dict] = []
+    for c in uncertain:
+        cls = c["true_class"]
+        deficit = max(0, int(target) - current.get(cls, 0))
+        if deficit > 0 and quota_used[cls] < deficit:
+            selected.append(c)
+            quota_used[cls] += 1
+
+    for c in selected:
+        c.pop("_score", None)
+
+    return non_errors + confident + selected, target
+
+
 # ── Strategy collectors ───────────────────────────────────────────────────────
 
 def _collect_from_labels(
@@ -181,6 +273,17 @@ def _collect_from_labels(
     return result
 
 
+def _resolve_src(date_dir: Path, out_class: str, filename: str) -> Path | None:
+    """Ищет файл кропа: сначала напрямую, потом в unique/ подкаталоге."""
+    for candidate in (
+        date_dir / out_class / filename,
+        date_dir / "unique" / out_class / filename,
+    ):
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
 def _collect_from_csv(
     date_dir: Path,
     csv_rows: list[dict],
@@ -204,8 +307,8 @@ def _collect_from_csv(
         if not filename or not out_class:
             continue
 
-        src = (date_dir / out_class / filename).resolve()
-        if not src.exists():
+        src = _resolve_src(date_dir, out_class, filename)
+        if src is None:
             continue
 
         abs_str = str(src)
@@ -217,8 +320,9 @@ def _collect_from_csv(
         except ValueError:
             conf_2nd = margin = None
 
-        # Стратегия 3: серая зона, вручную размечено
-        if (3 in strategies and conf_low <= conf < conf_high
+        # Стратегия 3: серая зона (conf < conf_high), вручную размечено
+        # Нижняя граница убрана: покрываем также случай conf < conf_low (стрт 4 gap)
+        if (3 in strategies and conf < conf_high
                 and true_in_json is not None and true_in_json in _VALID_CLASSES):
             result.append({
                 "strategy": 3, "src": src, "filename": filename,
@@ -275,6 +379,11 @@ def main() -> int:
                         help="Квота: максимум файлов на класс")
     parser.add_argument("--strategies",   default="1,2,3,5,8",
                         help="Стратегии через запятую (default: 1,2,3,5,8)")
+    parser.add_argument("--target-mode", default="geomean",
+                        choices=["geomean", "median", "mean", "max"],
+                        help="Целевой размер класса для квоты ошибок (default: geomean)")
+    parser.add_argument("--no-error-quota", action="store_true",
+                        help="Не применять квоту дефицита для стратегии 1 (включить все ошибки)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Не копировать, только показать статистику")
     args = parser.parse_args()
@@ -307,6 +416,26 @@ def main() -> int:
     logger.info("")
 
     # ── Collect ───────────────────────────────────────────────────────────────
+    # Индекс conf по абсолютному пути — для обогащения стрт 1 данными из CSV
+    csv_conf: dict[str, tuple] = {}
+    for row in csv_rows:
+        try:
+            c_val = float(row["group_conf"])
+        except (KeyError, ValueError):
+            continue
+        fn = row.get("crop", "")
+        oc = row.get("out_class", "")
+        if not fn or not oc:
+            continue
+        src = _resolve_src(date_dir, oc, fn)
+        if src:
+            try:
+                c2 = float(row["conf_2nd"]) if row.get("conf_2nd") else None
+                mg = float(row["margin"])   if row.get("margin")   else None
+            except ValueError:
+                c2 = mg = None
+            csv_conf[str(src)] = (c_val, c2, mg)
+
     candidates: list[dict] = []
     candidates += _collect_from_labels(labels, strategies)
     candidates += _collect_from_csv(
@@ -323,6 +452,23 @@ def main() -> int:
             seen[key] = c
     candidates = list(seen.values())
 
+    # Обогащаем стрт 1 данными conf из CSV (labels-only кандидаты не имеют conf)
+    if 1 in strategies and csv_conf:
+        enriched = []
+        for c in candidates:
+            if c["strategy"] == 1 and c["conf"] == "":
+                key = str(c["src"])
+                if key in csv_conf:
+                    c_val, c2, mg = csv_conf[key]
+                    c = dict(c)
+                    c["conf"] = c_val
+                    if c2 is not None:
+                        c["conf_2nd"] = c2
+                    if mg is not None:
+                        c["margin"] = mg
+            enriched.append(c)
+        candidates = enriched
+
     # Временна́я дедупликация для стратегии 5
     s5    = [c for c in candidates if c["strategy"] == 5]
     other = [c for c in candidates if c["strategy"] != 5]
@@ -331,6 +477,20 @@ def main() -> int:
         s5 = _dedup_temporal(s5, args.dedup_min)
         logger.info("  Стратегия 5: дедупликация %d → %d (окно %dмин)", before, len(s5), args.dedup_min)
     candidates = other + s5
+
+    # Квота ошибок: стрт 1 → стрт 7 (уверенные) + стрт 1 (дефицит-квота)
+    if 1 in strategies and not args.no_error_quota:
+        before_err = len([c for c in candidates if c["strategy"] == 1])
+        out_resolved = args.output.resolve()
+        candidates, target_val = _split_errors_with_quota(
+            candidates, out_resolved, args.conf_high, args.target_mode
+        )
+        after_s1 = len([c for c in candidates if c["strategy"] == 1])
+        after_s7 = len([c for c in candidates if c["strategy"] == 7])
+        logger.info(
+            "  Квота ошибок (target=%s=%.0f): стрт 7: %d  стрт 1: %d  (было 1: %d)",
+            args.target_mode, target_val, after_s7, after_s1, before_err,
+        )
 
     # Квота на класс (сортируем по приоритету перед применением)
     if args.max_per_class:

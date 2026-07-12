@@ -386,8 +386,8 @@ function render() {
 
   crops.forEach((f, i) => {
     const lbl = labels[f] || '—';
-    if (!groups[lbl]) groups[lbl] = [];
-    groups[lbl].push(i);
+    const key = ORDER.includes(lbl) ? lbl : '—';
+    groups[key].push(i);
   });
 
   const sections = [...ORDER, '—'].filter(k => groups[k] && groups[k].length);
@@ -923,11 +923,12 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         if crop_path and crop_path not in labels:
             labels[crop_path] = v
 
+    _classes = classes or []
+    _valid_set = set(_classes)
     if unlabeled_only:
-        crops = [c for c in crops if c not in labels]
+        crops = [c for c in crops if c not in labels or labels[c] not in _valid_set]
 
     current = 0
-    _classes = classes or []
 
     @app.route("/")
     def index():
@@ -1072,6 +1073,8 @@ def main() -> int:
                         help="Расширения файлов через запятую (default: jpg)")
     parser.add_argument("--probs", action="store_true",
                         help="Показывать вероятности из classifications.csv")
+    parser.add_argument("--probs-csv", type=Path, default=None,
+                        help="Путь к CSV с вероятностями (переопределяет --probs)")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -1086,7 +1089,11 @@ def main() -> int:
     allowed_ips = parse_allowed_ips(_ENV.get("ALLOWED_IPS", ""))
 
     probs: dict | None = None
-    if args.probs:
+    if args.probs_csv:
+        csv_path = args.probs_csv
+        probs = _load_probs(csv_path, classes)
+        print(f"Вероятности: {csv_path}  ({len(probs)} записей)")
+    elif args.probs:
         csv_path = labels_path.parent / "classifications.csv"
         probs = _load_probs(csv_path, classes)
         print(f"Вероятности: {csv_path}  ({len(probs)} записей)")

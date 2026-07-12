@@ -165,6 +165,8 @@ def _load_identifier(model_path: Path | None, config_path: Path):
                 logger.warning("  [ML] config.yaml: нет models.identify")
                 return None
             path = Path(identify_path)
+            if not path.is_absolute():
+                path = config_path.parent / path
         except Exception as e:
             logger.warning(f"  [ML] Ошибка чтения {config_path}: {e}")
             return None
@@ -182,15 +184,73 @@ def _load_identifier(model_path: Path | None, config_path: Path):
 
 
 def _identify(ident, bgr_crop, *, identify_conf: float):
-    """Возвращает (person_id, id_conf, out_class).
+    """Возвращает (person_id, id_conf, out_class, probs_dict).
 
     out_class — person_id если уверенность >= identify_conf, иначе unknown_resident.
     """
     if ident is None:
-        return None, 0.0, UNKNOWN_CLASS
-    person_id, id_conf = ident.identify(bgr_crop, threshold=identify_conf)
+        return None, 0.0, UNKNOWN_CLASS, {}
+    person_id, id_conf, probs = ident.identify_with_probs(bgr_crop, threshold=identify_conf)
     out_class = person_id if person_id else UNKNOWN_CLASS
-    return person_id, id_conf, out_class
+    return person_id, id_conf, out_class, probs
+
+
+# ─── Per-date output files ───────────────────────────────────────────────────
+
+def _save_date_outputs(run_id_log: list[dict], inference_date_dir: Path) -> None:
+    """Сохраняет выходные файлы М2 в директорию inference.
+
+    identifications.csv → inference_date_dir  (вероятности по всем классам М2)
+    labels.json         → inference_date_dir  (для label_ui)
+    """
+    if not run_id_log:
+        return
+
+    inference_date_dir.mkdir(parents=True, exist_ok=True)
+
+    # identifications.csv — в директорию М2 inference, накапливается между запусками
+    prob_cols = sorted(k for k in run_id_log[0] if k.startswith("p_"))
+    fieldnames = (
+        ["mono_s", "ts_epoch", "run_name", "cam", "crop",
+         "person_id", "id_conf", "conf_2nd", "margin"]
+        + prob_cols
+        + ["out_class"]
+    )
+    csv_path = inference_date_dir / "identifications.csv"
+    existing_crops: set[str] = set()
+    if csv_path.exists():
+        try:
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    existing_crops.add(row["crop"])
+        except Exception:
+            pass
+    new_rows = [r for r in run_id_log if r["crop"] not in existing_crops]
+    write_header = not csv_path.exists() or not existing_crops
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        if write_header:
+            w.writeheader()
+        w.writerows(new_rows)
+    total_csv = len(existing_crops) + len(new_rows)
+    logger.info(f"identifications.csv → {csv_path}  (+{len(new_rows)}, итого ~{total_csv})")
+
+
+    # labels.json in inference output dir — built from subdir structure for label_ui review
+    if inference_date_dir and inference_date_dir.is_dir():
+        inf_labels: dict[str, str] = {}
+        for person_dir in sorted(inference_date_dir.iterdir()):
+            if not person_dir.is_dir():
+                continue
+            label = "" if person_dir.name == UNKNOWN_CLASS else person_dir.name
+            for f in sorted(person_dir.glob("*.jpg")):
+                inf_labels[str(f)] = label
+        inf_labels_path = inference_date_dir / "labels.json"
+        inf_labels_path.write_text(
+            _json.dumps({"version": 1, "labels": inf_labels}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(f"labels.json          → {inf_labels_path}  ({len(inf_labels)} записей)")
 
 
 # ─── Timestamp from crop filename ────────────────────────────────────────────
@@ -433,6 +493,7 @@ def main() -> int:
 
     for run_dir, parent_stem in run_pairs:
         run_name = run_dir.name
+        run_id_log: list[dict] = []
         _ps = parent_stem or run_dir.parent.name
         label = f"{_ps}/{run_name}"
         logger.info(f"── {label} ──────────────────────────────────────")
@@ -470,7 +531,7 @@ def main() -> int:
             if bgr is None:
                 continue
 
-            person_id, id_conf, out_class = _identify(
+            person_id, id_conf, out_class, probs = _identify(
                 ident, bgr, identify_conf=args.identify_conf
             )
             identify_ms = (time.monotonic() - t0) * 1000
@@ -484,20 +545,35 @@ def main() -> int:
             shutil.copy2(crop_path, dest / crop_path.name)
 
             ts_ep = _crop_ts_epoch(crop_path)
-            id_log.append({
+            sorted_probs = sorted(probs.values(), reverse=True)
+            conf_2nd = round(sorted_probs[1], 4) if len(sorted_probs) > 1 else 0.0
+            entry = {
                 "mono_s":    round(t0 - t_start, 3),
                 "ts_epoch":  ts_ep,
-                "rel_path":  str(rel_cam),
+                "run_name":  run_name,
+                "cam":       str(rel_cam),
                 "crop":      crop_path.name,
+                "crop_abs":  str(crop_path),
                 "person_id": person_id or "",
-                "id_conf":   round(id_conf, 3),
+                "id_conf":   round(id_conf, 4),
+                "conf_2nd":  conf_2nd,
+                "margin":    round(id_conf - conf_2nd, 4),
                 "out_class": out_class,
-            })
+            }
+            entry.update({f"p_{cls}": p for cls, p in probs.items()})
+            run_id_log.append(entry)
+            id_log.append(entry)
             grand_identified[out_class] += 1
             grand_total += 1
 
         logger.info(f"  → обработано: {len(crops) - grand_skipped}  пропущено (уже есть): {grand_skipped}")
         logger.info('')
+
+        # Save identifications.csv and labels.json into the input date directory
+        if run_id_log:
+            inf_date_dir = (images_root / run_name) if flat_format else None
+            if inf_date_dir is not None:
+                _save_date_outputs(run_id_log, inf_date_dir)
 
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
@@ -505,11 +581,12 @@ def main() -> int:
     if id_log:
         csv_path = meta_dir / "identifications.csv"
         meta_dir.mkdir(parents=True, exist_ok=True)
+        # Build fieldnames dynamically (prob columns depend on model classes)
+        prob_cols = [k for k in id_log[0] if k.startswith("p_")]
+        fieldnames = ["mono_s", "ts_epoch", "run_name", "cam", "crop",
+                      "person_id", "id_conf", "conf_2nd", "margin"] + prob_cols + ["out_class"]
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=[
-                "mono_s", "ts_epoch", "rel_path", "crop",
-                "person_id", "id_conf", "out_class",
-            ])
+            w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             w.writeheader()
             w.writerows(id_log)
         logger.info(f"identifications.csv: {len(id_log)} записей → {csv_path}")

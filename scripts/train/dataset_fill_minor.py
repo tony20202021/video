@@ -63,6 +63,9 @@ def main() -> int:
                         help="Новый датасет (напр. .data/groups/v2/dataset)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Не копировать, только показать что изменилось бы")
+    parser.add_argument("--always-fill", action="store_true",
+                        help="Копировать все файлы из prev независимо от счётчика new "
+                             "(объединение: old ∪ new, дедуп по имени файла)")
     args = parser.parse_args()
 
     prev_dir = args.prev_dataset.resolve()
@@ -99,13 +102,17 @@ def main() -> int:
             if prev_count == 0:
                 continue
 
-            if new_count >= prev_count:
+            if not args.always_fill and new_count >= prev_count:
                 logger.info("  %s: new=%d >= prev=%d — ок", cls, new_count, prev_count)
                 continue
 
-            need = prev_count - new_count
-            logger.info("  %s: new=%d < prev=%d → копируем недостающие (до %d файлов)",
-                        cls, new_count, prev_count, need)
+            if args.always_fill:
+                logger.info("  %s: new=%d, prev=%d → объединяем (old ∪ new)",
+                            cls, new_count, prev_count)
+            else:
+                need = prev_count - new_count
+                logger.info("  %s: new=%d < prev=%d → копируем недостающие (до %d файлов)",
+                            cls, new_count, prev_count, need)
 
             if args.dry_run:
                 continue

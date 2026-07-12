@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Финальная фильтрация scene_pool после авторазметки (шаг 1_b_3).
+# Экспорт размеченных сцен + фильтрация (шаг 1_b_3).
 #
-# Тот же filter_residents.py, но дефолты для scene_pool:
-#   - путь: .data/residents/$RESIDENTS_VER/scene_pool
-#   - --min-diff 40  (без diff-фильтра при сборке → теперь нужен строже)
+# 1. Читает labels.json из scene_pool
+# 2. Копирует файлы в training_export/<person_id>/
+# 3. Запускает filter_residents.py на каждой классовой подпапке
 #
-# Шаг 4 из 4 в пайплайне полу-авторазметки:
-#   1_b_1_collect_scenes.sh       → scene_pool/
-#   1_b_2_propagate_scenes.sh     → labels.json
-#   ручная разметка representatives/ при необходимости
-#   1_b_3_filter_scenes.sh [этот] → финальная дедупликация
+# ВАЖНО: filter_residents.py работает in-place на training_export, НЕ на scene_pool.
+#
+# Шаг 3 из 4 в пайплайне полу-авторазметки:
+#   1_b_1_collect_scenes.sh     → scene_pool/
+#   1_b_2_propagate_scenes.sh   → labels.json
+#   ручная разметка representatives/
+#   1_b_3_filter_scenes.sh [этот] → training_export/<person_id>/
 #   3_train_residents.sh          → .models/identify/v<N>.onnx
 #
 # Usage:
@@ -21,7 +23,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 PYTHON="$HOME/miniconda3/envs/conda_video/bin/python"
-SCRIPT="$REPO/scripts/train/filter_residents.py"
+EXPORT_SCRIPT="$REPO/scripts/train/4_export_scenes.py"
+FILTER_SCRIPT="$REPO/scripts/train/filter_residents.py"
 
 export PYTHONIOENCODING=utf-8
 
@@ -32,20 +35,48 @@ _ef() {
 }
 
 RESIDENTS_VER="$(_ef RESIDENTS_VER v1)"
-DIR="$REPO/.data/residents/$RESIDENTS_VER/scene_pool"
+POOL="$REPO/.data/residents/$RESIDENTS_VER/scene_pool"
+OUT="$REPO/.data/residents/$RESIDENTS_VER/training_export"
 MIN_DIFF=40
-EXTRA_ARGS=()
+DRY_RUN=0
+FILTER_EXTRA=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --min-diff) MIN_DIFF="$2"; shift 2 ;;
-        --dir)      DIR="$2";      shift 2 ;;
-        *) EXTRA_ARGS+=("$1"); shift ;;
+        --min-diff)  MIN_DIFF="$2"; shift 2 ;;
+        --pool)      POOL="$2";     shift 2 ;;
+        --out)       OUT="$2";      shift 2 ;;
+        --dry-run)   DRY_RUN=1; FILTER_EXTRA+=("--dry-run"); shift ;;
+        *) FILTER_EXTRA+=("$1"); shift ;;
     esac
 done
 
 echo "=== 1_b_3_filter_scenes ==="
-echo "  dir:      $DIR"
+echo "  pool:     $POOL"
+echo "  out:      $OUT"
 echo "  min-diff: $MIN_DIFF"
+[[ "$DRY_RUN" -eq 1 ]] && echo "  [dry-run]"
 echo ""
-exec "$PYTHON" "$SCRIPT" "$DIR" --min-diff "$MIN_DIFF" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+
+# Step 1: export labeled files to class-organized output directory
+EXPORT_ARGS=("--pool" "$POOL" "--out" "$OUT")
+[[ "$DRY_RUN" -eq 1 ]] && EXPORT_ARGS+=("--dry-run")
+"$PYTHON" "$EXPORT_SCRIPT" "${EXPORT_ARGS[@]}"
+
+[[ "$DRY_RUN" -eq 1 ]] && echo "" && echo "[dry-run] фильтрация пропущена" && exit 0
+
+echo ""
+echo "--- фильтрация по классам ---"
+
+# Step 2: run filter_residents.py on each class subdirectory
+for class_dir in "$OUT"/*/; do
+    [[ -d "$class_dir" ]] || continue
+    class_name="$(basename "$class_dir")"
+    n_files=$(find "$class_dir" -maxdepth 1 -name '*.jpg' | wc -l)
+    echo ""
+    echo "  [$class_name] ($n_files файлов)"
+    "$PYTHON" "$FILTER_SCRIPT" "$class_dir" --min-diff "$MIN_DIFF" "${FILTER_EXTRA[@]+"${FILTER_EXTRA[@]}"}"
+done
+
+echo ""
+echo "=== готово ==="

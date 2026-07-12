@@ -105,7 +105,7 @@ while true; do
     done
 
     if [[ "$_any" -eq 0 ]]; then
-        echo "$(_ts)  INFO      ($SCRIPT_NAME) Кропов нет — ожидание ${POLL_SEC}s…"
+        echo "$(_ts)  INFO      ($SCRIPT_NAME) Кропов нет в $INFERENCE_IMAGES — ожидание ${POLL_SEC}s…"
     fi
 
     if [[ "$ONCE" -eq 1 ]]; then

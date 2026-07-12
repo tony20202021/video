@@ -23,20 +23,22 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-# # groups
-# INPUT="$REPO/.data/groups/v1/inference/images/20260707"
-# LABELS="$REPO/.data/groups/v1/inference/images/20260707/labels.json"
-# DATASET="$REPO/.data/groups/v1/dataset"
+# groups
+INPUT="$REPO/.data/groups/v1/inference/images/20260707"
+LABELS="$REPO/.data/groups/v1/inference/images/20260707/labels.json"
+DATASET="$REPO/.data/groups/v1/dataset"
 
-# residents v1
-INPUT="$REPO/.data/residents/v1/scene_pool/representatives"
-LABELS="$REPO/.data/residents/v1/scene_pool/labels.json"
-DATASET="$REPO/.data/residents/v1/dataset"
+# # residents v1
+# INPUT="$REPO/.data/residents/v1/inference/images/20260711"
+# LABELS="$REPO/.data/residents/v1/inference/images/20260711/labels.json"
+# DATASET="$REPO/.data/residents/v1/dataset"
+# PROBS_CSV="$REPO/.data/residents/v1/inference/images/20260711/identifications.csv"
 
 PORT="${LABEL_UI_PORT:-8750}"
-UNLABELED_ONLY=0
+UNLABELED_ONLY=1
 EXT="jpg"
 PROBS=1
+PROBS_CSV=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
         --unlabeled-only) UNLABELED_ONLY=1; shift ;;
         --all)            UNLABELED_ONLY=0; shift ;;
         --probs)          PROBS=1; shift ;;
+        --probs-csv)      PROBS_CSV="$2"; shift 2 ;;
         *) echo "[!] Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
@@ -70,6 +73,7 @@ args=("--input" "$INPUT" "--labels" "$LABELS" "--port" "$PORT")
 [[ -n "$DATASET" ]]           && args+=("--dataset" "$DATASET")
 [[ -n "$EXT" ]]               && args+=("--ext" "$EXT")
 [[ "$UNLABELED_ONLY" -eq 1 ]] && args+=("--unlabeled-only")
-[[ "$PROBS"          -eq 1 ]] && args+=("--probs")
+[[ -n "$PROBS_CSV"   ]]       && args+=("--probs-csv" "$PROBS_CSV")
+[[ -z "$PROBS_CSV" && "$PROBS" -eq 1 ]] && args+=("--probs")
 
 exec "$PYTHON" "$SCRIPT" "${args[@]}"

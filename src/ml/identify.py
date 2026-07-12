@@ -78,20 +78,30 @@ class PersonIdentifier:
         bgr_crop: np.ndarray,
         threshold: float = 0.70,
     ) -> tuple[str | None, float]:
-        """Возвращает (person_id, confidence) или (None, best_conf) если ниже порога.
+        """Возвращает (person_id, confidence) или (None, best_conf) если ниже порога."""
+        person_id, conf, _ = self.identify_with_probs(bgr_crop, threshold)
+        return person_id, conf
 
-        Если модель не загружена или нет классов — (None, 0.0).
+    def identify_with_probs(
+        self,
+        bgr_crop: np.ndarray,
+        threshold: float = 0.70,
+    ) -> tuple[str | None, float, dict[str, float]]:
+        """Возвращает (person_id_or_None, best_conf, {class: prob}).
+
+        Если модель не загружена или нет классов — (None, 0.0, {}).
         """
         if not self.ready:
-            return None, 0.0
+            return None, 0.0, {}
         blob = _preprocess(bgr_crop)
         raw = self._sess.run(None, {self._input_name: blob})[0][0]
         probs = _softmax(raw)
         idx = int(np.argmax(probs))
         conf = float(probs[idx])
+        probs_dict = {cls: round(float(p), 4) for cls, p in zip(self._classes, probs)}
         if conf >= threshold:
-            return self._classes[idx], conf
-        return None, conf
+            return self._classes[idx], conf, probs_dict
+        return None, conf, probs_dict
 
 
 def _preprocess(bgr: np.ndarray) -> np.ndarray:
