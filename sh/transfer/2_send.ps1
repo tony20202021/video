@@ -26,15 +26,20 @@ param(
     [string[]] $ExtraArgs = @()
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 $Repo   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Env    = "conda_video"
 $Python = "$env:USERPROFILE\miniconda3\envs\$Env\python.exe"
 $Script = "$Repo\scripts\transfer\client.py"
 
-$env:PYTHONIOENCODING = "utf-8"
-chcp 65001 | Out-Null
-$OutputEncoding = [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$env:PYTHONIOENCODING  = "utf-8"
+$env:PYTHONUNBUFFERED = "1"
+try { chcp 65001 | Out-Null } catch {}
+try {
+    $OutputEncoding            = [System.Text.Encoding]::UTF8
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::InputEncoding  = [System.Text.Encoding]::UTF8
+} catch {}
 
 if (-not $WatchDir) {
     $WatchDir = Join-Path $Repo ".output\pipeline\1_motion_diff"
@@ -46,8 +51,13 @@ if ($RunRoot -and -not [System.IO.Path]::IsPathRooted($RunRoot)) {
     $RunRoot = "$Repo\$RunRoot"
 }
 
+$LogDir  = Join-Path $Repo ".output\logs"
+$LogFile = Join-Path $LogDir "2_send.log"
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+
 Write-Host "=== 2_send (transfer watch) ===" -ForegroundColor Cyan
 Write-Host "WatchDir: $WatchDir"
+Write-Host "Log:      $LogFile"
 
 $AllArgs = @("watch", $WatchDir)
 if ($RunRoot)  { $AllArgs += @("--run-root", $RunRoot) }
@@ -58,4 +68,23 @@ if ($Key)      { $AllArgs += @("--key",      $Key) }
 if ($Ext)      { $AllArgs += @("--ext",      $Ext) }
 $AllArgs += $ExtraArgs
 
-& $Python $Script @AllArgs
+# StreamWriter for UTF-8 log (Tee-Object has no -Encoding in PS 5.x;
+# FileShare.ReadWrite avoids lock conflict when multiple instances start simultaneously)
+$fs     = [System.IO.FileStream]::new($LogFile,
+              [System.IO.FileMode]::Append,
+              [System.IO.FileAccess]::Write,
+              [System.IO.FileShare]::ReadWrite)
+$writer = [System.IO.StreamWriter]::new($fs, [System.Text.Encoding]::UTF8)
+$writer.AutoFlush = $true
+$startTs = Get-Date -Format "HH:mm:ss"
+$writer.WriteLine("$startTs  INFO      === 2_send start ===")
+try {
+    & $Python $Script @AllArgs 2>&1 | ForEach-Object {
+        Write-Host $_
+        $writer.WriteLine($_)
+    }
+} finally {
+    $stopTs = Get-Date -Format "HH:mm:ss"
+    $writer.WriteLine("$stopTs  INFO      === 2_send stop ===")
+    $writer.Close()
+}

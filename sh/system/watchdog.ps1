@@ -1,52 +1,55 @@
-﻿# watchdog.ps1 — мониторинг и автоперезапуск процессов видеопайплайна
+# watchdog.ps1 — monitor and auto-restart Windows pipeline scripts
 #
-# Запускает и перезапускает при сбое/гибернации:
-#   Transfer Server  (scripts/transfer/server.py)
-#   Motion Diff      (scripts/pipeline/1_motion_diff.py)
-#   Transfer Client  (scripts/transfer/client.py watch)
+# Manages:
+#   sh\pipeline\1_motion_diff.ps1  - motion detection from cameras
+#   sh\transfer\2_send.ps1         - send files to Linux transfer server
 #
-# Каждый процесс пишет в свой лог-файл (logs\*.log).
+# Each script handles its own logging:
+#   1_motion_diff: .output\pipeline\1_motion_diff\meta\<date>\run.log
+#   2_send:        .output\logs\2_send.log
+#   watchdog:      .output\logs\watchdog.log
 #
 # Usage:
-#   .\sh\system\watchdog.ps1                  — запустить watchdog (окно остаётся открытым)
-#   .\sh\system\watchdog.ps1 -Register        — зарегистрировать как задачу при пробуждении системы
-#   .\sh\system\watchdog.ps1 -Unregister      — удалить задачу
+#   .\sh\system\watchdog.ps1             - start watchdog (stays in foreground)
+#   .\sh\system\watchdog.ps1 -Register   - register as scheduled task (boot + wake)
+#   .\sh\system\watchdog.ps1 -Unregister - remove scheduled task
 
 param(
     [switch] $Register,
     [switch] $Unregister,
-    [int]    $CheckSec = 30       # интервал проверки живости процессов
+    [int]    $CheckSec = 30
 )
 
-$ErrorActionPreference = "Stop"
-$Repo    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$Conda   = "conda_video"
-$Python  = "$env:USERPROFILE\miniconda3\envs\$Conda\python.exe"
-$LogDir  = "$Repo\logs"
+$ErrorActionPreference = "SilentlyContinue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding            = [System.Text.Encoding]::UTF8
+
+$Repo     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $TaskName = "VideoWatchdog"
+$LogDir   = Join-Path $Repo ".output\logs"
+$LogFile  = Join-Path $LogDir "watchdog.log"
 
-$env:PYTHONIOENCODING = "utf-8"
+$Watch = @(
+    @{ file = "1_motion_diff.ps1"; path = "$Repo\sh\pipeline\1_motion_diff.ps1" },
+    @{ file = "2_send.ps1";        path = "$Repo\sh\transfer\2_send.ps1" }
+)
 
-# ─── Scheduled Task ────────────────────────────────────────────────────────────
+# --- Scheduled Task registration ---
 
 if ($Unregister) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Host "Задача '$TaskName' удалена."
+    Write-Host "Task '$TaskName' removed."
     exit
 }
 
 if ($Register) {
     $ps   = (Get-Command powershell.exe).Source
     $self = $PSCommandPath
-    $action = New-ScheduledTaskAction -Execute $ps `
-        -Argument "-NonInteractive -WindowStyle Hidden -File `"$self`""
-    # Запуск при старте системы
-    $t1 = New-ScheduledTaskTrigger -AtStartup
-    # Запуск при пробуждении: через XML (нет прямого командлета)
-    $xml = @"
+    $xml  = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
+    <BootTrigger><Enabled>true</Enabled><Delay>PT10S</Delay></BootTrigger>
     <EventTrigger>
       <Enabled>true</Enabled>
       <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="System"&gt;&lt;Select Path="System"&gt;*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
@@ -55,11 +58,12 @@ if ($Register) {
   <Actions Context="Author">
     <Exec>
       <Command>$ps</Command>
-      <Arguments>-NonInteractive -WindowStyle Hidden -File "$self"</Arguments>
+      <Arguments>-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "$self"</Arguments>
     </Exec>
   </Actions>
   <Principals>
     <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
@@ -68,6 +72,7 @@ if ($Register) {
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>5</Count></RestartOnFailure>
   </Settings>
 </Task>
 "@
@@ -75,99 +80,54 @@ if ($Register) {
     $xml | Out-File $xmlPath -Encoding Unicode
     schtasks /Create /TN $TaskName /XML $xmlPath /F | Out-Null
     Remove-Item $xmlPath -ErrorAction SilentlyContinue
-    Write-Host "Задача '$TaskName' зарегистрирована (при старте системы + при пробуждении)."
-    Write-Host "Для удаления: .\sh\system\watchdog.ps1 -Unregister"
+    Write-Host "Task '$TaskName' registered (boot + wake from sleep)."
+    Write-Host "To remove: .\sh\system\watchdog.ps1 -Unregister"
     exit
 }
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# --- Helpers ---
+
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Log([string]$msg) {
-    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Write-Host "[$ts] $msg"
+    $ts   = Get-Date -Format "HH:mm:ss"
+    $line = "$ts  $msg"
+    Write-Host $line
+    Add-Content -Path $LogFile -Value $line -Encoding UTF8
 }
 
-New-Item -ItemType Directory -Force $LogDir | Out-Null
-
-function Find-LatestImagesDir {
-    $base = "$Repo\.output\pipeline\1_motion_diff"
-    if (-not (Test-Path $base)) { return $null }
-    $latest = Get-ChildItem $base -Filter "run_*" -Directory -ErrorAction SilentlyContinue |
-              Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $latest) { return $null }
-    return "$($latest.FullName)\images"
+function Find-Running([string]$file) {
+    # Returns matching Win32_Process objects; exclude the watchdog itself
+    return @(Get-WmiObject Win32_Process |
+             Where-Object { $_.CommandLine -like "*$file*" -and
+                            $_.CommandLine -notlike "*watchdog*" })
 }
 
-function Start-BgProcess([string]$label, [string[]]$argList, [string]$logFile) {
-    $proc = Start-Process $Python -ArgumentList $argList `
-        -RedirectStandardOutput $logFile `
-        -RedirectStandardError  ($logFile -replace '\.log$', '_err.log') `
-        -NoNewWindow -PassThru
-    Log "  started $label  (PID $($proc.Id))  → $logFile"
-    return $proc
+function Start-Script([string]$label, [string]$path) {
+    Start-Process powershell.exe `
+        -ArgumentList "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$path`"" `
+        -WindowStyle Hidden
+    Start-Sleep 3
+    $found = Find-Running (Split-Path $path -Leaf)
+    if ($found) {
+        $pids = ($found | ForEach-Object { $_.ProcessId }) -join ", "
+        Log "  started $label  PID: $pids"
+    } else {
+        Log "  FAILED to start $label"
+    }
 }
 
-function Is-Alive([System.Diagnostics.Process]$p) {
-    if (-not $p)          { return $false }
-    if ($p.HasExited)     { return $false }
-    return $true
-}
-
-# ─── Основной цикл ────────────────────────────────────────────────────────────
+# --- Main loop ---
 
 Log "=== watchdog start ==="
 
-$srvProc    = $null
-$diffProc   = $null
-$clientProc = $null
-
 while ($true) {
-
-    # ── Transfer Server ───────────────────────────────────────────────────────
-    if (-not (Is-Alive $srvProc)) {
-        if ($srvProc) { Log "server вышел (код $($srvProc.ExitCode))" }
-        $srvProc = Start-BgProcess "server" @(
-            "$Repo\scripts\transfer\server.py",
-            "--host", "0.0.0.0",
-            "--port", "8765",
-            "--output", "$Repo\.output\transfer"
-        ) "$LogDir\server.log"
-        Start-Sleep 2
-    }
-
-    # ── Motion Diff ───────────────────────────────────────────────────────────
-    if (-not (Is-Alive $diffProc)) {
-        if ($diffProc) {
-            Log "motion_diff вышел (код $($diffProc.ExitCode))"
-            # Старый watch_dir больше не используется — убиваем клиента
-            if (Is-Alive $clientProc) { $clientProc.Kill(); $clientProc = $null }
-        }
-        $diffProc = Start-BgProcess "motion_diff" @(
-            "$Repo\scripts\pipeline\1_motion_diff.py"
-        ) "$LogDir\motion_diff.log"
-
-        # Ждём создания run_* (до 60с)
-        Log "  ожидание run_* ..."
-        $deadline = (Get-Date).AddSeconds(60)
-        while ((Get-Date) -lt $deadline) {
-            Start-Sleep 3
-            if (Find-LatestImagesDir) { break }
+    foreach ($s in $Watch) {
+        $procs = Find-Running $s.file
+        if (-not $procs) {
+            Log "not running: $($s.file) - starting..."
+            Start-Script $s.file $s.path
         }
     }
-
-    # ── Transfer Client ───────────────────────────────────────────────────────
-    if (-not (Is-Alive $clientProc)) {
-        if ($clientProc) { Log "transfer client вышел (код $($clientProc.ExitCode))" }
-        $wd = Find-LatestImagesDir
-        if ($wd) {
-            $clientProc = Start-BgProcess "client" @(
-                "$Repo\scripts\transfer\client.py",
-                "watch", $wd, "--ext", "jpg"
-            ) "$LogDir\client.log"
-        } else {
-            Log "  watch_dir не найден, client не запущен (повтор через $CheckSec с)"
-        }
-    }
-
     Start-Sleep $CheckSec
 }
