@@ -226,21 +226,32 @@ def _save_date_outputs(run_id_log: list[dict], inference_date_dir: Path) -> None
     logger.info(f"identifications.csv → {csv_path}  (+{len(new_rows)}, итого ~{total_csv})")
 
 
-    # labels.json in inference output dir — built from subdir structure for label_ui review
+    # labels.json in inference output dir — merge: preserve existing labels, add new files only
     if inference_date_dir and inference_date_dir.is_dir():
+        inf_labels_path = inference_date_dir / "labels.json"
+        existing_labels: dict[str, str] = {}
+        if inf_labels_path.is_file():
+            try:
+                _d = _json.loads(inf_labels_path.read_text(encoding="utf-8"))
+                existing_labels = _d.get("labels", _d) if isinstance(_d, dict) else {}
+            except Exception:
+                pass
+
         inf_labels: dict[str, str] = {}
         for person_dir in sorted(inference_date_dir.iterdir()):
             if not person_dir.is_dir():
                 continue
-            label = "" if person_dir.name == UNKNOWN_CLASS else person_dir.name
+            dir_label = "" if person_dir.name == UNKNOWN_CLASS else person_dir.name
             for f in sorted(person_dir.glob("*.jpg")):
-                inf_labels[str(f)] = label
-        inf_labels_path = inference_date_dir / "labels.json"
+                key = str(f)
+                # preserve any existing label (manual or prior run); only set from dir for new files
+                inf_labels[key] = existing_labels[key] if key in existing_labels else dir_label
+        new_count = sum(1 for k in inf_labels if k not in existing_labels)
         inf_labels_path.write_text(
             _json.dumps({"version": 1, "labels": inf_labels}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        logger.info(f"labels.json          → {inf_labels_path}  ({len(inf_labels)} записей)")
+        logger.info(f"labels.json          → {inf_labels_path}  ({len(inf_labels)} записей, +{new_count} новых)")
 
 
 # ─── Timestamp from crop filename ────────────────────────────────────────────

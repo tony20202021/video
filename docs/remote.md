@@ -2,104 +2,88 @@
 
 ## Узлы
 
-| Узел | ОС | Сеть | Подключение |
-|------|----|------|-------------|
-| Сервер | Linux | Публичный IP | SSH напрямую |
-| Клиент дома | Windows | Тот же роутер что и дев-машина | SSH по локальному IP |
-| Клиент подъезд | Windows | Другой роутер, нет внешнего IP | Tailscale |
+| Переменная | Роль | ОС |
+|------------|------|----|
+| `TS_SERVER` | Linux-сервер (VDS) | Linux |
+| `TS_WIN_HOME` | Домашний Windows | Windows |
+| `TS_WIN_ENTRY` | Подъездный Windows | Windows |
+
+Все три узла — в одной Tailscale-сети под одним аккаунтом. IP (`100.x.x.x`) стабильны, не меняются при смене провайдера или роутера. Конкретные адреса — в `.env`.
 
 ---
 
-## Сервер (Linux, публичный IP)
+## Tailscale
 
-Стандартное SSH подключение в Cursor — работает из коробки.
-
-`~/.ssh/config`:
-```
-Host video-server
-    HostName <публичный-IP>
-    User <user>
-    IdentityFile ~/.ssh/id_ed25519
-```
-
----
-
-## Клиент дома (Windows, тот же роутер)
-
-SSH по локальному IP — доступен напрямую с дев-машины.
-
-```
-Host video-home
-    HostName 192.168.1.XXX
-    User <username>
-    IdentityFile ~/.ssh/id_ed25519
-```
-
----
-
-## Клиент подъезд (Windows, другой роутер)
-
-Другой роутер без внешнего IP → входящий SSH невозможен.  
-Решение: **Tailscale** — mesh VPN, работает через любой NAT без проброса портов.
-
-### Как работает
-
-Все три машины (дев, подъезд, сервер опционально) входят в одну Tailscale-сеть и получают постоянные IP вида `100.x.x.x`. Cursor подключается к этому IP как к обычному SSH — никаких прыжков и туннелей.
+Mesh VPN — все три машины в одной сети, SSH работает через любой NAT без проброса портов.
 
 ### Установка
 
-**На каждой машине** (дев-машина Windows + клиент подъезд Windows):
+**Linux-сервер:**
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up --ssh   # включить Tailscale SSH (не нужен OpenSSH)
+```
 
-1. Скачать: https://tailscale.com/download
-2. Установить, войти с одним аккаунтом
-3. На дев-машине: `tailscale status` — видны все узлы и их IP
-
-На подъездном клиенте убедиться что SSH сервер включён:
+**Windows (каждая машина):**
+1. Скачать и установить: https://tailscale.com/download
+2. Войти с тем же аккаунтом
+3. Включить OpenSSH Server (от Администратора):
 ```powershell
-# Включить OpenSSH Server (один раз)
 Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
 Set-Service sshd -StartupType Automatic
 Start-Service sshd
 ```
 
-### SSH config для Cursor
+### Проверка сети
 
-```
-Host video-entryway
-    HostName 100.x.x.x        # Tailscale IP подъездного клиента
-    User <username>
-    IdentityFile ~/.ssh/id_ed25519
+```bash
+tailscale status          # список узлов и IP
+tailscale ping $TS_WIN_HOME   # проверить связь
 ```
 
-Tailscale IP стабилен — не меняется при смене роутера или IP-адреса.
-
-### Авторизация ключа на подъездном клиенте
-
-С дев-машины (один раз):
-```powershell
-# Скопировать публичный ключ на подъездный клиент
-type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh <username>@100.x.x.x "cat >> C:\Users\<username>\.ssh\authorized_keys"
-```
-
----
-
-## Итоговый ~/.ssh/config
+### SSH config (`~/.ssh/config`)
 
 ```
+# Linux-сервер (Tailscale SSH — без пароля, авторизация через аккаунт)
 Host video-server
-    HostName <публичный-IP>
-    User <user>
-    IdentityFile ~/.ssh/id_ed25519
+    HostName $TS_SERVER      # из .env
+    User <username>
 
+# Домашний Windows (OpenSSH + ключ)
 Host video-home
-    HostName 192.168.1.XXX
+    HostName $TS_WIN_HOME    # из .env
     User <username>
     IdentityFile ~/.ssh/id_ed25519
 
-Host video-entryway
-    HostName 100.x.x.x
+# Подъездный Windows (OpenSSH + ключ)
+Host video-entry
+    HostName $TS_WIN_ENTRY   # из .env
     User <username>
     IdentityFile ~/.ssh/id_ed25519
+```
+
+### Авторизация ключа на Windows (один раз)
+
+```powershell
+# С Windows-машины — скопировать публичный ключ сервера
+# (или с любой другой машины в сети)
+type $env:USERPROFILE\.ssh\id_ed25519.pub |
+    ssh <username>@<tailscale-ip> "cat >> C:\Users\<username>\.ssh\authorized_keys"
+```
+
+### ACL в Tailscale admin-консоли
+
+`https://login.tailscale.com/admin/acls` → добавить блок `ssh`:
+
+```json
+"ssh": [
+    {
+        "action": "accept",
+        "src":    ["autogroup:member"],
+        "dst":    ["autogroup:member"],
+        "users":  ["autogroup:nonroot", "root"]
+    }
+]
 ```
 
 В Cursor: Remote Explorer → SSH → выбрать нужный хост.
