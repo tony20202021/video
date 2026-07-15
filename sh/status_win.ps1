@@ -1,4 +1,4 @@
-# Windows pipeline status
+﻿# Windows pipeline status
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File sh\status_win.ps1
 
@@ -19,12 +19,23 @@ $os       = Get-CimInstance Win32_OperatingSystem
 $ramTotal = [int]($os.TotalVisibleMemorySize / 1KB)
 $ramFree  = [int]($os.FreePhysicalMemory / 1KB)
 $ramUsed  = $ramTotal - $ramFree
-$disk     = Get-PSDrive C
-$diskUsed = [int]($disk.Used / 1GB)
-$diskFree = [int]($disk.Free / 1GB)
 
-Write-Host ("  CPU: {0}%    RAM: {1}/{2} MB    Disk C: {3} GB used / {4} GB free" `
-    -f $cpu, $ramUsed, $ramTotal, $diskUsed, $diskFree)
+$allDrives = Get-PSDrive -PSProvider FileSystem |
+             Where-Object { $_.Used -ne $null -and $_.Free -ne $null } |
+             Sort-Object Name
+$diskStr = ($allDrives | ForEach-Object {
+    "{0}: {1}/{2} GB" -f $_.Name, [int]($_.Used/1GB), [int](($_.Used+$_.Free)/1GB)
+}) -join "   "
+
+$repoLetter  = [System.IO.Path]::GetPathRoot($REPO).TrimEnd('\:')
+$repoDrive   = $allDrives | Where-Object { $_.Name -eq $repoLetter } | Select-Object -First 1
+$repoDiskStr = if ($repoDrive) {
+    "{0}: {1}/{2} GB" -f $repoDrive.Name, [int]($repoDrive.Used/1GB), [int](($repoDrive.Used+$repoDrive.Free)/1GB)
+} else { "?" }
+
+Write-Host ("  CPU: {0}%    RAM: {1}/{2} MB" -f $cpu, $ramUsed, $ramTotal)
+Write-Host ("  Disks: {0}" -f $diskStr)
+Write-Host ("  Work:  {0}  [{1}]" -f $REPO, $repoDiskStr)
 Write-Host ""
 
 # ── Pipeline scripts ─────────────────────────────────────────────────────────
@@ -90,6 +101,16 @@ if (Test-Path $motionDir) {
 # ── motion_diff log ───────────────────────────────────────────────────────────
 $today   = Get-Date -Format "yyyyMMdd"
 $logFile = Join-Path $motionDir "meta\$today\run.log"
+
+# Если лог за сегодня ещё не создан — берём самую свежую доступную дату
+if (-not (Test-Path $logFile)) {
+    $metaRoot = Join-Path $motionDir "meta"
+    if (Test-Path $metaRoot) {
+        $latestDir = Get-ChildItem $metaRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1
+        if ($latestDir) { $logFile = Join-Path $latestDir.FullName "run.log" }
+    }
+}
+
 $lastLogLine = "--"; $lastEventTime = "--"; $count10m = 0
 
 Write-Host ""
@@ -104,7 +125,7 @@ if (Test-Path $logFile) {
         $le = @($eventLines)[-1]
         $lastLogLine = ($le.Trim() -replace '\|', ':')
         if ($le -match "^(\d{2}:\d{2})") {
-            $lastEventTime = (Get-Date -Format "MM-dd") + " " + $Matches[1]
+            $lastEventTime = (Get-Date -Format "yyyy-MM-dd") + " " + $Matches[1]
         }
     }
 
@@ -127,20 +148,29 @@ Write-Host ""
 
 # ── 2_send log ────────────────────────────────────────────────────────────────
 $sendLogFile = Join-Path $REPO ".output\logs\2_send.log"
-$sendLastLogLine = "--"; $sendLastEventTime = "--"; $sendCount10m = 0
+$sendLastLogLine = "--"; $sendLastEventTime = "--"; $sendLastIdleLine = "--"; $sendCount10m = 0
 
 Write-Host "  Log 2_send (last 5 lines):"
 if (Test-Path $sendLogFile) {
     $sendAllLines = Get-Content $sendLogFile -Encoding UTF8
     Get-Content $sendLogFile -Tail 5 -Encoding UTF8 | ForEach-Object { Write-Host "    $_" }
 
-    # match sent-file lines: contain a file extension (ASCII-safe, avoids non-ASCII arrow char)
+    # Последний отправленный файл (содержит расширение изображения)
     $sendEventLines = $sendAllLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and $_ -match "\.(jpg|png|jpeg|bmp|webp)" }
     if ($sendEventLines) {
         $le = @($sendEventLines)[-1]
         $sendLastLogLine = ($le.Trim() -replace '\|', ':')
         if ($le -match "^(\d{2}:\d{2})") {
-            $sendLastEventTime = (Get-Date -Format "MM-dd") + " " + $Matches[1]
+            $sendLastEventTime = (Get-Date -Format "yyyy-MM-dd") + " " + $Matches[1]
+        }
+    }
+
+    # Последнее сообщение ожидания ("нет" / "ожид")
+    $sendIdleLines = $sendAllLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and ($_ -match "ожид|нет|wait|empty") }
+    if ($sendIdleLines) {
+        $li = @($sendIdleLines)[-1]
+        if ($li -match "^(\d{2}:\d{2}:\d{2})") {
+            $sendLastIdleLine = $Matches[1]
         }
     }
 
@@ -172,12 +202,14 @@ foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]
     $stat  = if ($pid2) { "OK" } else { "NOK" }
     if ($s.label -eq "1_motion_diff") {
-        $file2 = $lastEventTime; $log2 = $lastLogLine;     $st2 = $stats10m
+        $file2 = $lastEventTime; $log2 = $lastLogLine; $idle2 = "--"; $st2 = $stats10m
     } elseif ($s.label -eq "2_send") {
-        $file2 = $sendLastEventTime; $log2 = $sendLastLogLine; $st2 = $sendStats10m
+        $file2 = $sendLastEventTime; $log2 = $sendLastLogLine; $idle2 = $sendLastIdleLine; $st2 = $sendStats10m
     } else {
-        $file2 = "--"; $log2 = "--"; $st2 = "--"
+        $file2 = "--"; $log2 = "--"; $idle2 = "--"; $st2 = "--"
     }
-    Write-Host ("# WIN_SVC|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f `
-        $s.label, $winHost, $stat, $s.input, $s.output, $file2, $log2, $st2)
+    # Обрезаем длинные лог-строки чтобы таблица не расползалась
+    if ($log2.Length -gt 55) { $log2 = $log2.Substring(0, 55) + "..." }
+    Write-Host ("# WIN_SVC|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}" -f `
+        $s.label, $winHost, $stat, $s.input, $s.output, $file2, $log2, $idle2, $st2)
 }

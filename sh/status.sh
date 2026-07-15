@@ -105,13 +105,14 @@ _parse_win_sys() {
     cpu=$(echo "$w" | grep "  CPU:" | grep -oE '[0-9]+%' | head -1)
     ram=$(echo "$w" | grep "  RAM:" | grep -oE '[0-9]+/[0-9]+ MB' | head -1)
 
-    local du df
-    du=$(echo "$w" | grep "Disk C:" | grep -oE '[0-9]+ GB used' | grep -oE '[0-9]+' | head -1)
-    df=$(echo "$w" | grep "Disk C:" | grep -oE '[0-9]+ GB free' | grep -oE '[0-9]+' | head -1)
-    if [[ -n "$du" && -n "$df" ]]; then
-        disk="C: ${du}/$((du + df)) GB"
-    else
-        disk="—"
+    # Берём диск рабочего каталога из строки "Work: <path> [X: used/total GB]"
+    disk=$(echo "$w" | grep "^  Work:" | grep -oE '[A-Z]: [0-9]+/[0-9]+ GB' | head -1)
+    if [[ -z "$disk" ]]; then
+        # fallback: старый формат "Disk C: N GB used / M GB free"
+        local du df
+        du=$(echo "$w" | grep "Disk C:" | grep -oE '[0-9]+ GB used' | grep -oE '[0-9]+' | head -1)
+        df=$(echo "$w" | grep "Disk C:" | grep -oE '[0-9]+ GB free' | grep -oE '[0-9]+' | head -1)
+        [[ -n "$du" && -n "$df" ]] && disk="C: ${du}/$((du + df)) GB" || disk="—"
     fi
 
     local m_status s_status
@@ -145,13 +146,13 @@ _ssh_win() {
 }
 
 # ── вспомогательная функция: строки WIN_SVC → markdown-строки таблицы ──────────
-# WIN_SVC формат: # WIN_SVC|name|server|status|input|output|file|last_log|stats_10m
+# WIN_SVC формат: # WIN_SVC|name|server|status|input|output|file|last_log|last_idle|stats_10m
 _win_svc_md_rows() {
     local win_out="$1"
-    echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output file last_log stats_10m; do
+    echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output file last_log last_idle stats_10m; do
         local s_icon
         [[ "$status" == "OK" ]] && s_icon="✓" || s_icon="✗"
-        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | — | ${stats_10m} |"
+        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | ${last_idle} | ${stats_10m} |"
     done
 }
 
@@ -198,7 +199,7 @@ if [[ -n "$TS_WIN_EVELINA" ]]; then
     sep
     if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
             "evelina@$TS_WIN_EVELINA" "echo ok" &>/dev/null 2>&1; then
-        evelina_out=$(_ssh_win "$TS_WIN_EVELINA" "evelina")
+        evelina_out=$(_ssh_win "$TS_WIN_EVELINA" "evelina" "$WIN_SCRIPT_EVELINA")
         if [[ -n "$evelina_out" ]]; then
             echo "$evelina_out" | grep -v "^# WIN_SVC|"
             IFS='|' read -r evelina_cpu evelina_ram evelina_disk evelina_scripts <<< "$(_parse_win_sys "$evelina_out")"

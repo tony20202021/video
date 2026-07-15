@@ -149,8 +149,19 @@ def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
         mn   = round(min(times), 1) if times else None
         avg  = round(sum(times) / len(times), 1) if times else None
         mx   = round(max(times), 1) if times else None
-        busy = round(min(sum(times) / (WINDOW_MIN * 60) * 100, 100.0), 1) if times else None
-        return dict(count=count, min=mn, avg=avg, max=mx, busy=busy)
+        last = round(times[-1], 1) if times else None
+        # per-event busy%: time_i / avg_interval * 100  (avg_interval = window / count)
+        if times and count > 0:
+            avg_iv = WINDOW_MIN * 60 / count
+            per    = [t / avg_iv * 100 for t in times]
+            bp_mn  = round(min(per))
+            bp_avg = round(sum(per) / len(per))
+            bp_mx  = round(max(per))
+            bp_lst = round(per[-1])
+        else:
+            bp_mn = bp_avg = bp_mx = bp_lst = None
+        return dict(count=count, min=mn, avg=avg, max=mx, last=last,
+                    bp_mn=bp_mn, bp_avg=bp_avg, bp_mx=bp_mx, bp_lst=bp_lst)
     except Exception:
         return dict(count=0, min=None, avg=None, max=None, busy=None)
 
@@ -160,9 +171,9 @@ def fmt_stats(st: dict, has_timing: bool) -> str:
         return "—"
     s = f"{st['count']}×"
     if has_timing and st["avg"] is not None:
-        s += f"  {st['min']}/{st['avg']}/{st['max']}с"
-    if st["busy"] is not None:
-        s += f"  {st['busy']}%"
+        s += f"  {st['min']}/{st['avg']}/{st['max']}/{st['last']}с"
+        if st["bp_avg"] is not None:
+            s += f"  {st['bp_mn']}/{st['bp_avg']}/{st['bp_mx']}/{st['bp_lst']}%"
     return s
 
 
@@ -228,8 +239,8 @@ def _box(headers: list[str], rows_data: list[list[str]], widths: list[int]) -> l
 def render_term(rows: list[dict], ts: str) -> str:
     out = ["", f"  PIPELINE STATUS    {ts}", ""]
 
-    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.", "10м (N мин/ср/макс %)"]
-    widths  = [7, 18, 8, 36, 42, 11, 28, 24, 26]
+    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.", "за 10м: N× / с(мин/ср/макс/посл) / %(мин/ср/макс/посл)"]
+    widths  = [7, 18, 8, 36, 42, 11, 28, 24, 40]
     data = [
         ["Linux",
          r["name"],
@@ -262,7 +273,7 @@ def _md_table(headers: list[str], rows_data: list[list[str]]) -> list[str]:
 def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
-    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.", "10м (N мин/ср/макс %)"]
+    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.", "за 10м: N× / с(мин/ср/макс/посл) / %(мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
