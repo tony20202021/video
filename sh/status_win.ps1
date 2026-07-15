@@ -33,14 +33,14 @@ function Build-Stats($cnt, $times, $windowSec, $suffix) {
         $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
         $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
         $lst = [math]::Round($times[$times.Count - 1], 1)
-        $s  += "  ${mn}/${avg}/${mx}/${lst}с"
+        $s  += "<br>${mn}/${avg}/${mx}/${lst}с"
         $avgIv = $windowSec / $cnt
-        $pArr  = @($times | ForEach-Object { [int][math]::Round($_ / $avgIv * 100) })
+        $pArr  = @($times | ForEach-Object { [int][math]::Min(100, [math]::Round($_ / $avgIv * 100)) })
         $bp_mn  = ($pArr | Measure-Object -Minimum).Minimum
         $bp_avg = [int][math]::Round(($pArr | Measure-Object -Average).Average)
         $bp_mx  = ($pArr | Measure-Object -Maximum).Maximum
         $bp_lst = $pArr[$pArr.Count - 1]
-        $s += "  ${bp_mn}/${bp_avg}/${bp_mx}/${bp_lst}%"
+        $s += "<br>${bp_mn}/${bp_avg}/${bp_mx}/${bp_lst}%"
     }
     return $s
 }

@@ -301,7 +301,7 @@ def render_term(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
                "за 10м:\nN× / с\n(мин/ср/макс/посл)\n%(мин/ср/макс/посл)"]
-    widths  = [7, 18, 8, 40, 42, 22, 28, 24, 22]
+    widths  = [7, 18, 8, 40, 42, 26, 28, 24, 22]
     data = [
         ["Linux",
          r["name"],
@@ -345,7 +345,7 @@ def render_md(rows: list[dict], ts: str) -> str:
          r["file_time"].replace("\n", "<br>"),
          r["log_work"],
          r["log_wait"],
-         r["stats"].replace("\n", "  ")]
+         r["stats"].replace("\n", "<br>")]
         for r in rows
     ]
     out.extend(_md_table(headers, data))
