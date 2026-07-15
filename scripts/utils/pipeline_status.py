@@ -97,7 +97,7 @@ def latest_file(directory: Path) -> tuple[str, str]:
         pass
     if best_path is None:
         return "—", "—"
-    t = datetime.fromtimestamp(best_ts).strftime("%m-%d %H:%M")
+    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d %H:%M")
     short = f"…/{best_path.parent.name}/{best_path.name}"
     return t, short
 
@@ -117,14 +117,26 @@ def _shorten_log(raw: str) -> str:
     return msg.strip()
 
 
-def last_log(svc: str, pattern: str) -> str:
+def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
     try:
         r = subprocess.run(
-            ["journalctl", "-u", svc, "--no-pager", "-n2000"],
+            ["journalctl", "-u", svc, "--no-pager", "-n5000"],
             capture_output=True, text=True,
         )
-        lines = [l for l in r.stdout.splitlines() if re.search(pattern, l)]
-        return _shorten_log(lines[-1]) if lines else "—"
+        all_lines = r.stdout.splitlines()
+        matched = [l for l in all_lines if re.search(pattern, l)]
+        if matched:
+            return _shorten_log(matched[-1])
+        if exclude_pat:
+            # fallback: строки не работа, содержат признак ожидания
+            idle_hint = re.compile(r"нет|ожид|пуст|\bwait\b|\bidle\b|\bempty\b", re.IGNORECASE)
+            candidates = [l for l in all_lines
+                          if not re.search(exclude_pat, l)
+                          and re.search(r"\d{2}:\d{2}:\d{2}", l)
+                          and idle_hint.search(l)]
+            if candidates:
+                return _shorten_log(candidates[-1])
+        return "—"
     except Exception:
         return "—"
 
@@ -163,18 +175,19 @@ def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
         return dict(count=count, min=mn, avg=avg, max=mx, last=last,
                     bp_mn=bp_mn, bp_avg=bp_avg, bp_mx=bp_mx, bp_lst=bp_lst)
     except Exception:
-        return dict(count=0, min=None, avg=None, max=None, busy=None)
+        return dict(count=0, min=None, avg=None, max=None, last=None,
+                    bp_mn=None, bp_avg=None, bp_mx=None, bp_lst=None)
 
 
 def fmt_stats(st: dict, has_timing: bool) -> str:
     if st["count"] == 0:
         return "—"
-    s = f"{st['count']}×"
+    lines = [f"{st['count']}×"]
     if has_timing and st["avg"] is not None:
-        s += f"  {st['min']}/{st['avg']}/{st['max']}/{st['last']}с"
+        lines.append(f"{st['min']}/{st['avg']}/{st['max']}/{st['last']}с")
         if st["bp_avg"] is not None:
-            s += f"  {st['bp_mn']}/{st['bp_avg']}/{st['bp_mx']}/{st['bp_lst']}%"
-    return s
+            lines.append(f"{st['bp_mn']}/{st['bp_avg']}/{st['bp_mx']}/{st['bp_lst']}%")
+    return "\n".join(lines)
 
 
 # ─── сбор данных ──────────────────────────────────────────────────────────────
@@ -193,7 +206,7 @@ def collect() -> list[dict]:
             "file_time": file_time,
             "file_name": file_name,
             "log_work":  last_log(s["name"], s["log_work"]),
-            "log_wait":  last_log(s["name"], s["log_wait"]),
+            "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
             "stats":     fmt_stats(st, s["has_timing"]),
         })
     return rows
@@ -202,6 +215,8 @@ def collect() -> list[dict]:
 # ─── рендер: терминал ─────────────────────────────────────────────────────────
 
 def _wrap(text: str, width: int) -> list[str]:
+    if "\n" in text:
+        return [line[:width] for line in text.split("\n")]
     if len(text) <= width:
         return [text]
     if "  " in text:
@@ -215,8 +230,16 @@ def _box(headers: list[str], rows_data: list[list[str]], widths: list[int]) -> l
     def hline(l: str, m: str, r: str) -> str:
         return l + m.join("─" * (w + 2) for w in widths) + r
 
+    header_lines = [h.split("\n") for h in headers]
+    max_h = max(len(hl) for hl in header_lines)
+
     out = [hline("┌", "┬", "┐")]
-    out.append("│ " + " │ ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " │")
+    for line_i in range(max_h):
+        cells = []
+        for j, hl in enumerate(header_lines):
+            v = hl[line_i] if line_i < len(hl) else ""
+            cells.append(v.ljust(widths[j]))
+        out.append("│ " + " │ ".join(cells) + " │")
     out.append(hline("├", "┼", "┤"))
     for row in rows_data:
         wrapped = [_wrap(str(v), widths[i]) for i, v in enumerate(row)]
@@ -239,8 +262,9 @@ def _box(headers: list[str], rows_data: list[list[str]], widths: list[int]) -> l
 def render_term(rows: list[dict], ts: str) -> str:
     out = ["", f"  PIPELINE STATUS    {ts}", ""]
 
-    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.", "за 10м: N× / с(мин/ср/макс/посл) / %(мин/ср/макс/посл)"]
-    widths  = [7, 18, 8, 36, 42, 11, 28, 24, 40]
+    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
+               "за 10м:\nN×\nс(мин/ср/макс/посл)\n%(мин/ср/макс/посл)"]
+    widths  = [7, 18, 8, 36, 42, 11, 28, 24, 22]
     data = [
         ["Linux",
          r["name"],
@@ -273,7 +297,8 @@ def _md_table(headers: list[str], rows_data: list[list[str]]) -> list[str]:
 def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
-    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.", "за 10м: N× / с(мин/ср/макс/посл) / %(мин/ср/макс/посл)"]
+    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
+               "за 10м: N× / с(мин/ср/макс/посл) / %(мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
@@ -283,7 +308,7 @@ def render_md(rows: list[dict], ts: str) -> str:
          r["file_time"],
          r["log_work"],
          r["log_wait"],
-         r["stats"]]
+         r["stats"].replace("\n", "  ")]
         for r in rows
     ]
     out.extend(_md_table(headers, data))

@@ -86,10 +86,10 @@ if (Test-Path $motionDir) {
              Select-Object -First 5
     if ($files) {
         $top = @($files)[0]
-        $lastFileTime = $top.LastWriteTime.ToString("MM-dd HH:mm")
+        $lastFileTime = $top.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
         $lastFileName = $top.Name
         $files | ForEach-Object {
-            Write-Host ("    {0}  {1}" -f $_.LastWriteTime.ToString("MM-dd HH:mm:ss"), $_.Name)
+            Write-Host ("    {0}  {1}" -f $_.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"), $_.Name)
         }
     } else {
         Write-Host "    (no files)"
@@ -111,7 +111,7 @@ if (-not (Test-Path $logFile)) {
     }
 }
 
-$lastLogLine = "--"; $lastEventTime = "--"; $count10m = 0
+$lastLogLine = "--"; $lastEventTime = "--"; $motionIdleLine = "--"; $count10m = 0
 
 Write-Host ""
 Write-Host "  Log motion_diff (last 5 lines):"
@@ -127,6 +127,13 @@ if (Test-Path $logFile) {
         if ($le -match "^(\d{2}:\d{2})") {
             $lastEventTime = (Get-Date -Format "yyyy-MM-dd") + " " + $Matches[1]
         }
+    }
+
+    # Лог: ожид. для motion_diff — последнее время heartbeat (cpu.csv), скрипт жив но движения нет
+    $cpuLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and $_ -match "cpu\.csv" }
+    if ($cpuLines) {
+        $lc = @($cpuLines)[-1]
+        if ($lc -match "^(\d{2}:\d{2}:\d{2})") { $motionIdleLine = $Matches[1] }
     }
 
     # Количество событий за последние 10 минут (без строк cpu.csv)
@@ -202,14 +209,12 @@ foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]
     $stat  = if ($pid2) { "OK" } else { "NOK" }
     if ($s.label -eq "1_motion_diff") {
-        $file2 = $lastEventTime; $log2 = $lastLogLine; $idle2 = "--"; $st2 = $stats10m
+        $file2 = $lastEventTime; $log2 = $lastLogLine; $idle2 = $motionIdleLine; $st2 = $stats10m
     } elseif ($s.label -eq "2_send") {
         $file2 = $sendLastEventTime; $log2 = $sendLastLogLine; $idle2 = $sendLastIdleLine; $st2 = $sendStats10m
     } else {
         $file2 = "--"; $log2 = "--"; $idle2 = "--"; $st2 = "--"
     }
-    # Обрезаем длинные лог-строки чтобы таблица не расползалась
-    if ($log2.Length -gt 55) { $log2 = $log2.Substring(0, 55) + "..." }
     Write-Host ("# WIN_SVC|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}" -f `
         $s.label, $winHost, $stat, $s.input, $s.output, $file2, $log2, $idle2, $st2)
 }
