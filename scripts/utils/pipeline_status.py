@@ -37,7 +37,7 @@ SERVICES = [
     {
         "name":       "video-transfer",
         "input":      "Windows → HTTP POST :8765",
-        "output":     ".output/transfer/diff/  service/",
+        "output":     ".output/transfer/  diff/  service/",
         "dir":        REPO / ".output/transfer",
         "log_work":   r"POST|принят|received|Готово",
         "log_wait":   r"\[recv\].*heartbeat",  # heartbeat-файл = камера idle, движения нет
@@ -46,7 +46,7 @@ SERVICES = [
     },
     {
         "name":       "video-yolo",
-        "input":      ".output/transfer/diff/  service/",
+        "input":      ".output/transfer/  diff/  service/",
         "output":     ".output/pipeline/  2_yolo_boxes_files/images/",
         "dir":        REPO / ".output/pipeline/2_yolo_boxes_files/images",
         "log_work":   r"Готово",
@@ -195,11 +195,13 @@ def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
 
 
 def _fmt_tree(text: str) -> str:
-    """'A  B  C' → 'A\\n├─ B\\n└─ C'  (для терминала и markdown)."""
+    """'A  B  C' → 'A\\n├─ B\\n└─ C'; 'A  B' → 'A\\nB' (один дочерний — без символа)."""
     parts = text.split("  ")
     if len(parts) == 1:
         return text
     parent, children = parts[0], parts[1:]
+    if len(children) == 1:
+        return parent + "\n" + children[0]
     lines = [parent]
     for i, child in enumerate(children):
         lines.append(("└─ " if i == len(children) - 1 else "├─ ") + child)
@@ -292,8 +294,8 @@ def render_term(rows: list[dict], ts: str) -> str:
     out = ["", f"  PIPELINE STATUS    {ts}", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "за 10м:\nN×\nс(мин/ср/макс/посл)\n%(мин/ср/макс/посл)"]
-    widths  = [7, 18, 8, 40, 42, 18, 28, 24, 22]
+               "за 10м:\nN× / с\n(мин/ср/макс/посл)\n%(мин/ср/макс/посл)"]
+    widths  = [7, 18, 8, 40, 42, 22, 28, 24, 22]
     data = [
         ["Linux",
          r["name"],
@@ -327,7 +329,7 @@ def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "за 10м: N× / с(мин/ср/макс/посл) / %(мин/ср/макс/посл)"]
+               "за 10м:<br>N× / с<br>(мин/ср/макс/посл)<br>%(мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
