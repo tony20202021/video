@@ -40,7 +40,7 @@ SERVICES = [
         "output":     ".output/transfer/diff/  service/",
         "dir":        REPO / ".output/transfer",
         "log_work":   r"POST|принят|received|Готово",
-        "log_wait":   r"ожидание|нет файлов",
+        "log_wait":   r"\[recv\].*heartbeat",  # heartbeat-файл = камера idle, движения нет
         "stats_pat":  r'"POST /file HTTP/1\.1" 200',  # принятые файлы
         "has_timing": False,
     },
@@ -70,7 +70,7 @@ SERVICES = [
         "output":     f".data/residents/{RESIDENTS_VER}/inference/  images/{{date}}/{{person}}/",
         "dir":        REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
         "log_work":   r"Готово",
-        "log_wait":   r"ожидание|Кропов нет",
+        "log_wait":   r"Идентификаций не найдено|ожидание|Кропов нет",
         "stats_pat":  r"Готово\. Время:",
         "has_timing": True,
     },
@@ -97,7 +97,7 @@ def latest_file(directory: Path) -> tuple[str, str]:
         pass
     if best_path is None:
         return "—", "—"
-    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d %H:%M")
+    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d\n%H:%M")
     short = f"…/{best_path.parent.name}/{best_path.name}"
     return t, short
 
@@ -114,6 +114,11 @@ def _shorten_log(raw: str) -> str:
     msg = re.sub(r"\([\w_]+\) ", "", msg)
     msg = re.sub(r"— ожидание \d+s.*", "→ ожидание", msg)
     msg = re.sub(r" в /\S+.*", "", msg)
+    # video-transfer [recv]: сокращаем длинный путь к heartbeat
+    msg = re.sub(r"\[recv\] \S+/(cam_\d+_\d+_[a-z]+)\S*", r"[recv] \1", msg)
+    # Убрать размер файла "(51.2 КБ)" и "meta=..." после [recv] cam_X
+    msg = re.sub(r"\s+meta=\S+", "", msg)
+    msg = re.sub(r"(\[recv\]\s+\S+)\s+\([\d.,]+\s*\S+\)", r"\1", msg)
     return msg.strip()
 
 
@@ -141,48 +146,72 @@ def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
         return "—"
 
 
+def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: int) -> dict:
+    r = subprocess.run(
+        ["journalctl", "-u", svc, "--no-pager",
+         "--since", f"{window_min} minutes ago"],
+        capture_output=True, text=True,
+    )
+    count = 0
+    times: list[float] = []
+    for line in r.stdout.splitlines():
+        if re.search(stats_pat, line):
+            count += 1
+            if has_timing:
+                m = re.search(r"Время:\s*([\d.,]+)\s*с", line)
+                if m:
+                    times.append(float(m.group(1).replace(",", ".")))
+    mn   = round(min(times), 1) if times else None
+    avg  = round(sum(times) / len(times), 1) if times else None
+    mx   = round(max(times), 1) if times else None
+    last = round(times[-1], 1) if times else None
+    if times and count > 0:
+        avg_iv = window_min * 60 / count
+        per    = [t / avg_iv * 100 for t in times]
+        bp_mn  = round(min(per))
+        bp_avg = round(sum(per) / len(per))
+        bp_mx  = round(max(per))
+        bp_lst = round(per[-1])
+    else:
+        bp_mn = bp_avg = bp_mx = bp_lst = None
+    return dict(count=count, min=mn, avg=avg, max=mx, last=last,
+                bp_mn=bp_mn, bp_avg=bp_avg, bp_mx=bp_mx, bp_lst=bp_lst,
+                window=window_min)
+
+
 def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
-    """Статистика работы сервиса за последние WINDOW_MIN минут."""
+    """Статистика работы сервиса: сначала WINDOW_MIN мин, fallback 60 мин."""
+    _empty = dict(count=0, min=None, avg=None, max=None, last=None,
+                  bp_mn=None, bp_avg=None, bp_mx=None, bp_lst=None, window=WINDOW_MIN)
     try:
-        r = subprocess.run(
-            ["journalctl", "-u", svc, "--no-pager",
-             "--since", f"{WINDOW_MIN} minutes ago"],
-            capture_output=True, text=True,
-        )
-        count = 0
-        times: list[float] = []
-        for line in r.stdout.splitlines():
-            if re.search(stats_pat, line):
-                count += 1
-                if has_timing:
-                    m = re.search(r"Время:\s*([\d.,]+)\s*с", line)
-                    if m:
-                        times.append(float(m.group(1).replace(",", ".")))
-        mn   = round(min(times), 1) if times else None
-        avg  = round(sum(times) / len(times), 1) if times else None
-        mx   = round(max(times), 1) if times else None
-        last = round(times[-1], 1) if times else None
-        # per-event busy%: time_i / avg_interval * 100  (avg_interval = window / count)
-        if times and count > 0:
-            avg_iv = WINDOW_MIN * 60 / count
-            per    = [t / avg_iv * 100 for t in times]
-            bp_mn  = round(min(per))
-            bp_avg = round(sum(per) / len(per))
-            bp_mx  = round(max(per))
-            bp_lst = round(per[-1])
-        else:
-            bp_mn = bp_avg = bp_mx = bp_lst = None
-        return dict(count=count, min=mn, avg=avg, max=mx, last=last,
-                    bp_mn=bp_mn, bp_avg=bp_avg, bp_mx=bp_mx, bp_lst=bp_lst)
+        st = _stats_for_window(svc, stats_pat, has_timing, WINDOW_MIN)
+        if st["count"] > 0:
+            return st
+        # fallback: последний час
+        st60 = _stats_for_window(svc, stats_pat, has_timing, 60)
+        return st60 if st60["count"] > 0 else _empty
     except Exception:
-        return dict(count=0, min=None, avg=None, max=None, last=None,
-                    bp_mn=None, bp_avg=None, bp_mx=None, bp_lst=None)
+        return _empty
+
+
+def _fmt_tree(text: str) -> str:
+    """'A  B  C' → 'A\\n├─ B\\n└─ C'  (для терминала и markdown)."""
+    parts = text.split("  ")
+    if len(parts) == 1:
+        return text
+    parent, children = parts[0], parts[1:]
+    lines = [parent]
+    for i, child in enumerate(children):
+        lines.append(("└─ " if i == len(children) - 1 else "├─ ") + child)
+    return "\n".join(lines)
 
 
 def fmt_stats(st: dict, has_timing: bool) -> str:
     if st["count"] == 0:
         return "—"
-    lines = [f"{st['count']}×"]
+    w = st.get("window", WINDOW_MIN)
+    suffix = f" ({w}м)" if w != WINDOW_MIN else ""
+    lines = [f"{st['count']}×{suffix}"]
     if has_timing and st["avg"] is not None:
         lines.append(f"{st['min']}/{st['avg']}/{st['max']}/{st['last']}с")
         if st["bp_avg"] is not None:
@@ -264,13 +293,13 @@ def render_term(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
                "за 10м:\nN×\nс(мин/ср/макс/посл)\n%(мин/ср/макс/посл)"]
-    widths  = [7, 18, 8, 36, 42, 11, 28, 24, 22]
+    widths  = [7, 18, 8, 40, 42, 18, 28, 24, 22]
     data = [
         ["Linux",
          r["name"],
          ("✓" if r["state"] == "active" else "✗") + " " + r["state"],
-         r["input"],
-         r["output"],
+         _fmt_tree(r["input"]),
+         _fmt_tree(r["output"]),
          r["file_time"],
          r["log_work"],
          r["log_wait"],
@@ -303,9 +332,9 @@ def render_md(rows: list[dict], ts: str) -> str:
         ["Linux",
          f"`{r['name']}`",
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
-         r["input"].replace("  ", "<br>"),
-         r["output"].replace("  ", "<br>"),
-         r["file_time"],
+         _fmt_tree(r["input"]).replace("\n", "<br>"),
+         _fmt_tree(r["output"]).replace("\n", "<br>"),
+         r["file_time"].replace("\n", "<br>"),
          r["log_work"],
          r["log_wait"],
          r["stats"].replace("\n", "  ")]
@@ -326,9 +355,10 @@ def main() -> None:
     term_out = render_term(rows, ts)
     md_out   = render_md(rows, ts)
 
-    out_dir = REPO / ".output/status"
+    now     = datetime.now()
+    out_dir = REPO / ".output/status" / now.strftime("%Y-%m-%d")
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem    = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stem    = now.strftime("%Y%m%d_%H%M%S")
     md_path = out_dir / f"{stem}.md"
     md_path.write_text(md_out, encoding="utf-8")
 

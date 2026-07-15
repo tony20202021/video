@@ -6,6 +6,26 @@ $ErrorActionPreference = "SilentlyContinue"
 # UTF-8 через SSH — иначе cp1251-консоль искажает кириллицу
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding            = [System.Text.Encoding]::UTF8
+
+function Shorten-WinLog($line) {
+    if (-not $line -or $line -eq "--") { return $line }
+    $msg = $line.Trim()
+    # Убрать "HH:MM:SS INFO  " в начале, оставить только время
+    if ($msg -match '^(\d{2}:\d{2}:\d{2})\s+\w+\s+(.+)$') {
+        $msg = $Matches[1] + "  " + $Matches[2].Trim()
+    }
+    # "Готово. Время: X с." → "Готово Xс"
+    $msg = $msg -replace 'Готово\. Время:\s*([\d.]+)\s*с\.?', 'Готово $1с'
+    # "images/20260715/cam_01_9_u/cam_01_9_u_..._heartbeat.jpg" → "cam_01_9_u"
+    $msg = $msg -replace 'images/\d{8}/(cam_\d+_\d+_[a-z]+)/\S+', '$1'
+    # "cam_01_9_u_20260715_083849_168730_msk_heartbeat.jpg" → "cam_01_9_u"
+    $msg = $msg -replace '(cam_\d+_\d+_[a-z]+)_\d{8}_\S+', '$1'
+    # Убрать " diff=0.25" и подобное
+    $msg = $msg -replace '\s+diff=[\d.]+', ''
+    # Сократить "Файлов нет в C:\...\path"
+    $msg = $msg -replace '\(client\)\s+Файлов нет в \S+', 'Файлов нет'
+    return $msg.Trim()
+}
 $REPO = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
@@ -16,16 +36,17 @@ Write-Host ""
 # ── System ───────────────────────────────────────────────────────────────────
 $cpu      = (Get-CimInstance Win32_Processor).LoadPercentage
 $os       = Get-CimInstance Win32_OperatingSystem
-$ramTotal = [int]($os.TotalVisibleMemorySize / 1KB)
-$ramFree  = [int]($os.FreePhysicalMemory / 1KB)
-$ramUsed  = $ramTotal - $ramFree
+$ic         = [System.Globalization.CultureInfo]::InvariantCulture
+$ramTotalGB = ([math]::Round($os.TotalVisibleMemorySize / 1MB, 1)).ToString("F1", $ic)
+$ramFreeGB  = ([math]::Round($os.FreePhysicalMemory  / 1MB, 1)).ToString("F1", $ic)
+$ramUsedGB  = ([math]::Round([double]$ramTotalGB - [double]$ramFreeGB, 1)).ToString("F1", $ic)
 
 $allDrives = Get-PSDrive -PSProvider FileSystem |
-             Where-Object { $_.Used -ne $null -and $_.Free -ne $null } |
+             Where-Object { $_.Used -ne $null -and $_.Free -ne $null -and ($_.Used + $_.Free) -gt 0 } |
              Sort-Object Name
 $diskStr = ($allDrives | ForEach-Object {
     "{0}: {1}/{2} GB" -f $_.Name, [int]($_.Used/1GB), [int](($_.Used+$_.Free)/1GB)
-}) -join "   "
+}) -join "<br>"
 
 $repoLetter  = [System.IO.Path]::GetPathRoot($REPO).TrimEnd('\:')
 $repoDrive   = $allDrives | Where-Object { $_.Name -eq $repoLetter } | Select-Object -First 1
@@ -33,7 +54,7 @@ $repoDiskStr = if ($repoDrive) {
     "{0}: {1}/{2} GB" -f $repoDrive.Name, [int]($repoDrive.Used/1GB), [int](($repoDrive.Used+$repoDrive.Free)/1GB)
 } else { "?" }
 
-Write-Host ("  CPU: {0}%    RAM: {1}/{2} MB" -f $cpu, $ramUsed, $ramTotal)
+Write-Host ("  CPU: {0}%    RAM: {1}/{2} GB" -f $cpu, $ramUsedGB, $ramTotalGB)
 Write-Host ("  Disks: {0}" -f $diskStr)
 Write-Host ("  Work:  {0}  [{1}]" -f $REPO, $repoDiskStr)
 Write-Host ""
@@ -119,8 +140,8 @@ if (Test-Path $logFile) {
     $allLogLines = Get-Content $logFile -Encoding UTF8
     Get-Content $logFile -Tail 5 -Encoding UTF8 | ForEach-Object { Write-Host "    $_" }
 
-    # Последнее событие (без cpu.csv) — для колонок "Файл" и "Лог: работа"
-    $eventLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and $_ -notmatch "cpu\.csv" }
+    # Последнее событие работы (без cpu.csv и без heartbeat) — для колонок "Файл" и "Лог: работа"
+    $eventLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO\s+\S" -and $_ -notmatch "cpu\.csv" -and $_ -notmatch "heartbeat" }
     if ($eventLines) {
         $le = @($eventLines)[-1]
         $lastLogLine = ($le.Trim() -replace '\|', ':')
@@ -129,22 +150,28 @@ if (Test-Path $logFile) {
         }
     }
 
-    # Лог: ожид. для motion_diff — последнее время heartbeat (cpu.csv), скрипт жив но движения нет
-    $cpuLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and $_ -match "cpu\.csv" }
-    if ($cpuLines) {
-        $lc = @($cpuLines)[-1]
-        if ($lc -match "^(\d{2}:\d{2}:\d{2})") { $motionIdleLine = $Matches[1] }
+    # Лог: ожид. для motion_diff — последний heartbeat (камера жива, движения нет)
+    $hbLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and $_ -match "heartbeat" }
+    if ($hbLines) {
+        $motionIdleLine = Shorten-WinLog (@($hbLines)[-1])
     }
 
-    # Количество событий за последние 10 минут (без строк cpu.csv)
+    # Количество событий (diff-кадры) за последние 10 минут + сбор таймингов
     $cutoff   = (Get-Date).AddMinutes(-10)
     $todayStr = Get-Date -Format "yyyy-MM-dd"
+    $times10m = [System.Collections.Generic.List[double]]::new()
     foreach ($ln in $allLogLines) {
-        if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO" -and $ln -notmatch "cpu\.csv") {
+        # Одна комбинированная regex — $Matches[1]=время, diff= в строке
+        if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO.+diff=") {
             $ts2 = $Matches[1]
             try {
                 $lt = [DateTime]::ParseExact("$todayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
-                if ($lt -ge $cutoff) { $count10m++ }
+                if ($lt -ge $cutoff) {
+                    $count10m++
+                    if ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с') {
+                        $times10m.Add([double]($Matches[1] -replace ',', '.'))
+                    }
+                }
             } catch {}
         }
     }
@@ -175,16 +202,14 @@ if (Test-Path $sendLogFile) {
     # Последнее сообщение ожидания ("нет" / "ожид")
     $sendIdleLines = $sendAllLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO" -and ($_ -match "ожид|нет|wait|empty") }
     if ($sendIdleLines) {
-        $li = @($sendIdleLines)[-1]
-        if ($li -match "^(\d{2}:\d{2}:\d{2})") {
-            $sendLastIdleLine = $Matches[1]
-        }
+        $sendLastIdleLine = Shorten-WinLog (@($sendIdleLines)[-1])
     }
 
     $sendCutoff   = (Get-Date).AddMinutes(-10)
     $sendTodayStr = Get-Date -Format "yyyy-MM-dd"
     foreach ($ln in $sendAllLines) {
-        if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO" -and $ln -match "\.(jpg|png|jpeg|bmp|webp)") {
+        # Одна комбинированная regex — $Matches[1]=время, расширение файла в строке
+        if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO.+\.(jpg|png|jpeg|bmp|webp)") {
             $ts2 = $Matches[1]
             try {
                 $lt = [DateTime]::ParseExact("$sendTodayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
@@ -202,16 +227,43 @@ Write-Host ""
 # но используются status.sh для построения таблицы сервисов в .md
 
 $winHost    = $env:COMPUTERNAME.ToLower()
-$stats10m   = if ($count10m -gt 0) { "${count10m}x" } else { "--" }
+
+# stats10m с тайммингами для 1_motion_diff
+if ($count10m -gt 0) {
+    $stats10m = "${count10m}x"
+    if ($times10m.Count -gt 0) {
+        $mn_t  = [math]::Round(($times10m | Measure-Object -Minimum).Minimum, 1)
+        $avg_t = [math]::Round(($times10m | Measure-Object -Average).Average, 1)
+        $mx_t  = [math]::Round(($times10m | Measure-Object -Maximum).Maximum, 1)
+        $lst_t = [math]::Round($times10m[$times10m.Count - 1], 1)
+        $stats10m += "  ${mn_t}/${avg_t}/${mx_t}/${lst_t}с"
+        # busy%: time_i / (window_sec / count) * 100
+        $avgIv  = 600.0 / $count10m
+        $perPct = $times10m | ForEach-Object { [int][math]::Round($_ / $avgIv * 100) }
+        $pArr   = @($perPct)
+        $bp_mn  = ($pArr | Measure-Object -Minimum).Minimum
+        $bp_avg = [int][math]::Round(($pArr | Measure-Object -Average).Average)
+        $bp_mx  = ($pArr | Measure-Object -Maximum).Maximum
+        $bp_lst = $pArr[$pArr.Count - 1]
+        $stats10m += "  ${bp_mn}/${bp_avg}/${bp_mx}/${bp_lst}%"
+    }
+} else { $stats10m = "--" }
+
 $sendStats10m = if ($sendCount10m -gt 0) { "${sendCount10m}x" } else { "--" }
 
 foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]
     $stat  = if ($pid2) { "OK" } else { "NOK" }
     if ($s.label -eq "1_motion_diff") {
-        $file2 = $lastEventTime; $log2 = $lastLogLine; $idle2 = $motionIdleLine; $st2 = $stats10m
+        $file2  = $lastEventTime
+        $log2   = Shorten-WinLog $lastLogLine
+        $idle2  = $motionIdleLine
+        $st2    = $stats10m
     } elseif ($s.label -eq "2_send") {
-        $file2 = $sendLastEventTime; $log2 = $sendLastLogLine; $idle2 = $sendLastIdleLine; $st2 = $sendStats10m
+        $file2  = $sendLastEventTime
+        $log2   = Shorten-WinLog $sendLastLogLine
+        $idle2  = $sendLastIdleLine
+        $st2    = $sendStats10m
     } else {
         $file2 = "--"; $log2 = "--"; $idle2 = "--"; $st2 = "--"
     }

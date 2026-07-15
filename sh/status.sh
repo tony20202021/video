@@ -35,7 +35,7 @@ if [[ -f "$REPO/.env" ]]; then
     done < "$REPO/.env"
 fi
 
-OUT_DIR="$REPO/.output/status"
+OUT_DIR="$REPO/.output/status/$(date +%Y-%m-%d)"
 mkdir -p "$OUT_DIR"
 TS_FILE=$(date +"%Y%m%d_%H%M%S")
 TS_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
@@ -66,7 +66,7 @@ try:
     for line in r.stdout.splitlines():
         if line.startswith("Mem:"):
             p = line.split()
-            ram = f"{p[2]}/{p[1]} MB"
+            ram = f"{round(int(p[2])/1024,1)}/{round(int(p[1])/1024,1)} GB"
             break
 except Exception:
     pass
@@ -97,31 +97,32 @@ PYEOF
 # ── парсинг метрик из вывода status_win.ps1 ───────────────────────────────────
 _parse_win_sys() {
     local win_out="$1"
-    local cpu ram disk scripts
+    local cpu ram disk work_path scripts
     # Убрать Windows \r — иначе awk/grep получают "OK\r" вместо "OK"
     local w
     w=$(echo "$win_out" | tr -d '\r')
 
     cpu=$(echo "$w" | grep "  CPU:" | grep -oE '[0-9]+%' | head -1)
-    ram=$(echo "$w" | grep "  RAM:" | grep -oE '[0-9]+/[0-9]+ MB' | head -1)
+    ram=$(echo "$w" | grep "  RAM:" | grep -oE '[0-9.]+/[0-9.]+ GB' | head -1)
 
-    # Берём диск рабочего каталога из строки "Work: <path> [X: used/total GB]"
-    disk=$(echo "$w" | grep "^  Work:" | grep -oE '[A-Z]: [0-9]+/[0-9]+ GB' | head -1)
+    # Диски из строки "Disks: C: 105/465 GB<br>D: 25/25 GB" (разделитель <br> из ps1)
+    disk=$(echo "$w" | grep "^  Disks:" | sed 's/^  Disks: //' | sed 's/[[:space:]]*$//')
     if [[ -z "$disk" ]]; then
-        # fallback: старый формат "Disk C: N GB used / M GB free"
         local du df
         du=$(echo "$w" | grep "Disk C:" | grep -oE '[0-9]+ GB used' | grep -oE '[0-9]+' | head -1)
         df=$(echo "$w" | grep "Disk C:" | grep -oE '[0-9]+ GB free' | grep -oE '[0-9]+' | head -1)
         [[ -n "$du" && -n "$df" ]] && disk="C: ${du}/$((du + df)) GB" || disk="—"
     fi
 
+    # Рабочий каталог — из строки "Work:  C:\_Work\video  [C: 105/465 GB]"
+    work_path=$(echo "$w" | grep "^  Work:" | sed 's/^  Work:[[:space:]]*//' | sed 's/[[:space:]]*\[.*//' | sed 's/[[:space:]]*$//')
+
     local m_status s_status
-    # grep по строкам вида "    <label>   OK  PID:..." (начинаются с пробелов + метка + пробелы)
     m_status=$(echo "$w" | grep -E '^[[:space:]]+1_motion_diff[[:space:]]' | awk '{print ($2=="OK")?"OK":"✗"}' | head -1)
     s_status=$(echo "$w" | grep -E '^[[:space:]]+2_send[[:space:]]'        | awk '{print ($2=="OK")?"OK":"✗"}' | head -1)
     scripts="motion_diff ${m_status:-?} / send ${s_status:-?}"
 
-    echo "${cpu:-?}|${ram:----}|${disk}|${scripts}"
+    echo "${cpu:-?}|${ram:----}|${disk}|${work_path}|${scripts}"
 }
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
@@ -150,9 +151,11 @@ _ssh_win() {
 _win_svc_md_rows() {
     local win_out="$1"
     echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output file last_log last_idle stats_10m; do
-        local s_icon
+        local s_icon file_md
         [[ "$status" == "OK" ]] && s_icon="✓" || s_icon="✗"
-        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | ${last_idle} | ${stats_10m} |"
+        # Дата и время в 2 строки: "2026-07-15 07:41" → "2026-07-15<br>07:41"
+        file_md=$(echo "$file" | sed 's/ \([0-9][0-9]:[0-9][0-9]\)$/<br>\1/')
+        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file_md} | ${last_log} | ${last_idle} | ${stats_10m} |"
     done
 }
 
@@ -163,16 +166,15 @@ echo "  WINDOWS  ($WIN_ENTRY_LABEL / $TS_WIN_ENTRY)"
 sep
 julie2_out=$(_ssh_win "$TS_WIN_ENTRY" "julia")
 if [[ -n "$julie2_out" ]]; then
-    # терминал: скрыть служебные строки WIN_SVC
     echo "$julie2_out" | grep -v "^# WIN_SVC|"
-    IFS='|' read -r julie2_cpu julie2_ram julie2_disk julie2_scripts <<< "$(_parse_win_sys "$julie2_out")"
+    IFS='|' read -r julie2_cpu julie2_ram julie2_disk julie2_repo julie2_scripts <<< "$(_parse_win_sys "$julie2_out")"
 else
     echo "  [недоступна — $TS_WIN_ENTRY]"
-    julie2_cpu="—"; julie2_ram="—"; julie2_disk="—"; julie2_scripts="недоступна"
+    julie2_cpu="—"; julie2_ram="—"; julie2_disk="—"; julie2_repo="—"; julie2_scripts="недоступна"
 fi
 
 # win-home
-tony8_cpu="—"; tony8_ram="—"; tony8_disk="—"; tony8_scripts="недоступна"
+tony8_cpu="—"; tony8_ram="—"; tony8_disk="—"; tony8_repo="—"; tony8_scripts="недоступна"
 tony8_out=""
 echo ""
 sep
@@ -183,14 +185,14 @@ if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new 
     tony8_out=$(_ssh_win "$TS_WIN_HOME" "tony")
     if [[ -n "$tony8_out" ]]; then
         echo "$tony8_out" | grep -v "^# WIN_SVC|"
-        IFS='|' read -r tony8_cpu tony8_ram tony8_disk tony8_scripts <<< "$(_parse_win_sys "$tony8_out")"
+        IFS='|' read -r tony8_cpu tony8_ram tony8_disk tony8_repo tony8_scripts <<< "$(_parse_win_sys "$tony8_out")"
     fi
 else
     echo "  [недоступна или SSH не настроен]"
 fi
 
 # win-evelina
-evelina_cpu="—"; evelina_ram="—"; evelina_disk="—"; evelina_scripts="недоступна"
+evelina_cpu="—"; evelina_ram="—"; evelina_disk="—"; evelina_repo="—"; evelina_scripts="недоступна"
 evelina_out=""
 if [[ -n "$TS_WIN_EVELINA" ]]; then
     echo ""
@@ -202,7 +204,7 @@ if [[ -n "$TS_WIN_EVELINA" ]]; then
         evelina_out=$(_ssh_win "$TS_WIN_EVELINA" "evelina" "$WIN_SCRIPT_EVELINA")
         if [[ -n "$evelina_out" ]]; then
             echo "$evelina_out" | grep -v "^# WIN_SVC|"
-            IFS='|' read -r evelina_cpu evelina_ram evelina_disk evelina_scripts <<< "$(_parse_win_sys "$evelina_out")"
+            IFS='|' read -r evelina_cpu evelina_ram evelina_disk evelina_repo evelina_scripts <<< "$(_parse_win_sys "$evelina_out")"
         fi
     else
         echo "  [недоступна или SSH не настроен]"
@@ -218,12 +220,12 @@ fi
     echo ""
     echo "## Ресурсы серверов"
     echo ""
-    echo "| Машина | CPU | RAM | Диск | Статус |"
-    echo "|---|---|---|---|---|"
-    echo "| Linux ($(hostname)) | ${linux_cpu} | ${linux_ram} | ${linux_disk} | ${linux_svcs} |"
-    echo "| ${WIN_ENTRY_LABEL} | ${julie2_cpu} | ${julie2_ram} | ${julie2_disk} | ${julie2_scripts} |"
-    echo "| ${WIN_HOME_LABEL} | ${tony8_cpu} | ${tony8_ram} | ${tony8_disk} | ${tony8_scripts} |"
-    [[ -n "$TS_WIN_EVELINA" ]] && echo "| ${WIN_EVELINA_LABEL} | ${evelina_cpu} | ${evelina_ram} | ${evelina_disk} | ${evelina_scripts} |"
+    echo "| Машина | CPU | RAM | Диск | Каталог | Статус |"
+    echo "|---|---|---|---|---|---|"
+    echo "| Linux ($(hostname)) | ${linux_cpu} | ${linux_ram} | ${linux_disk} | ${REPO} | ${linux_svcs} |"
+    echo "| ${WIN_ENTRY_LABEL} | ${julie2_cpu} | ${julie2_ram} | ${julie2_disk} | ${julie2_repo} | ${julie2_scripts} |"
+    echo "| ${WIN_HOME_LABEL} | ${tony8_cpu} | ${tony8_ram} | ${tony8_disk} | ${tony8_repo} | ${tony8_scripts} |"
+    [[ -n "$TS_WIN_EVELINA" ]] && echo "| ${WIN_EVELINA_LABEL} | ${evelina_cpu} | ${evelina_ram} | ${evelina_disk} | ${evelina_repo} | ${evelina_scripts} |"
     echo ""
     echo "## Сервисы"
     echo ""

@@ -433,6 +433,7 @@ def main() -> int:
     prev_gray: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
     last_good_frame: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
     last_heartbeat: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
+    last_save_time: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
     prev_pts: dict[str, float] = {lu: -1.0 for lu in low_unique}
     _MAX_LOW_IMPLAUSIBLE = 40
     _low_implausible: dict[str, int] = defaultdict(int)
@@ -609,7 +610,9 @@ def main() -> int:
                         _imwrite(_cam_dir(vn) / "diff" / fname, frame_u)
                         frame_log[-1][5] = "diff"
                         saves_log.append([round(_now - t_start, 4), _ts_str, vn, "diff"])
-                        logger.info(f"  {fname}  diff={diff:.2f}")
+                        _interval = _now - last_save_time.get(vn, _now)
+                        last_save_time[vn] = _now
+                        logger.info(f"  {fname}  diff={diff:.2f}  Готово. Время: {_interval:.1f} с.")
 
                 for vn in var_list:
                     if heartbeat_sec <= 0:
@@ -627,7 +630,9 @@ def main() -> int:
                     _imwrite(_cam_dir(vn) / hb_name, hb)
                     frame_log[-1][5] = "heartbeat"
                     saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "heartbeat"])
-                    logger.info(f"  пульс {hb_name}")
+                    _hb_interval = now - last_save_time.get(vn, now)
+                    last_save_time[vn] = now
+                    logger.info(f"  пульс {hb_name}  Готово. Время: {_hb_interval:.1f} с.")
 
             if args.csv_save_interval > 0:
                 _now = time.monotonic()
