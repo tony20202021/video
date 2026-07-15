@@ -26,6 +26,24 @@ function Shorten-WinLog($line) {
     $msg = $msg -replace '\(client\)\s+Файлов нет в \S+', 'Файлов нет'
     return $msg.Trim()
 }
+function Build-Stats($cnt, $times, $windowSec, $suffix) {
+    $s = "${cnt}x${suffix}"
+    if ($times.Count -gt 0) {
+        $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
+        $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
+        $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
+        $lst = [math]::Round($times[$times.Count - 1], 1)
+        $s  += "  ${mn}/${avg}/${mx}/${lst}с"
+        $avgIv = $windowSec / $cnt
+        $pArr  = @($times | ForEach-Object { [int][math]::Round($_ / $avgIv * 100) })
+        $bp_mn  = ($pArr | Measure-Object -Minimum).Minimum
+        $bp_avg = [int][math]::Round(($pArr | Measure-Object -Average).Average)
+        $bp_mx  = ($pArr | Measure-Object -Maximum).Maximum
+        $bp_lst = $pArr[$pArr.Count - 1]
+        $s += "  ${bp_mn}/${bp_avg}/${bp_mx}/${bp_lst}%"
+    }
+    return $s
+}
 $REPO = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
@@ -141,7 +159,7 @@ if (Test-Path $logFile) {
     Get-Content $logFile -Tail 5 -Encoding UTF8 | ForEach-Object { Write-Host "    $_" }
 
     # Последнее событие работы (без cpu.csv и без heartbeat) — для колонок "Файл" и "Лог: работа"
-    $eventLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO\s+\S" -and $_ -notmatch "cpu\.csv" -and $_ -notmatch "heartbeat" }
+    $eventLines = $allLogLines | Where-Object { $_ -match "^\d{2}:\d{2}:\d{2}\s+INFO\s+\S" -and $_ -notmatch "cpu\.csv" -and $_ -notmatch "heartbeat" -and $_ -notmatch "\[день\]" }
     if ($eventLines) {
         $le = @($eventLines)[-1]
         $lastLogLine = ($le.Trim() -replace '\|', ':')
@@ -156,22 +174,22 @@ if (Test-Path $logFile) {
         $motionIdleLine = Shorten-WinLog (@($hbLines)[-1])
     }
 
-    # Количество событий (diff-кадры) за последние 10 минут + сбор таймингов
+    # Количество событий (diff-кадры): 10м + 60м fallback
     $cutoff   = (Get-Date).AddMinutes(-10)
+    $cutoff60 = (Get-Date).AddMinutes(-60)
     $todayStr = Get-Date -Format "yyyy-MM-dd"
     $times10m = [System.Collections.Generic.List[double]]::new()
+    $count60m = 0; $times60m = [System.Collections.Generic.List[double]]::new()
     foreach ($ln in $allLogLines) {
         # Одна комбинированная regex — $Matches[1]=время, diff= в строке
         if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO.+diff=") {
             $ts2 = $Matches[1]
             try {
-                $lt = [DateTime]::ParseExact("$todayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
-                if ($lt -ge $cutoff) {
-                    $count10m++
-                    if ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с') {
-                        $times10m.Add([double]($Matches[1] -replace ',', '.'))
-                    }
-                }
+                $lt  = [DateTime]::ParseExact("$todayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
+                $t_v = $null
+                if ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с') { $t_v = [double]($Matches[1] -replace ',', '.') }
+                if ($lt -ge $cutoff)   { $count10m++; if ($t_v -ne $null) { $times10m.Add($t_v) } }
+                if ($lt -ge $cutoff60) { $count60m++; if ($t_v -ne $null) { $times60m.Add($t_v) } }
             } catch {}
         }
     }
@@ -207,13 +225,20 @@ if (Test-Path $sendLogFile) {
 
     $sendCutoff   = (Get-Date).AddMinutes(-10)
     $sendTodayStr = Get-Date -Format "yyyy-MM-dd"
+    $sendTimes10m = [System.Collections.Generic.List[double]]::new()
     foreach ($ln in $sendAllLines) {
         # Одна комбинированная regex — $Matches[1]=время, расширение файла в строке
         if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO.+\.(jpg|png|jpeg|bmp|webp)") {
             $ts2 = $Matches[1]
             try {
                 $lt = [DateTime]::ParseExact("$sendTodayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
-                if ($lt -ge $sendCutoff) { $sendCount10m++ }
+                if ($lt -ge $sendCutoff) {
+                    $sendCount10m++
+                    # "(47.8 КБ  297мс)" → 0.297с
+                    if ($ln -match '\([\d.,]+\s*КБ\s+([\d.,]+)мс\)') {
+                        $sendTimes10m.Add([double]($Matches[1] -replace ',', '.') / 1000.0)
+                    }
+                }
             } catch {}
         }
     }
@@ -228,28 +253,17 @@ Write-Host ""
 
 $winHost    = $env:COMPUTERNAME.ToLower()
 
-# stats10m с тайммингами для 1_motion_diff
+# stats для 1_motion_diff: 10м, fallback 60м
 if ($count10m -gt 0) {
-    $stats10m = "${count10m}x"
-    if ($times10m.Count -gt 0) {
-        $mn_t  = [math]::Round(($times10m | Measure-Object -Minimum).Minimum, 1)
-        $avg_t = [math]::Round(($times10m | Measure-Object -Average).Average, 1)
-        $mx_t  = [math]::Round(($times10m | Measure-Object -Maximum).Maximum, 1)
-        $lst_t = [math]::Round($times10m[$times10m.Count - 1], 1)
-        $stats10m += "  ${mn_t}/${avg_t}/${mx_t}/${lst_t}с"
-        # busy%: time_i / (window_sec / count) * 100
-        $avgIv  = 600.0 / $count10m
-        $perPct = $times10m | ForEach-Object { [int][math]::Round($_ / $avgIv * 100) }
-        $pArr   = @($perPct)
-        $bp_mn  = ($pArr | Measure-Object -Minimum).Minimum
-        $bp_avg = [int][math]::Round(($pArr | Measure-Object -Average).Average)
-        $bp_mx  = ($pArr | Measure-Object -Maximum).Maximum
-        $bp_lst = $pArr[$pArr.Count - 1]
-        $stats10m += "  ${bp_mn}/${bp_avg}/${bp_mx}/${bp_lst}%"
-    }
+    $stats10m = Build-Stats $count10m $times10m 600 ""
+} elseif ($count60m -gt 0) {
+    $stats10m = Build-Stats $count60m $times60m 3600 " (60м)"
 } else { $stats10m = "--" }
 
-$sendStats10m = if ($sendCount10m -gt 0) { "${sendCount10m}x" } else { "--" }
+# stats для 2_send: 10м с таймингом
+if ($sendCount10m -gt 0) {
+    $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 ""
+} else { $sendStats10m = "--" }
 
 foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]

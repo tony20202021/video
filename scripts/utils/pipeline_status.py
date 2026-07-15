@@ -39,10 +39,10 @@ SERVICES = [
         "input":      "Windows → HTTP POST :8765",
         "output":     ".output/transfer/  diff/  service/",
         "dir":        REPO / ".output/transfer",
-        "log_work":   r"POST|принят|received|Готово",
+        "log_work":   r"POST|Готово\. Время:",
         "log_wait":   r"\[recv\].*heartbeat",  # heartbeat-файл = камера idle, движения нет
-        "stats_pat":  r'"POST /file HTTP/1\.1" 200',  # принятые файлы
-        "has_timing": False,
+        "stats_pat":  r"\[recv\].*Готово\. Время:",
+        "has_timing": True,
     },
     {
         "name":       "video-yolo",
@@ -180,16 +180,15 @@ def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: in
 
 
 def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
-    """Статистика работы сервиса: сначала WINDOW_MIN мин, fallback 60 мин."""
+    """Статистика: 10м → 60м → 24ч (первое ненулевое окно)."""
     _empty = dict(count=0, min=None, avg=None, max=None, last=None,
                   bp_mn=None, bp_avg=None, bp_mx=None, bp_lst=None, window=WINDOW_MIN)
     try:
-        st = _stats_for_window(svc, stats_pat, has_timing, WINDOW_MIN)
-        if st["count"] > 0:
-            return st
-        # fallback: последний час
-        st60 = _stats_for_window(svc, stats_pat, has_timing, 60)
-        return st60 if st60["count"] > 0 else _empty
+        for window in [WINDOW_MIN, 60, 1440]:
+            st = _stats_for_window(svc, stats_pat, has_timing, window)
+            if st["count"] > 0:
+                return st
+        return _empty
     except Exception:
         return _empty
 
@@ -212,7 +211,14 @@ def fmt_stats(st: dict, has_timing: bool) -> str:
     if st["count"] == 0:
         return "—"
     w = st.get("window", WINDOW_MIN)
-    suffix = f" ({w}м)" if w != WINDOW_MIN else ""
+    if w == WINDOW_MIN:
+        suffix = ""
+    elif w >= 1440:
+        suffix = " (24ч)"
+    elif w >= 60:
+        suffix = f" ({w // 60}ч)" if w % 60 == 0 else f" ({w}м)"
+    else:
+        suffix = f" ({w}м)"
     lines = [f"{st['count']}×{suffix}"]
     if has_timing and st["avg"] is not None:
         lines.append(f"{st['min']}/{st['avg']}/{st['max']}/{st['last']}с")

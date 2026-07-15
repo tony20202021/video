@@ -17,6 +17,7 @@ import os
 import sys
 import tarfile
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -247,6 +248,7 @@ async def receive_file(
 
     dest_file.parent.mkdir(parents=True, exist_ok=True)
 
+    t0 = time.monotonic()
     tmp_file = dest_file.with_suffix(".tmp")
     size = 0
     with open(tmp_file, "wb") as fh:
@@ -268,8 +270,10 @@ async def receive_file(
         size_bytes=size,
         meta_layout=meta_layout,
     )
+    elapsed = time.monotonic() - t0
 
-    logger.info("[recv] %s  (%.1f КБ)  meta=%s", log_tag, size / 1024, meta_file.name)
+    logger.info("[recv] %s  (%.1f КБ)  Готово. Время: %.2f с.  meta=%s",
+                log_tag, size / 1024, elapsed, meta_file.name)
     return JSONResponse({"ok": True, "dest": str(dest_file), "meta": str(meta_file)})
 
 
