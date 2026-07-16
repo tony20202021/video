@@ -81,16 +81,16 @@ try:
     disk = f"{used}/{total} GB"
 except Exception:
     pass
-# Active services
-active = 0
+# Active services — list each by name
+svc_lines = []
 for svc in ["video-transfer", "video-yolo", "video-classify", "video-identify"]:
     try:
         r = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True)
-        if r.stdout.strip() == "active":
-            active += 1
+        icon = "✓" if r.stdout.strip() == "active" else "✗"
     except Exception:
-        pass
-print(f"{cpu}%|{ram}|{disk}|{active}/4 active")
+        icon = "?"
+    svc_lines.append(f"{icon} {svc}")
+print(f"{cpu}%|{ram}|{disk}|{'<br>'.join(svc_lines)}")
 PYEOF
 }
 
@@ -120,7 +120,7 @@ _parse_win_sys() {
     local m_status s_status
     m_status=$(echo "$w" | grep -E '^[[:space:]]+1_motion_diff[[:space:]]' | awk '{print ($2=="OK")?"OK":"✗"}' | head -1)
     s_status=$(echo "$w" | grep -E '^[[:space:]]+2_send[[:space:]]'        | awk '{print ($2=="OK")?"OK":"✗"}' | head -1)
-    scripts="motion_diff ${m_status:-?} / send ${s_status:-?}"
+    scripts="motion_diff ${m_status:-?}<br>send ${s_status:-?}"
 
     echo "${cpu:-?}|${ram:----}|${disk}|${work_path}|${scripts}"
 }

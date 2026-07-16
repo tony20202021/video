@@ -165,7 +165,7 @@ if (Test-Path $logFile) {
         $le = @($eventLines)[-1]
         $lastLogLine = ($le.Trim() -replace '\|', ':')
         if ($le -match "^(\d{2}:\d{2})") {
-            $lastEventTime = (Get-Date -Format "yyyy-MM-dd") + " " + $Matches[1]
+            $lastEventTime = (Get-Date -Format "yyyy-MM-dd") + "<br>" + $Matches[1]
         }
     }
 
@@ -214,7 +214,7 @@ if (Test-Path $sendLogFile) {
         $le = @($sendEventLines)[-1]
         $sendLastLogLine = ($le.Trim() -replace '\|', ':')
         if ($le -match "^(\d{2}:\d{2})") {
-            $sendLastEventTime = (Get-Date -Format "yyyy-MM-dd") + " " + $Matches[1]
+            $sendLastEventTime = (Get-Date -Format "yyyy-MM-dd") + "<br>" + $Matches[1]
         }
     }
 
@@ -266,22 +266,39 @@ if (Test-Path $cpuCsvFile) {
     }
 }
 
+# ── Кадры из diffs.csv (1_motion_diff) — показывать когда нет событий движения
+$frameCount10m = 0
+$diffsCsvFile = Join-Path $motionDir "meta\$today\diffs.csv"
+if (Test-Path $diffsCsvFile) {
+    $diffsCutoff = (Get-Date).AddMinutes(-10)
+    try {
+        $diffsRows = Import-Csv $diffsCsvFile | Where-Object {
+            try { [datetime]$_.ts_msk -ge $diffsCutoff } catch { $false }
+        }
+        if ($diffsRows) { $frameCount10m = @($diffsRows).Count }
+    } catch {}
+}
+
 # ── WIN_SVC: структурированные данные для master status.sh ───────────────────
 # Строки с префиксом "# WIN_SVC|" отфильтровываются из вывода на терминал,
 # но используются status.sh для построения таблицы сервисов в .md
 
 $winHost    = $env:COMPUTERNAME.ToLower()
 
-# stats для 1_motion_diff: 10м, fallback 60м
+# stats для 1_motion_diff: 10м, fallback 60м, fallback кадры из diffs.csv
 if ($count10m -gt 0) {
-    $stats10m = Build-Stats $count10m $times10m 600 "" $motionCpuLine
+    $stats10m = Build-Stats $count10m $times10m 600 " (10м)" $motionCpuLine
 } elseif ($count60m -gt 0) {
     $stats10m = Build-Stats $count60m $times60m 3600 " (60м)" $motionCpuLine
+} elseif ($frameCount10m -gt 0) {
+    # нет событий движения, но кадры обрабатываются — показываем счётчик кадров
+    $stats10m = "${frameCount10m}× кадров (10м)"
+    if ($motionCpuLine -ne "") { $stats10m += "<br>${motionCpuLine}" }
 } else { $stats10m = "--" }
 
 # stats для 2_send: 10м с таймингом
 if ($sendCount10m -gt 0) {
-    $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 ""
+    $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 " (10м)"
 } else { $sendStats10m = "--" }
 
 foreach ($s in $scriptDefs) {

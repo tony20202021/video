@@ -97,7 +97,7 @@ def latest_file(directory: Path) -> tuple[str, str]:
         pass
     if best_path is None:
         return "—", "—"
-    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d %H:%M")
+    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d\n%H:%M")
     short = f"…/{best_path.parent.name}/{best_path.name}"
     return t, short
 
@@ -232,9 +232,7 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
     if st["count"] == 0:
         return "—"
     w = st.get("window", WINDOW_MIN)
-    if w == WINDOW_MIN:
-        suffix = ""
-    elif w >= 1440:
+    if w >= 1440:
         suffix = " (24ч)"
     elif w >= 60:
         suffix = f" ({w // 60}ч)" if w % 60 == 0 else f" ({w}м)"
@@ -279,14 +277,8 @@ def collect() -> list[dict]:
 
 def _wrap(text: str, width: int) -> list[str]:
     if "\n" in text:
-        return [line[:width] for line in text.split("\n")]
-    if len(text) <= width:
-        return [text]
-    if "  " in text:
-        part0, part1 = text.split("  ", 1)
-        if len(part0) <= width:
-            return [part0, part1[:width]]
-    return [text[:width], text[width:2 * width]]
+        return text.split("\n")
+    return [text]
 
 
 def _box(headers: list[str], rows_data: list[list[str]], widths: list[int]) -> list[str]:
@@ -368,7 +360,7 @@ def render_md(rows: list[dict], ts: str) -> str:
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
          _fmt_tree(r["input"]).replace("\n", "<br>"),
          _fmt_tree(r["output"]).replace("\n", "<br>"),
-         r["file_time"],
+         r["file_time"].replace("\n", "<br>"),
          r["log_work"],
          r["log_wait"],
          r["stats"].replace("\n", "<br>")]
