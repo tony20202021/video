@@ -614,10 +614,16 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {_base_out}")
-    summary = "  ".join(f"{p}: {n}" for p, n in sorted(grand_identified.items()))
-    if summary:
-        logger.info(f"Итог: {summary}")
+    if grand_total == 0:
+        logger.info(
+            f"Кропов нет (все {grand_skipped} уже обработаны). "
+            f"Время: {stats['duration_sec']} с."
+        )
+    else:
+        logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {_base_out}")
+        summary = "  ".join(f"{p}: {n}" for p, n in sorted(grand_identified.items()))
+        if summary:
+            logger.info(f"Итог: {summary}")
     return 0
 
 

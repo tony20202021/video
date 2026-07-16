@@ -97,8 +97,20 @@ while true; do
         n=$(_count_crops "$date_dir")
         [[ "$n" -eq 0 ]] && continue
 
-        _any=1
         date=$(basename "$date_dir")
+
+        # Пропустить дату если нет новых кропов с момента последнего прогона
+        latest_meta=$(find "$OUT_DIR/meta/$date" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+                      | sort | tail -1)
+        if [[ -n "$latest_meta" ]]; then
+            new_crops=$(find "$date_dir" -name "*.jpg" -newer "$latest_meta" -type f \
+                        2>/dev/null | head -1)
+            if [[ -z "$new_crops" ]]; then
+                continue
+            fi
+        fi
+
+        _any=1
         echo "$(_ts)  INFO      $date: $n кропов — запуск идентификации…"
 
         "$PYTHON" "$SCRIPT" "$date_dir" \
