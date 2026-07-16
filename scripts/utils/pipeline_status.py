@@ -350,8 +350,12 @@ def _box(headers: list[str], rows_data: list[list[str]], widths: list[int]) -> l
     return out
 
 
+_NOWRAP = "\033[?7l"   # отключить перенос строк в терминале
+_WRAP   = "\033[?7h"   # включить обратно
+
+
 def render_term(rows: list[dict], ts: str) -> str:
-    out = ["", f"  PIPELINE STATUS    {ts}", ""]
+    out = [_NOWRAP, "", f"  PIPELINE STATUS    {ts}", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
                "N кадров (за 10м)\n1кадр (мин/ср/макс/посл)\nвремя % (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
@@ -371,6 +375,7 @@ def render_term(rows: list[dict], ts: str) -> str:
     for line in _box(headers, data, widths):
         out.append("  " + line)
 
+    out.append(_WRAP)
     out.append("")
     return "\n".join(out)
 
