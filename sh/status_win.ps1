@@ -253,8 +253,14 @@ $motionCpuLine = ""
 $cpuCsvFile = Join-Path $motionDir "meta\$today\cpu.csv"
 if (Test-Path $cpuCsvFile) {
     $cpuCutoff = (Get-Date).AddMinutes(-10)
+    # ts_msk формат: 20260716_084240_891271_msk → парсим YYYYMMDD_HHMMSS
     $cpuRows = Import-Csv $cpuCsvFile | Where-Object {
-        try { [datetime]$_.ts_msk -ge $cpuCutoff } catch { $false }
+        try {
+            $ts = $_.ts_msk
+            if ($ts -match '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})') {
+                [datetime]::ParseExact("$($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5]):$($Matches[6])", 'yyyy-MM-dd HH:mm:ss', $null) -ge $cpuCutoff
+            } else { [datetime]$ts -ge $cpuCutoff }
+        } catch { $false }
     }
     if ($cpuRows -and @($cpuRows).Count -gt 0) {
         $cpuVals = @($cpuRows | ForEach-Object { [int][math]::Round([double]$_.cpu_pct) })
@@ -273,7 +279,12 @@ if (Test-Path $diffsCsvFile) {
     $diffsCutoff = (Get-Date).AddMinutes(-10)
     try {
         $diffsRows = Import-Csv $diffsCsvFile | Where-Object {
-            try { [datetime]$_.ts_msk -ge $diffsCutoff } catch { $false }
+            try {
+                $ts = $_.ts_msk
+                if ($ts -match '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})') {
+                    [datetime]::ParseExact("$($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5]):$($Matches[6])", 'yyyy-MM-dd HH:mm:ss', $null) -ge $diffsCutoff
+                } else { [datetime]$ts -ge $diffsCutoff }
+            } catch { $false }
         }
         if ($diffsRows) { $frameCount10m = @($diffsRows).Count }
     } catch {}
@@ -294,6 +305,9 @@ if ($count10m -gt 0) {
     # нет событий движения, но кадры обрабатываются — показываем счётчик кадров
     $stats10m = "${frameCount10m}× кадров (10м)"
     if ($motionCpuLine -ne "") { $stats10m += "<br>${motionCpuLine}" }
+} elseif ($motionCpuLine -ne "") {
+    # нет ни движения ни diffs.csv, но CPU есть — хотя бы покажем CPU
+    $stats10m = "—<br>${motionCpuLine}"
 } else { $stats10m = "--" }
 
 # stats для 2_send: 10м с таймингом
