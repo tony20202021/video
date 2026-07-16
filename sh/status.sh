@@ -151,11 +151,9 @@ _ssh_win() {
 _win_svc_md_rows() {
     local win_out="$1"
     echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output file last_log last_idle stats_10m; do
-        local s_icon file_md
+        local s_icon
         [[ "$status" == "OK" ]] && s_icon="✓" || s_icon="✗"
-        # Дата и время в 2 строки: "2026-07-15 07:41" → "2026-07-15<br>07:41"
-        file_md=$(echo "$file" | sed 's/ \([0-9][0-9]:[0-9][0-9]\)$/<br>\1/')
-        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file_md} | ${last_log} | ${last_idle} | ${stats_10m} |"
+        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | ${last_idle} | ${stats_10m} |"
     done
 }
 

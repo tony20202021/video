@@ -26,22 +26,23 @@ function Shorten-WinLog($line) {
     $msg = $msg -replace '\(client\)\s+Файлов нет в \S+', 'Файлов нет'
     return $msg.Trim()
 }
-function Build-Stats($cnt, $times, $windowSec, $suffix) {
+function Build-Stats($cnt, $times, $windowSec, $suffix, $cpuLine = "") {
     $s = "${cnt}x${suffix}"
     if ($times.Count -gt 0) {
         $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
         $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
         $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
         $lst = [math]::Round($times[$times.Count - 1], 1)
-        $s  += "<br>${mn}/${avg}/${mx}/${lst}с"
+        $s  += "<br>${mn}с/${avg}с/${mx}с/${lst}с"
         $avgIv = $windowSec / $cnt
-        $pArr  = @($times | ForEach-Object { [int][math]::Min(100, [math]::Round($_ / $avgIv * 100)) })
+        $pArr  = @($times | ForEach-Object { [int][math]::Round($_ / $avgIv * 100) })
         $bp_mn  = ($pArr | Measure-Object -Minimum).Minimum
         $bp_avg = [int][math]::Round(($pArr | Measure-Object -Average).Average)
         $bp_mx  = ($pArr | Measure-Object -Maximum).Maximum
         $bp_lst = $pArr[$pArr.Count - 1]
-        $s += "<br>${bp_mn}/${bp_avg}/${bp_mx}/${bp_lst}%"
+        $s += "<br>${bp_mn}%/${bp_avg}%/${bp_mx}%/${bp_lst}%"
     }
+    if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
     return $s
 }
 $REPO = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -247,6 +248,24 @@ if (Test-Path $sendLogFile) {
 }
 Write-Host ""
 
+# ── CPU из cpu.csv (1_motion_diff) ───────────────────────────────────────────
+$motionCpuLine = ""
+$cpuCsvFile = Join-Path $motionDir "meta\$today\cpu.csv"
+if (Test-Path $cpuCsvFile) {
+    $cpuCutoff = (Get-Date).AddMinutes(-10)
+    $cpuRows = Import-Csv $cpuCsvFile | Where-Object {
+        try { [datetime]$_.ts_msk -ge $cpuCutoff } catch { $false }
+    }
+    if ($cpuRows -and @($cpuRows).Count -gt 0) {
+        $cpuVals = @($cpuRows | ForEach-Object { [int][math]::Round([double]$_.cpu_pct) })
+        $cpuMn  = ($cpuVals | Measure-Object -Minimum).Minimum
+        $cpuAvg = [int][math]::Round(($cpuVals | Measure-Object -Average).Average)
+        $cpuMx  = ($cpuVals | Measure-Object -Maximum).Maximum
+        $cpuLst = $cpuVals[$cpuVals.Count - 1]
+        $motionCpuLine = "${cpuMn}%/${cpuAvg}%/${cpuMx}%/${cpuLst}%"
+    }
+}
+
 # ── WIN_SVC: структурированные данные для master status.sh ───────────────────
 # Строки с префиксом "# WIN_SVC|" отфильтровываются из вывода на терминал,
 # но используются status.sh для построения таблицы сервисов в .md
@@ -255,9 +274,9 @@ $winHost    = $env:COMPUTERNAME.ToLower()
 
 # stats для 1_motion_diff: 10м, fallback 60м
 if ($count10m -gt 0) {
-    $stats10m = Build-Stats $count10m $times10m 600 ""
+    $stats10m = Build-Stats $count10m $times10m 600 "" $motionCpuLine
 } elseif ($count60m -gt 0) {
-    $stats10m = Build-Stats $count60m $times60m 3600 " (60м)"
+    $stats10m = Build-Stats $count60m $times60m 3600 " (60м)" $motionCpuLine
 } else { $stats10m = "--" }
 
 # stats для 2_send: 10м с таймингом

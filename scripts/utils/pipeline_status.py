@@ -97,7 +97,7 @@ def latest_file(directory: Path) -> tuple[str, str]:
         pass
     if best_path is None:
         return "—", "—"
-    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d\n%H:%M")
+    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d %H:%M")
     short = f"…/{best_path.parent.name}/{best_path.name}"
     return t, short
 
@@ -207,7 +207,28 @@ def _fmt_tree(text: str) -> str:
     return "\n".join(lines)
 
 
-def fmt_stats(st: dict, has_timing: bool) -> str:
+def service_cpu(svc_name: str) -> str | None:
+    """Текущая загрузка ЦПУ процесса (один замер 0.3с)."""
+    try:
+        import time
+        import psutil
+        r = subprocess.run(
+            ["systemctl", "show", "--property=MainPID", svc_name],
+            capture_output=True, text=True,
+        )
+        pid = int(r.stdout.strip().split("=")[1])
+        if pid <= 0:
+            return None
+        p = psutil.Process(pid)
+        p.cpu_percent()  # warm-up
+        time.sleep(0.3)
+        pct = round(p.cpu_percent())
+        return f"{pct}%"
+    except Exception:
+        return None
+
+
+def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
     if st["count"] == 0:
         return "—"
     w = st.get("window", WINDOW_MIN)
@@ -221,9 +242,13 @@ def fmt_stats(st: dict, has_timing: bool) -> str:
         suffix = f" ({w}м)"
     lines = [f"{st['count']}×{suffix}"]
     if has_timing and st["avg"] is not None:
-        lines.append(f"{st['min']}/{st['avg']}/{st['max']}/{st['last']}с")
+        mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
+        lines.append(f"{mn}с/{avg}с/{mx}с/{lst}с")
         if st["bp_avg"] is not None:
-            lines.append(f"{st['bp_mn']}/{st['bp_avg']}/{st['bp_mx']}/{st['bp_lst']}%")
+            bp = st["bp_mn"], st["bp_avg"], st["bp_mx"], st["bp_lst"]
+            lines.append(f"{bp[0]}%/{bp[1]}%/{bp[2]}%/{bp[3]}%")
+    if cpu_line is not None:
+        lines.append(cpu_line)
     return "\n".join(lines)
 
 
@@ -235,6 +260,7 @@ def collect() -> list[dict]:
         state     = svc_state(s["name"])
         file_time, file_name = latest_file(s["dir"])
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
+        cpu_line  = service_cpu(s["name"]) if state == "active" else None
         rows.append({
             "name":      s["name"],
             "input":     s["input"],
@@ -244,7 +270,7 @@ def collect() -> list[dict]:
             "file_name": file_name,
             "log_work":  last_log(s["name"], s["log_work"]),
             "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
-            "stats":     fmt_stats(st, s["has_timing"]),
+            "stats":     fmt_stats(st, s["has_timing"], cpu_line),
         })
     return rows
 
@@ -300,8 +326,8 @@ def render_term(rows: list[dict], ts: str) -> str:
     out = ["", f"  PIPELINE STATUS    {ts}", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "за 10м:\nN× / с\n(мин/ср/макс/посл)\n%(мин/ср/макс/посл)"]
-    widths  = [7, 18, 8, 40, 42, 26, 28, 24, 22]
+               "за 10м:\nN× / с\n(мин/ср/макс/посл)\n%(мин/ср/макс/посл)\nцпу%"]
+    widths  = [7, 18, 8, 40, 42, 20, 28, 24, 22]
     data = [
         ["Linux",
          r["name"],
@@ -335,14 +361,14 @@ def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "за 10м:<br>N× / с<br>(мин/ср/макс/посл)<br>%(мин/ср/макс/посл)"]
+               "за 10м:<br>N×<br>с (мин/ср/макс/посл)<br>% (мин/ср/макс/посл)<br>цпу%"]
     data = [
         ["Linux",
          f"`{r['name']}`",
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
          _fmt_tree(r["input"]).replace("\n", "<br>"),
          _fmt_tree(r["output"]).replace("\n", "<br>"),
-         r["file_time"].replace("\n", "<br>"),
+         r["file_time"],
          r["log_work"],
          r["log_wait"],
          r["stats"].replace("\n", "<br>")]
