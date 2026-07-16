@@ -208,7 +208,7 @@ def _fmt_tree(text: str) -> str:
 
 
 def service_cpu(svc_name: str) -> str | None:
-    """Текущая загрузка ЦПУ процесса (один замер 0.3с)."""
+    """ЦПУ процесса: 4 замера × 0.25с → мин%/ср%/макс%/посл%."""
     try:
         import time
         import psutil
@@ -221,9 +221,15 @@ def service_cpu(svc_name: str) -> str | None:
             return None
         p = psutil.Process(pid)
         p.cpu_percent()  # warm-up
-        time.sleep(0.3)
-        pct = round(p.cpu_percent())
-        return f"{pct}%"
+        samples = []
+        for _ in range(4):
+            time.sleep(0.25)
+            samples.append(round(p.cpu_percent()))
+        mn = min(samples)
+        avg = round(sum(samples) / len(samples))
+        mx = max(samples)
+        last = samples[-1]
+        return f"{mn}%/{avg}%/{mx}%/{last}%"
     except Exception:
         return None
 
@@ -253,12 +259,37 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
 # ─── сбор данных ──────────────────────────────────────────────────────────────
 
 def collect() -> list[dict]:
-    rows = []
+    import threading
+
+    states = {s["name"]: svc_state(s["name"]) for s in SERVICES}
+
+    # Запускаем замеры CPU параллельно пока собираем остальные данные
+    cpu_results: dict[str, str | None] = {}
+    threads = []
     for s in SERVICES:
-        state     = svc_state(s["name"])
+        if states[s["name"]] == "active":
+            def _measure(name: str = s["name"]) -> None:
+                cpu_results[name] = service_cpu(name)
+            t = threading.Thread(target=_measure)
+            t.start()
+            threads.append(t)
+
+    # Пока CPU-потоки работают — собираем файлы и логи
+    partial: list[tuple] = []
+    for s in SERVICES:
+        state = states[s["name"]]
         file_time, file_name = latest_file(s["dir"])
-        st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
-        cpu_line  = service_cpu(s["name"]) if state == "active" else None
+        st = service_stats(s["name"], s["stats_pat"], s["has_timing"])
+        lw = last_log(s["name"], s["log_work"])
+        lq = last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"])
+        partial.append((s, state, file_time, file_name, st, lw, lq))
+
+    for t in threads:
+        t.join()
+
+    rows = []
+    for s, state, file_time, file_name, st, lw, lq in partial:
+        cpu_line = cpu_results.get(s["name"])
         rows.append({
             "name":      s["name"],
             "input":     s["input"],
@@ -266,8 +297,8 @@ def collect() -> list[dict]:
             "state":     state,
             "file_time": file_time,
             "file_name": file_name,
-            "log_work":  last_log(s["name"], s["log_work"]),
-            "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
+            "log_work":  lw,
+            "log_wait":  lq,
             "stats":     fmt_stats(st, s["has_timing"], cpu_line),
         })
     return rows
@@ -318,8 +349,8 @@ def render_term(rows: list[dict], ts: str) -> str:
     out = ["", f"  PIPELINE STATUS    {ts}", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "за 10м:\nN× / с\n(мин/ср/макс/посл)\n%(мин/ср/макс/посл)\nцпу%"]
-    widths  = [7, 18, 8, 40, 42, 20, 28, 24, 22]
+               "N кадров (за 10м)\n1кадр (мин/ср/макс/посл)\nвремя % (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
+    widths  = [7, 18, 8, 55, 55, 20, 45, 38, 35]
     data = [
         ["Linux",
          r["name"],
@@ -353,7 +384,7 @@ def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "за 10м:<br>N×<br>с (мин/ср/макс/посл)<br>% (мин/ср/макс/посл)<br>цпу%"]
+               "N кадров (за 10м)<br>1кадр (мин/ср/макс/посл)<br>время % (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
