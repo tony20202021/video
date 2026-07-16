@@ -8,10 +8,11 @@ Usage:
 """
 from __future__ import annotations
 
+import csv as _csv
 import os
 import re
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -207,31 +208,60 @@ def _fmt_tree(text: str) -> str:
     return "\n".join(lines)
 
 
-def service_cpu(svc_name: str) -> str | None:
-    """ЦПУ процесса: 4 замера × 0.25с → мин%/ср%/макс%/посл%."""
-    try:
-        import time
-        import psutil
-        r = subprocess.run(
-            ["systemctl", "show", "--property=MainPID", svc_name],
-            capture_output=True, text=True,
-        )
-        pid = int(r.stdout.strip().split("=")[1])
-        if pid <= 0:
-            return None
-        p = psutil.Process(pid)
-        p.cpu_percent()  # warm-up
-        samples = []
-        for _ in range(4):
-            time.sleep(0.25)
-            samples.append(round(p.cpu_percent()))
-        mn = min(samples)
-        avg = round(sum(samples) / len(samples))
-        mx = max(samples)
-        last = samples[-1]
-        return f"{mn}%/{avg}%/{mx}%/{last}%"
-    except Exception:
+def _cpu_csv_paths(svc_name: str, window_min: int) -> list[Path]:
+    """Файлы cpu.csv сервиса за последние window_min минут."""
+    today   = datetime.now().strftime("%Y%m%d")
+    cutoff  = datetime.now().timestamp() - window_min * 60
+
+    if svc_name == "video-yolo":
+        p = REPO / ".output/pipeline/2_yolo_boxes_files/meta" / today / "cpu.csv"
+        return [p] if p.is_file() else []
+
+    if svc_name == "video-classify":
+        base = REPO / f".data/groups/{GROUPS_VER}/inference/meta" / today
+        if not base.is_dir():
+            return []
+        return [p for p in base.glob("*/cpu.csv") if p.stat().st_mtime >= cutoff]
+
+    if svc_name == "video-identify":
+        base = REPO / f".data/residents/{RESIDENTS_VER}/inference/meta" / today
+        if not base.is_dir():
+            return []
+        return [p for p in base.glob("*/cpu.csv") if p.stat().st_mtime >= cutoff]
+
+    return []
+
+
+def service_cpu(svc_name: str, window_min: int = WINDOW_MIN) -> str | None:
+    """ЦПУ из cpu.csv за последние window_min минут → мин%/ср%/макс%/посл%."""
+    paths = _cpu_csv_paths(svc_name, window_min)
+    if not paths:
         return None
+
+    cutoff  = datetime.now() - timedelta(minutes=window_min)
+    samples: list[int] = []
+
+    for path in sorted(paths):
+        try:
+            with open(path, newline="", encoding="utf-8") as f:
+                for row in _csv.DictReader(f):
+                    try:
+                        ts = datetime.strptime(row["ts_msk"][:15], "%Y%m%d_%H%M%S")
+                        if ts >= cutoff:
+                            samples.append(round(float(row["cpu_pct"])))
+                    except (ValueError, KeyError):
+                        pass
+        except Exception:
+            pass
+
+    if not samples:
+        return None
+
+    mn   = min(samples)
+    avg  = round(sum(samples) / len(samples))
+    mx   = max(samples)
+    last = samples[-1]
+    return f"{mn}%/{avg}%/{mx}%/{last}%"
 
 
 def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
@@ -259,37 +289,12 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
 # ─── сбор данных ──────────────────────────────────────────────────────────────
 
 def collect() -> list[dict]:
-    import threading
-
-    states = {s["name"]: svc_state(s["name"]) for s in SERVICES}
-
-    # Запускаем замеры CPU параллельно пока собираем остальные данные
-    cpu_results: dict[str, str | None] = {}
-    threads = []
-    for s in SERVICES:
-        if states[s["name"]] == "active":
-            def _measure(name: str = s["name"]) -> None:
-                cpu_results[name] = service_cpu(name)
-            t = threading.Thread(target=_measure)
-            t.start()
-            threads.append(t)
-
-    # Пока CPU-потоки работают — собираем файлы и логи
-    partial: list[tuple] = []
-    for s in SERVICES:
-        state = states[s["name"]]
-        file_time, file_name = latest_file(s["dir"])
-        st = service_stats(s["name"], s["stats_pat"], s["has_timing"])
-        lw = last_log(s["name"], s["log_work"])
-        lq = last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"])
-        partial.append((s, state, file_time, file_name, st, lw, lq))
-
-    for t in threads:
-        t.join()
-
     rows = []
-    for s, state, file_time, file_name, st, lw, lq in partial:
-        cpu_line = cpu_results.get(s["name"])
+    for s in SERVICES:
+        state     = svc_state(s["name"])
+        file_time, file_name = latest_file(s["dir"])
+        st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
+        cpu_line  = service_cpu(s["name"]) if state == "active" else None
         rows.append({
             "name":      s["name"],
             "input":     s["input"],
@@ -297,8 +302,8 @@ def collect() -> list[dict]:
             "state":     state,
             "file_time": file_time,
             "file_name": file_name,
-            "log_work":  lw,
-            "log_wait":  lq,
+            "log_work":  last_log(s["name"], s["log_work"]),
+            "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
             "stats":     fmt_stats(st, s["has_timing"], cpu_line),
         })
     return rows
