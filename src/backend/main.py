@@ -3,8 +3,9 @@
 from fastapi import FastAPI
 
 from backend.routers import cameras, events, ingest, persons, status, training, unclassified, web
+from common.version import get_version
 
-app = FastAPI(title="Video Surveillance Backend", version="0.1.0")
+app = FastAPI(title="Video Surveillance Backend", version=get_version())
 
 # Web UI — должен быть первым (перехватывает GET /)
 app.include_router(web.router)

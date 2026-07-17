@@ -113,6 +113,20 @@
 
 ---
 
+## Версия
+
+Единый источник версии — файл `VERSION` в корне репозитория (формат `MAJOR.MINOR.PATCH`).
+
+- В коде: `from common.version import get_version` (используется в FastAPI-приложениях: backend, transfer).
+- Обновление: `python scripts/version.py bump` (минор +1), `--patch`, `--major`, либо `set X.Y.Z`.
+- Правило проекта: на каждое изменение — `bump` (минор +1); мажор — только когда явно сказано.
+
+```bash
+python scripts/version.py            # показать
+python scripts/version.py bump       # 0.1.0 → 0.2.0
+python scripts/version.py bump --major   # 0.2.0 → 1.0.0
+```
+
 ## Структура репозитория
 
 ```

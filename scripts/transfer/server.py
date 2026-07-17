@@ -34,6 +34,7 @@ import logging
 
 from common.utils.access import is_ip_allowed, log_ip_denied, parse_allowed_ips
 from common.utils.time_msk import MSK, ts_iso
+from common.version import get_version
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 
-app = FastAPI(title="Transfer Server", version="1.0", lifespan=lifespan)
+app = FastAPI(title="Transfer Server", version=get_version(), lifespan=lifespan)
 
 
 class _IPAllowlistMiddleware(BaseHTTPMiddleware):
