@@ -325,6 +325,17 @@ function Get-DirState($dir) {
 # Очередь кадров: выход 1_motion_diff = вход 2_send (те же файлы до отправки+удаления)
 $motionState = Get-DirState $motionDir
 
+# Адрес transfer-сервера (куда шлёт 2_send) — из .env TRANSFER_SERVER (без http:// и /)
+$transferAddr = "transfer server"
+$envFileTS = Join-Path $REPO ".env"
+if (Test-Path $envFileTS) {
+    $tl = (Get-Content $envFileTS | Where-Object { $_ -match '^\s*TRANSFER_SERVER\s*=' } | Select-Object -First 1)
+    if ($tl) {
+        $tv = ((($tl -replace '^\s*TRANSFER_SERVER\s*=\s*','') -replace '\s*#.*$','').Trim() -replace '^https?://','') -replace '/+$',''
+        if ($tv) { $transferAddr = $tv }
+    }
+}
+
 foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]
     $stat  = if ($pid2) { "OK" } else { "NOK" }
@@ -336,7 +347,7 @@ foreach ($s in $scriptDefs) {
         $st2  = $stats10m
     } elseif ($s.label -eq "2_send") {
         $in2  = "1_motion_diff/images/<br>$motionState"
-        $out2 = "→ transfer server<br>—"
+        $out2 = "→ $transferAddr<br>—"
         $log2 = Shorten-WinLog $sendLastLogLine
         $idle2 = $sendLastIdleLine
         $st2  = $sendStats10m
