@@ -26,7 +26,7 @@ import cv2
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = REPO_ROOT / ".models" / "yolov8n.onnx"
+DEFAULT_MODEL = REPO_ROOT / ".models" / "detect" / "yolov8n.onnx"
 DEFAULT_DATA = REPO_ROOT / ".data"
 DEFAULT_OUTPUT = REPO_ROOT / ".output" / "eval_detection"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -118,6 +118,9 @@ def run_eval(
 
 
 # ─── pytest ───────────────────────────────────────────────────────────────────
+
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="module")
 def detection_results():

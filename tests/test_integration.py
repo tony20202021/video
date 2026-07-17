@@ -18,7 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEST_DATA = REPO_ROOT / "tests" / ".data"
-MODEL_YOLO = REPO_ROOT / ".models" / "yolov8n.onnx"
+MODEL_YOLO = REPO_ROOT / ".models" / "detect" / "yolov8n.onnx"
+
+pytestmark = pytest.mark.integration
 
 _NO_PERSON_DIR = TEST_DATA / "no_person"
 _WITH_PERSON_DIR = TEST_DATA / "with_person"

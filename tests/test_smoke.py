@@ -1,88 +1,104 @@
 """
-Smoke-тесты: проверяют что модель загружается и API не падает.
-Не требуют размеченного датасета — работают всегда при наличии yolov8n.onnx.
+Smoke-тесты обёртки детекции — на StubSession, БЕЗ реальной модели и onnxruntime.
+
+Проверяется контракт load/detect/postprocess/draw на управляемой заглушке:
+заглушка отдаёт синтетический YOLOv8-выход, а `detect_people` прогоняет реальные
+`_preprocess`/`_postprocess`. Тесты на реальной модели — в test_person_detection.py
+(маркер integration).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = REPO_ROOT / ".models" / "yolov8n.onnx"
-TEST_DATA_DIR = REPO_ROOT / "tests" / ".data"
+from common.utils.person_detector import detect_people, draw_boxes
 
 
-@pytest.fixture(scope="module")
-def sess():
-    if not DEFAULT_MODEL.is_file():
-        pytest.skip(f"Модель не найдена: {DEFAULT_MODEL} — запустите python scripts/setup_models.py")
-    from common.utils.person_detector import load_model
-    s = load_model(DEFAULT_MODEL)
-    assert s is not None
-    return s
+class _StubInput:
+    def __init__(self, name: str, shape: list[int]):
+        self.name = name
+        self.shape = shape
 
 
-def test_model_loads(sess):
-    """Модель загружается и имеет корректный вход."""
-    inp = sess.get_inputs()[0]
-    assert inp.shape[1] == 3        # RGB
-    assert inp.shape[2] == 640      # height
-    assert inp.shape[3] == 640      # width
+class StubSession:
+    """Заглушка onnxruntime.InferenceSession.
+
+    boxes — список (cx, cy, bw, bh, conf) в координатах входа 640×640;
+    run() отдаёт синтетический YOLOv8-выход [1, 84, 8400].
+    """
+
+    def __init__(self, boxes=()):
+        self._boxes = list(boxes)
+
+    def get_inputs(self):
+        return [_StubInput("images", [1, 3, 640, 640])]
+
+    def run(self, output_names, feeds):
+        out = np.zeros((1, 84, 8400), dtype=np.float32)
+        for i, (cx, cy, bw, bh, conf) in enumerate(self._boxes):
+            out[0, 0, i] = cx
+            out[0, 1, i] = cy
+            out[0, 2, i] = bw
+            out[0, 3, i] = bh
+            out[0, 4, i] = conf  # скор класса person (индекс 4)
+        return [out]
 
 
-def test_black_frame_no_detections(sess):
-    """Чёрный кадр → никаких детекций."""
-    from common.utils.person_detector import detect_people
-    black = np.zeros((480, 640, 3), dtype=np.uint8)
-    result = detect_people(sess, black)
+@pytest.fixture
+def stub_empty():
+    return StubSession(boxes=[])
+
+
+@pytest.fixture
+def stub_one():
+    return StubSession(boxes=[(320.0, 320.0, 100.0, 200.0, 0.9)])
+
+
+def test_stub_input_shape(stub_empty):
+    """Вход сессии: [1, 3, 640, 640]."""
+    inp = stub_empty.get_inputs()[0]
+    assert inp.shape[1] == 3
+    assert inp.shape[2] == 640
+    assert inp.shape[3] == 640
+
+
+def test_no_detections_on_empty_output(stub_empty):
+    """Пустой выход модели → пустой список детекций."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    result = detect_people(stub_empty, frame)
     assert isinstance(result, list)
     assert result == []
 
 
-def test_output_format(sess):
+def test_output_format(stub_one):
     """Формат выхода: список 5-tuple (x1,y1,x2,y2,conf) с float confidence."""
-    from common.utils.person_detector import detect_people
     frame = np.random.randint(0, 256, (360, 640, 3), dtype=np.uint8)
-    result = detect_people(sess, frame)
+    result = detect_people(stub_one, frame)
     assert isinstance(result, list)
-    for item in result:
-        x1, y1, x2, y2, conf = item
+    assert len(result) >= 1
+    for x1, y1, x2, y2, conf in result:
         assert isinstance(conf, float)
         assert 0.0 <= conf <= 1.0
         assert x1 <= x2 and y1 <= y2
 
 
-def test_draw_boxes_empty(sess):
+def test_low_conf_filtered():
+    """Бокс с confidence ниже порога отфильтровывается."""
+    sess = StubSession(boxes=[(320.0, 320.0, 100.0, 200.0, 0.10)])
+    result = detect_people(sess, np.zeros((480, 640, 3), dtype=np.uint8))
+    assert result == []
+
+
+def test_draw_boxes_empty():
     """draw_boxes не падает на пустом списке детекций."""
-    from common.utils.person_detector import draw_boxes
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     out = draw_boxes(frame, [])
     assert out.shape == frame.shape
 
 
-def test_draw_boxes_with_detection(sess):
+def test_draw_boxes_with_detection():
     """draw_boxes не падает при наличии bbox."""
-    from common.utils.person_detector import draw_boxes
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    detections = [(50, 50, 200, 400, 0.91)]
-    out = draw_boxes(frame, detections)
+    out = draw_boxes(frame, [(50, 50, 200, 400, 0.91)])
     assert out.shape == frame.shape
-
-
-def test_on_baseline_frame(sess):
-    """Запускаем детекцию на реальных кадрах из tests/data/ (если есть)."""
-    import cv2
-    from common.utils.person_detector import detect_people
-
-    frames = sorted(TEST_DATA_DIR.rglob("*.jpg"))
-    if not frames:
-        pytest.skip("Нет тестовых кадров в tests/data/ — скопируйте из .output/ после накопления")
-
-    frame = cv2.imread(str(frames[0]))
-    assert frame is not None, f"Не удалось прочитать {frames[0]}"
-    result = detect_people(sess, frame)
-    assert isinstance(result, list)
-    print(f"\nКадр: {frames[0].relative_to(TEST_DATA_DIR)}  детекций: {len(result)}")

@@ -101,6 +101,7 @@ def test_extract_osd_time_returns_none_for_small_frame():
     assert result is None
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not HEARTBEAT_U.is_file(),
     reason="Реальный heartbeat кадр недоступен"
@@ -117,6 +118,7 @@ def test_extract_osd_time_real_frame():
     assert result.day == 1
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     not HEARTBEAT_U.is_file(),
     reason="Реальный heartbeat кадр недоступен"
