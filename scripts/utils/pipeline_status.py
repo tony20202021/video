@@ -121,6 +121,45 @@ def dir_state(directory: Path | None) -> str:
     return f"{files} файл. · {dirs} кат.\n{t}"
 
 
+def _env_val(key: str, default: str = "") -> str:
+    """Значение из os.environ без инлайн-комментария и хвостовых пробелов."""
+    v = os.environ.get(key, "")
+    v = v.split("#")[0].strip()
+    return v.split()[0] if v else default
+
+
+def _ip_to_label() -> dict:
+    """IP машины → метка (из .env TS_*)."""
+    m = {}
+    for ip_key, lbl_key in (("TS_DEVELOP", "TS_DEVELOP_LABEL"),
+                            ("TS_CAMERAS_3", "TS_CAMERAS_3_LABEL"),
+                            ("TS_CAMERAS_1", "TS_CAMERAS_1_LABEL"),
+                            ("TS_SERVER", "")):
+        ip = _env_val(ip_key)
+        if ip:
+            m[ip] = (os.environ.get(lbl_key, "").split("#")[0].strip() if lbl_key else "server") or ip
+    return m
+
+
+def transfer_in_label() -> str:
+    """Вход video-transfer: реальные машины-клиенты из логов (POST /file),
+    иначе адрес прослушивания TRANSFER_HOST:TRANSFER_PORT из .env."""
+    port = _env_val("TRANSFER_PORT", "8765")
+    clients = []
+    try:
+        r = subprocess.run(["journalctl", "-u", "video-transfer", "--no-pager", "-n", "3000"],
+                           capture_output=True, text=True)
+        ips = re.findall(r"(\d+\.\d+\.\d+\.\d+):\d+ - .*POST /file", r.stdout)
+        m = _ip_to_label()
+        clients = [m.get(ip, ip) for ip in dict.fromkeys(ips)]  # уникальные, сохраняя порядок
+    except Exception:
+        pass
+    if clients:
+        return "← " + ", ".join(clients) + f" · HTTP :{port}"
+    host = _env_val("TRANSFER_HOST", "0.0.0.0")
+    return f"← слушает {host}:{port}"
+
+
 def _shorten_log(raw: str) -> str:
     if ": " in raw:
         msg = raw.split(": ", 1)[1]
@@ -303,11 +342,12 @@ def collect() -> list[dict]:
         state     = svc_state(s["name"])
         in_state  = dir_state(s["in_dir"])
         out_state = dir_state(s["out_dir"])
+        in_label  = transfer_in_label() if s["name"] == "video-transfer" else s["in_label"]
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
         cpu_line  = service_cpu(s["name"]) if state == "active" else None
         rows.append({
             "name":      s["name"],
-            "input":     _fmt_tree(s["in_label"]) + "\n" + in_state,
+            "input":     _fmt_tree(in_label) + "\n" + in_state,
             "output":    _fmt_tree(s["out_label"]) + "\n" + out_state,
             "state":     state,
             "log_work":  last_log(s["name"], s["log_work"]),
