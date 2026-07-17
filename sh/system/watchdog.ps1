@@ -45,6 +45,7 @@ if ($Unregister) {
 if ($Register) {
     $ps   = (Get-Command powershell.exe).Source
     $self = $PSCommandPath
+    $user = whoami   # от его имени задача работает без входа в Windows (S4U, без пароля)
     $xml  = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -63,7 +64,8 @@ if ($Register) {
   </Actions>
   <Principals>
     <Principal id="Author">
-      <LogonType>InteractiveToken</LogonType>
+      <UserId>$user</UserId>
+      <LogonType>S4U</LogonType>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
   </Principals>
