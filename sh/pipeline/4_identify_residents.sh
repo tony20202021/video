@@ -108,8 +108,10 @@ while true; do
                           | sort | tail -1)
         fi
         if [[ -n "$latest_meta" ]]; then
+            # find | head -1: head закрывает пайп после первой строки → find получает
+            # SIGPIPE (141) → под set -o pipefail это роняет скрипт; глушим через || true
             new_crops=$(find "$date_dir" -name "*.jpg" -newer "$latest_meta" -type f \
-                        2>/dev/null | head -1)
+                        2>/dev/null | head -1 || true)
             if [[ -z "$new_crops" ]]; then
                 continue
             fi
