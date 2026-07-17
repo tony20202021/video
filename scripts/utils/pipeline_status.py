@@ -39,7 +39,7 @@ SERVICES = [
         "name":       "video-transfer",
         "in_label":   "Windows → HTTP :8765",
         "in_dir":     None,                      # приём по HTTP — локального входного каталога нет
-        "out_label":  ".output/transfer/diff/",
+        "out_label":  ".output/transfer/  diff/  service/",
         "out_dir":    REPO / ".output/transfer/diff",
         "log_work":   r"POST|Готово\. Время:",
         "log_wait":   r"\[recv\].*heartbeat",  # heartbeat-файл = камера idle, движения нет
@@ -48,9 +48,9 @@ SERVICES = [
     },
     {
         "name":       "video-yolo",
-        "in_label":   ".output/transfer/diff/",
+        "in_label":   ".output/transfer/  diff/  service/",
         "in_dir":     REPO / ".output/transfer/diff",
-        "out_label":  "2_yolo_boxes_files/images/",
+        "out_label":  ".output/pipeline/  2_yolo_boxes_files/images/",
         "out_dir":    REPO / ".output/pipeline/2_yolo_boxes_files/images",
         "log_work":   r"Готово",
         "log_wait":   r"ожидание|Файлов нет",
@@ -59,9 +59,9 @@ SERVICES = [
     },
     {
         "name":       "video-classify",
-        "in_label":   "2_yolo_boxes_files/images/",
+        "in_label":   ".output/pipeline/  2_yolo_boxes_files/images/",
         "in_dir":     REPO / ".output/pipeline/2_yolo_boxes_files/images",
-        "out_label":  f".data/groups/{GROUPS_VER}/inference/",
+        "out_label":  f".data/groups/{GROUPS_VER}/inference/  images/",
         "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/images",
         "log_work":   r"Готово|Найдено кропов",
         "log_wait":   r"ожидание|Кропов нет",
@@ -70,9 +70,9 @@ SERVICES = [
     },
     {
         "name":       "video-identify",
-        "in_label":   f"groups/{GROUPS_VER}/inference/ 1_resident/ 4_guest/",
+        "in_label":   f"groups/{GROUPS_VER}/inference/  1_resident/  4_guest/",
         "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
-        "out_label":  f".data/residents/{RESIDENTS_VER}/inference/",
+        "out_label":  f".data/residents/{RESIDENTS_VER}/inference/  images/",
         "out_dir":    REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
         "log_work":   r"Готово",
         "log_wait":   r"Идентификаций не найдено|ожидание|Кропов нет",
@@ -300,8 +300,8 @@ def collect() -> list[dict]:
         cpu_line  = service_cpu(s["name"]) if state == "active" else None
         rows.append({
             "name":      s["name"],
-            "input":     s["in_label"] + "\n" + in_state,
-            "output":    s["out_label"] + "\n" + out_state,
+            "input":     _fmt_tree(s["in_label"]) + "\n" + in_state,
+            "output":    _fmt_tree(s["out_label"]) + "\n" + out_state,
             "state":     state,
             "log_work":  last_log(s["name"], s["log_work"]),
             "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
