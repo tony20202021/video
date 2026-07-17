@@ -144,6 +144,10 @@ if (-not (Test-Path $logFile)) {
     }
 }
 
+# Дата лога = дата последней записи файла. Для выключенной машины это прошлый запуск,
+# а не сегодня — иначе старые строки лога считаются как сегодняшняя активность.
+$logDate = if (Test-Path $logFile) { (Get-Item $logFile).LastWriteTime.ToString("yyyy-MM-dd") } else { Get-Date -Format "yyyy-MM-dd" }
+
 $lastLogLine = "--"; $lastEventTime = "--"; $motionIdleLine = "--"; $count10m = 0
 
 Write-Host ""
@@ -158,7 +162,7 @@ if (Test-Path $logFile) {
         $le = @($eventLines)[-1]
         $lastLogLine = ($le.Trim() -replace '\|', ':')
         if ($le -match "^(\d{2}:\d{2})") {
-            $lastEventTime = (Get-Date -Format "yyyy-MM-dd") + "<br>" + $Matches[1]
+            $lastEventTime = $logDate + "<br>" + $Matches[1]
         }
     }
 
@@ -171,7 +175,7 @@ if (Test-Path $logFile) {
     # Количество событий (diff-кадры): 10м + 60м fallback
     $cutoff   = (Get-Date).AddMinutes(-10)
     $cutoff60 = (Get-Date).AddMinutes(-60)
-    $todayStr = Get-Date -Format "yyyy-MM-dd"
+    $todayStr = $logDate
     $times10m = [System.Collections.Generic.List[double]]::new()
     $count60m = 0; $times60m = [System.Collections.Generic.List[double]]::new()
     foreach ($ln in $allLogLines) {
@@ -198,6 +202,7 @@ $sendLastLogLine = "--"; $sendLastEventTime = "--"; $sendLastIdleLine = "--"; $s
 
 Write-Host "  Log 2_send (last 5 lines):"
 if (Test-Path $sendLogFile) {
+    $sendLogDate = (Get-Item $sendLogFile).LastWriteTime.ToString("yyyy-MM-dd")
     $sendAllLines = Get-Content $sendLogFile -Encoding UTF8
     Get-Content $sendLogFile -Tail 5 -Encoding UTF8 | ForEach-Object { Write-Host "    $_" }
 
@@ -207,7 +212,7 @@ if (Test-Path $sendLogFile) {
         $le = @($sendEventLines)[-1]
         $sendLastLogLine = ($le.Trim() -replace '\|', ':')
         if ($le -match "^(\d{2}:\d{2})") {
-            $sendLastEventTime = (Get-Date -Format "yyyy-MM-dd") + "<br>" + $Matches[1]
+            $sendLastEventTime = $sendLogDate + "<br>" + $Matches[1]
         }
     }
 
@@ -218,7 +223,7 @@ if (Test-Path $sendLogFile) {
     }
 
     $sendCutoff   = (Get-Date).AddMinutes(-10)
-    $sendTodayStr = Get-Date -Format "yyyy-MM-dd"
+    $sendTodayStr = $sendLogDate
     $sendTimes10m = [System.Collections.Generic.List[double]]::new()
     foreach ($ln in $sendAllLines) {
         # Одна комбинированная regex — $Matches[1]=время, расширение файла в строке
