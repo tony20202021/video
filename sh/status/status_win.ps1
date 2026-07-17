@@ -318,8 +318,9 @@ function Get-DirState($dir) {
     if (-not $dir -or -not (Test-Path $dir)) { return "—" }
     $files = @(Get-ChildItem -Path $dir -Recurse -File -Filter *.jpg -ErrorAction SilentlyContinue)
     if ($files.Count -eq 0) { return "—" }
+    $dirs = @(Get-ChildItem -Path $dir -Recurse -Directory -ErrorAction SilentlyContinue).Count
     $last = ($files | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime.ToString("yyyy-MM-dd HH:mm")
-    return ("{0} файл.<br>{1}" -f $files.Count, $last)
+    return ("{0} файл. · {1} кат.<br>{2}" -f $files.Count, $dirs, $last)
 }
 # Очередь кадров: выход 1_motion_diff = вход 2_send (те же файлы до отправки+удаления)
 $motionState = Get-DirState $motionDir

@@ -92,26 +92,33 @@ def svc_state(name: str) -> str:
 
 
 def dir_state(directory: Path | None) -> str:
-    """Кол-во *.jpg в каталоге + дата-время последнего.
+    """Кол-во *.jpg + кол-во подкаталогов + дата-время последнего файла.
 
-    '—' если каталог пуст/отсутствует/None — очередь не копится (пайплайн успевает).
+    '—' если файлов нет/каталог отсутствует/None — очередь не копится (пайплайн успевает).
     """
     if directory is None:
         return "—"
-    count = 0
+    files = 0
+    dirs = 0
     best_ts = 0.0
     try:
-        for f in directory.rglob("*.jpg"):
-            count += 1
-            ts = f.stat().st_mtime
-            if ts > best_ts:
-                best_ts = ts
+        for root, ds, fs in os.walk(directory):
+            dirs += len(ds)
+            for f in fs:
+                if f.endswith(".jpg"):
+                    files += 1
+                    try:
+                        ts = os.path.getmtime(os.path.join(root, f))
+                        if ts > best_ts:
+                            best_ts = ts
+                    except OSError:
+                        pass
     except Exception:
         pass
-    if count == 0:
+    if files == 0:
         return "—"
     t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d %H:%M")
-    return f"{count} файл.\n{t}"
+    return f"{files} файл. · {dirs} кат.\n{t}"
 
 
 def _shorten_log(raw: str) -> str:
