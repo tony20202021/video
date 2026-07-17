@@ -157,11 +157,11 @@ _ssh_win() {
 # ── вспомогательная функция: строки WIN_SVC → markdown-строки таблицы ──────────
 # WIN_SVC формат: # WIN_SVC|name|server|status|input|output|file|last_log|last_idle|stats_10m
 _win_svc_md_rows() {
-    local win_out="$1"
+    local win_out="$1" label="${2:-}"   # label — алиас машины из .env (вместо hostname)
     echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output file last_log last_idle stats_10m; do
         local s_icon
         [[ "$status" == "OK" ]] && s_icon="✓" || s_icon="✗"
-        echo "| ${server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | ${last_idle} | ${stats_10m} |"
+        echo "| ${label:-$server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | ${last_idle} | ${stats_10m} |"
     done
 }
 
@@ -240,9 +240,9 @@ fi
         grep "^|" "$linux_md" | head -2
     fi
     # Windows-сервисы ПЕРВЫЕ (они первые в пайплайне: камеры → детекция → отправка)
-    _win_svc_md_rows "$cam3_out"
-    [[ -n "$dev_out" ]] && _win_svc_md_rows "$dev_out"
-    [[ -n "$cam1_out" ]] && _win_svc_md_rows "$cam1_out"
+    _win_svc_md_rows "$cam3_out" "$WIN_CAMERAS_3_LABEL"
+    [[ -n "$dev_out" ]] && _win_svc_md_rows "$dev_out" "$WIN_DEVELOP_LABEL"
+    [[ -n "$cam1_out" ]] && _win_svc_md_rows "$cam1_out" "$WIN_CAMERAS_1_LABEL"
     # Linux-сервисы (пропускаем header/separator — уже выведены)
     if [[ -n "$linux_md" && -f "$linux_md" ]]; then
         grep "^|" "$linux_md" | tail -n +3
