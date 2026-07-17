@@ -15,3 +15,5 @@ venv/
 *.onnx.data
 *.pt
 *.pth
+
+.backup_machines/

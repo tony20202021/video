@@ -99,9 +99,14 @@ while true; do
 
         date=$(basename "$date_dir")
 
-        # Пропустить дату если нет новых кропов с момента последнего прогона
-        latest_meta=$(find "$OUT_DIR/meta/$date" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
-                      | sort | tail -1)
+        # Пропустить дату если нет новых кропов с момента последнего прогона.
+        # find по несуществующему каталогу возвращает !=0 → под set -o pipefail это
+        # роняет весь скрипт (exit 1); поэтому сначала проверяем наличие каталога.
+        latest_meta=""
+        if [[ -d "$OUT_DIR/meta/$date" ]]; then
+            latest_meta=$(find "$OUT_DIR/meta/$date" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+                          | sort | tail -1)
+        fi
         if [[ -n "$latest_meta" ]]; then
             new_crops=$(find "$date_dir" -name "*.jpg" -newer "$latest_meta" -type f \
                         2>/dev/null | head -1)
