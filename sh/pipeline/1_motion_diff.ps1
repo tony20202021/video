@@ -16,6 +16,11 @@ $ErrorActionPreference = "Stop"
 $Repo      = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $CONDA_ENV = "conda_video"
 $PY        = "$env:USERPROFILE\miniconda3\envs\$CONDA_ENV\python.exe"
+# Fallback для запуска под SYSTEM (без пользовательской сессии, USERPROFILE ≠ профиль с conda)
+if (-not (Test-Path $PY)) {
+    $found = Get-Item "C:\Users\*\miniconda3\envs\$CONDA_ENV\python.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { $PY = $found.FullName }
+}
 $SCRIPT    = "$Repo\scripts\pipeline\1_motion_diff.py"
 
 # ─── Текущие значения из .env (для справки; менять в .env, не здесь) ──────────

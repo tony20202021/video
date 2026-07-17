@@ -30,6 +30,11 @@ $ErrorActionPreference = "Continue"
 $Repo   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $Env    = "conda_video"
 $Python = "$env:USERPROFILE\miniconda3\envs\$Env\python.exe"
+# Fallback для запуска под SYSTEM (без пользовательской сессии, USERPROFILE ≠ профиль с conda)
+if (-not (Test-Path $Python)) {
+    $found = Get-Item "C:\Users\*\miniconda3\envs\$Env\python.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { $Python = $found.FullName }
+}
 $Script = "$Repo\scripts\transfer\client.py"
 
 $env:PYTHONIOENCODING  = "utf-8"
@@ -54,6 +59,10 @@ if ($RunRoot -and -not [System.IO.Path]::IsPathRooted($RunRoot)) {
 $LogDir  = Join-Path $Repo ".output\logs"
 $LogFile = Join-Path $LogDir "2_send.log"
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+
+# Снижаем приоритет — motion_diff (Normal) всегда получает CPU первым
+[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass =
+    [System.Diagnostics.ProcessPriorityClass]::BelowNormal
 
 Write-Host "=== 2_send (transfer watch) ===" -ForegroundColor Cyan
 Write-Host "WatchDir: $WatchDir"

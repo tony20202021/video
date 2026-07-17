@@ -359,14 +359,14 @@ def render_term(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
                "N кадров (за 10м)\n1кадр (мин/ср/макс/посл)\nвремя % (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
-    widths  = [7, 20, 8, 100, 100, 22, 100, 80, 55]
+    widths  = [7, 20, 8, 100, 100, 40, 150, 120, 65]
     data = [
         ["Linux",
          r["name"],
          ("✓" if r["state"] == "active" else "✗") + " " + r["state"],
          _fmt_tree(r["input"]),
          _fmt_tree(r["output"]),
-         r["file_time"],
+         r["file_time"] + ("\n" + (r["file_name"][:38] + "…" if len(r["file_name"]) > 39 else r["file_name"]) if r["file_name"] != "—" else ""),
          r["log_work"],
          r["log_wait"],
          r["stats"]]
@@ -401,7 +401,7 @@ def render_md(rows: list[dict], ts: str) -> str:
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
          _fmt_tree(r["input"]).replace("\n", "<br>"),
          _fmt_tree(r["output"]).replace("\n", "<br>"),
-         r["file_time"].replace("\n", "<br>"),
+         r["file_time"].replace("-", "‑").replace("\n", "<br>"),
          r["log_work"],
          r["log_wait"],
          r["stats"].replace("\n", "<br>")]

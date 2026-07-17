@@ -2,13 +2,16 @@
 
 ## Узлы
 
-| Переменная | Роль | ОС |
-|------------|------|----|
-| `TS_SERVER` | Linux-сервер (VDS) | Linux |
-| `TS_WIN_HOME` | Домашний Windows | Windows |
-| `TS_WIN_ENTRY` | Подъездный Windows | Windows |
+| Переменная `.env` | Метка (`_LABEL`) | Роль | ОС |
+|-------------------|------------------|------|----|
+| `TS_SERVER` | — | Linux-сервер (VDS) | Linux |
+| `TS_WIN_HOME` | `TS_WIN_HOME_LABEL` | Домашний Windows | Windows |
+| `TS_WIN_ENTRY` | `TS_WIN_ENTRY_LABEL` | Подъездный Windows | Windows |
+| `TS_WIN_EVELINA` | `TS_WIN_EVELINA_LABEL` | Дополнительный Windows | Windows |
 
-Все три узла — в одной Tailscale-сети под одним аккаунтом. IP (`100.x.x.x`) стабильны, не меняются при смене провайдера или роутера. Конкретные адреса — в `.env`.
+Все узлы — в одной Tailscale-сети под одним аккаунтом. IP (`100.x.x.x`) стабильны, не меняются при смене провайдера или роутера. Конкретные адреса и метки — в `.env`.
+
+`_LABEL` — отображаемое имя в `sh/status.sh` (терминал + markdown-таблица). Менять в `.env`, не в скрипте.
 
 ---
 
@@ -115,6 +118,138 @@ LABEL_UI_PORT=8789
 появится подсказка вида `ALLOWED_IPS=...,109.xxx.yyy.0/24`. Добавьте подсеть в `.env` и перезапустите сервис.
 
 Подробнее: [transfer.md](transfer.md), раздел «Веб-разметчик» в [ml.md](ml.md).
+
+---
+
+---
+
+## Добавление новой Windows-машины
+
+Чеклист для подключения нового Windows-клиента к инфраструктуре.
+
+### 1. Tailscale + OpenSSH
+
+```powershell
+# 1. Установить Tailscale (https://tailscale.com/download), войти с тем же аккаунтом
+# 2. Включить OpenSSH Server (от Администратора):
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+```
+
+### 2. Авторизовать SSH-ключ сервера
+
+**Важно:** если пользователь Windows входит в группу Administrators, sshd ищет ключи
+в `C:\ProgramData\ssh\administrators_authorized_keys` (не в `.ssh\authorized_keys`).
+
+Определить группу:
+```bash
+ssh <user>@<tailscale-ip> "whoami /groups | findstr S-1-5-32-544"
+```
+Если вывод не пуст — пользователь в Administrators.
+
+#### Для пользователя из группы **Administrators**
+
+```bash
+PUB=$(cat ~/.ssh/id_ed25519.pub)
+
+# Записать ключ в системный файл
+ssh <user>@<tailscale-ip> "echo $PUB > C:\ProgramData\ssh\administrators_authorized_keys"
+
+# Задать права через SID (имена групп на русской Windows отличаются — SID работают везде)
+ssh <user>@<tailscale-ip> "icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant *S-1-5-18:(F) /grant *S-1-5-32-544:(F)"
+```
+
+#### Для обычного пользователя (не Administrators)
+
+```bash
+PUB=$(cat ~/.ssh/id_ed25519.pub)
+WIN_USER=<username>
+
+# Создать директорию и записать ключ
+ssh <user>@<tailscale-ip> "mkdir C:\Users\$WIN_USER\.ssh 2>nul & echo $PUB > C:\Users\$WIN_USER\.ssh\authorized_keys"
+
+# Убрать наследование; права через SID пользователя и SYSTEM
+# SID пользователя можно узнать: wmic useraccount where name='<username>' get sid
+ssh <user>@<tailscale-ip> "icacls C:\Users\$WIN_USER\.ssh /inheritance:r /grant *S-1-5-18:(OI)(CI)F /grant *<USER-SID>:(OI)(CI)F"
+ssh <user>@<tailscale-ip> "icacls C:\Users\$WIN_USER\.ssh\authorized_keys /inheritance:r /grant *S-1-5-18:(F) /grant *<USER-SID>:(F)"
+```
+
+Проверка:
+```bash
+ssh -o BatchMode=yes <user>@<tailscale-ip> "echo ok"
+```
+
+### 3. Добавить в `.env`
+
+```dotenv
+TS_WIN_<NAME>=<tailscale-ip>
+TS_WIN_<NAME>_LABEL=<метка-в-статусе>
+```
+
+### 4. Клонировать репозиторий
+
+#### 4a. PortableGit (если git не установлен)
+
+> **Важно:** `Invoke-WebRequest` на новых Windows блокируется политикой безопасности.  
+> Использовать `curl.exe` (встроен в Windows 10+).
+
+```powershell
+New-Item -ItemType Directory -Force C:\Work | Out-Null
+curl.exe -L -o C:\Work\PortableGit.exe `
+    "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/PortableGit-2.47.1-64-bit.7z.exe"
+Start-Process -Wait "C:\Work\PortableGit.exe" -ArgumentList "-o `"C:\Work\git`" -y"
+& "C:\Work\git\cmd\git.exe" --version   # проверка
+```
+
+#### 4b. SSH-ключ для GitHub
+
+С Linux-сервера скопировать приватный ключ (`~/repos/gh` — специальный ключ для GitHub):
+```bash
+scp ~/repos/gh <user>@<tailscale-ip>:'C:\Users\<username>\.ssh\gh'
+```
+
+Создать `C:\Users\<username>\.ssh\config` (через SSH с сервера):
+```bash
+ssh <user>@<tailscale-ip> "powershell -Command \
+    \"Set-Content \$env:USERPROFILE\.ssh\config (\`\"Host github.com\`\`n    IdentityFile \$env:USERPROFILE\.ssh\gh\`\`n    StrictHostKeyChecking accept-new\`\")\""
+```
+
+Проверка доступа к GitHub:
+```bash
+ssh -o BatchMode=yes <user>@<tailscale-ip> \
+    '"C:\Work\git\cmd\git.exe" ls-remote git@github.com:tony20202021/video.git HEAD 2>&1'
+```
+
+#### 4c. Клонирование ветки `develop`
+
+> **Важно:** `main` — пустая ветка (только `.gitignore`). Весь код на `develop`.
+
+```bash
+ssh -o BatchMode=yes <user>@<tailscale-ip> \
+    '"C:\Work\git\cmd\git.exe" -c core.compression=0 clone --depth=1 git@github.com:tony20202021/video.git "C:\Work\video" 2>&1'
+
+ssh -o BatchMode=yes <user>@<tailscale-ip> 'powershell -NoProfile -Command "
+    Set-Location C:\Work\video
+    & \"C:\Work\git\cmd\git.exe\" fetch origin develop --depth=1
+    & \"C:\Work\git\cmd\git.exe\" checkout -b develop FETCH_HEAD
+    & \"C:\Work\git\cmd\git.exe\" log --oneline -1
+"'
+```
+
+### 5. Скопировать `.env`
+
+```bash
+scp /home/tony/repos/video/.env <user>@<tailscale-ip>:'C:\Work\video\.env'
+```
+
+### 6. Проверить статус
+
+```bash
+bash sh/status.sh
+```
+
+Машина должна появиться в секции `WINDOWS (win-<name> / <ip>)` со статусом скриптов.
 
 ---
 

@@ -14,6 +14,9 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TS_WIN_ENTRY=""
 TS_WIN_HOME=""
 TS_WIN_EVELINA=""
+TS_WIN_ENTRY_USER=""
+TS_WIN_HOME_USER=""
+TS_WIN_EVELINA_USER=""
 WIN_ENTRY_LABEL="win-entry"
 WIN_HOME_LABEL="win-home"
 WIN_EVELINA_LABEL="win-evelina"
@@ -25,11 +28,14 @@ if [[ -f "$REPO/.env" ]]; then
         [[ -z "$_line" || "$_line" =~ ^# ]] && continue
         _val="${_line#*=}"; _val="${_val%%#*}"; _val="${_val%"${_val##*[! ]}"}"
         case "$_line" in
-            TS_WIN_ENTRY=*)        TS_WIN_ENTRY="$_val" ;;
-            TS_WIN_HOME=*)         TS_WIN_HOME="$_val" ;;
-            TS_WIN_EVELINA=*)      TS_WIN_EVELINA="$_val" ;;
-            TS_WIN_ENTRY_LABEL=*)  WIN_ENTRY_LABEL="$_val" ;;
-            TS_WIN_HOME_LABEL=*)   WIN_HOME_LABEL="$_val" ;;
+            TS_WIN_ENTRY=*)         TS_WIN_ENTRY="$_val" ;;
+            TS_WIN_HOME=*)          TS_WIN_HOME="$_val" ;;
+            TS_WIN_EVELINA=*)       TS_WIN_EVELINA="$_val" ;;
+            TS_WIN_ENTRY_USER=*)    TS_WIN_ENTRY_USER="$_val" ;;
+            TS_WIN_HOME_USER=*)     TS_WIN_HOME_USER="$_val" ;;
+            TS_WIN_EVELINA_USER=*)  TS_WIN_EVELINA_USER="$_val" ;;
+            TS_WIN_ENTRY_LABEL=*)   WIN_ENTRY_LABEL="$_val" ;;
+            TS_WIN_HOME_LABEL=*)    WIN_HOME_LABEL="$_val" ;;
             TS_WIN_EVELINA_LABEL=*) WIN_EVELINA_LABEL="$_val" ;;
         esac
     done < "$REPO/.env"
@@ -162,7 +168,7 @@ echo ""
 sep
 echo "  WINDOWS  ($WIN_ENTRY_LABEL / $TS_WIN_ENTRY)"
 sep
-julie2_out=$(_ssh_win "$TS_WIN_ENTRY" "julia")
+julie2_out=$(_ssh_win "$TS_WIN_ENTRY" "$TS_WIN_ENTRY_USER")
 if [[ -n "$julie2_out" ]]; then
     echo "$julie2_out" | grep -v "^# WIN_SVC|"
     IFS='|' read -r julie2_cpu julie2_ram julie2_disk julie2_repo julie2_scripts <<< "$(_parse_win_sys "$julie2_out")"
@@ -179,8 +185,8 @@ sep
 echo "  WINDOWS  ($WIN_HOME_LABEL / $TS_WIN_HOME)"
 sep
 if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-        "tony@$TS_WIN_HOME" "echo ok" &>/dev/null 2>&1; then
-    tony8_out=$(_ssh_win "$TS_WIN_HOME" "tony")
+        "$TS_WIN_HOME_USER@$TS_WIN_HOME" "echo ok" &>/dev/null 2>&1; then
+    tony8_out=$(_ssh_win "$TS_WIN_HOME" "$TS_WIN_HOME_USER")
     if [[ -n "$tony8_out" ]]; then
         echo "$tony8_out" | grep -v "^# WIN_SVC|"
         IFS='|' read -r tony8_cpu tony8_ram tony8_disk tony8_repo tony8_scripts <<< "$(_parse_win_sys "$tony8_out")"
@@ -198,8 +204,8 @@ if [[ -n "$TS_WIN_EVELINA" ]]; then
     echo "  WINDOWS  ($WIN_EVELINA_LABEL / $TS_WIN_EVELINA)"
     sep
     if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "evelina@$TS_WIN_EVELINA" "echo ok" &>/dev/null 2>&1; then
-        evelina_out=$(_ssh_win "$TS_WIN_EVELINA" "evelina" "$WIN_SCRIPT_EVELINA")
+            "$TS_WIN_EVELINA_USER@$TS_WIN_EVELINA" "echo ok" &>/dev/null 2>&1; then
+        evelina_out=$(_ssh_win "$TS_WIN_EVELINA" "$TS_WIN_EVELINA_USER" "$WIN_SCRIPT_EVELINA")
         if [[ -n "$evelina_out" ]]; then
             echo "$evelina_out" | grep -v "^# WIN_SVC|"
             IFS='|' read -r evelina_cpu evelina_ram evelina_disk evelina_repo evelina_scripts <<< "$(_parse_win_sys "$evelina_out")"

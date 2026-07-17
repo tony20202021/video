@@ -105,6 +105,48 @@ POST /models/{model_type}/activate
 
 ---
 
+## Windows (Watchdog)
+
+`sh\system\watchdog.ps1` — следит за двумя скриптами-обёртками и перезапускает их при падении.
+
+| Скрипт | Что запускает |
+|--------|--------------|
+| `sh\pipeline\1_motion_diff.ps1` | детекция движения с камер |
+| `sh\transfer\2_send.ps1` | отправка дифф-кадров на Linux-сервер |
+
+Watchdog определяет, запущен ли процесс, через `Win32_Process.CommandLine` (ищет имя `.ps1` файла). Каждые 30 секунд (настраивается `-CheckSec N`) — проверка, при отсутствии — немедленный рестарт. Лог: `.output\logs\watchdog.log`.
+
+### Регистрация как системная задача (один раз)
+
+```powershell
+# От имени Администратора:
+powershell -ExecutionPolicy Bypass -File "C:\Work\video\sh\system\watchdog.ps1" -Register
+```
+
+Создаёт задачу `VideoWatchdog` с двумя триггерами:
+- **BootTrigger** — запуск через 10 сек после старта системы
+- **EventTrigger** — запуск при пробуждении из сна (EventID 1, Microsoft-Windows-Power-Troubleshooter)
+
+`MultipleInstancesPolicy = IgnoreNew` — повторный запуск игнорируется, дублей не будет.
+
+```powershell
+# Удалить задачу:
+.\sh\system\watchdog.ps1 -Unregister
+
+# Запустить watchdog вручную (в текущем терминале, без регистрации):
+.\sh\system\watchdog.ps1
+```
+
+### Ручной контроль через Task Scheduler
+
+```
+Win + R → taskschd.msc → Task Scheduler Library → VideoWatchdog
+```
+
+Там можно запустить/остановить/посмотреть историю запусков.
+
+---
+
 ## Systemd (Linux)
 
 Все постоянные процессы запускаются как systemd-сервисы. Установка:

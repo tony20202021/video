@@ -23,17 +23,17 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-# groups
-INPUT="$REPO/.data/groups/v3/inference/images/20260713"
-LABELS="$REPO/.data/groups/v3/inference/images/20260713/labels.json"
-DATASET="$REPO/.data/groups/v3/dataset"
-PROBS_CSV="$REPO/.data/groups/v3/inference/images/20260713/classifications.csv"
+# # groups
+# INPUT="$REPO/.data/groups/v3/inference/images/20260714"
+# LABELS="$REPO/.data/groups/v3/inference/images/20260714/labels.json"
+# DATASET="$REPO/.data/groups/v3/dataset"
+# PROBS_CSV="$REPO/.data/groups/v3/inference/images/20260714/classifications.csv"
 
-# # residents
-# INPUT="$REPO/.data/residents/v1/inference/images/20260713"
-# LABELS="$REPO/.data/residents/v1/inference/images/20260713/labels.json"
-# DATASET="$REPO/.data/residents/v1/dataset"
-# PROBS_CSV="$REPO/.data/residents/v1/inference/images/20260713/identifications.csv"
+# residents
+INPUT="$REPO/.data/residents/v1/inference/images/20260714"
+LABELS="$REPO/.data/residents/v1/inference/images/20260714/labels.json"
+DATASET="$REPO/.data/residents/v1/dataset"
+PROBS_CSV="$REPO/.data/residents/v1/inference/images/20260714/identifications.csv"
 
 PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=0
