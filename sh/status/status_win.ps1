@@ -288,6 +288,29 @@ if (Test-Path $diffsCsvFile) {
     } catch {}
 }
 
+# ── CPU из cpu.csv (2_send / transfer client) ────────────────────────────────
+$sendCpuLine = ""
+$sendCpuCsv = Join-Path $REPO ".output\transfer_client\meta\$today\cpu.csv"
+if (Test-Path $sendCpuCsv) {
+    $sCut = (Get-Date).AddMinutes(-10)
+    $sRows = Import-Csv $sendCpuCsv | Where-Object {
+        try {
+            $ts = $_.ts_msk
+            if ($ts -match '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})') {
+                [datetime]::ParseExact("$($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5]):$($Matches[6])", 'yyyy-MM-dd HH:mm:ss', $null) -ge $sCut
+            } else { [datetime]$ts -ge $sCut }
+        } catch { $false }
+    }
+    if ($sRows -and @($sRows).Count -gt 0) {
+        $sVals = @($sRows | ForEach-Object { [int][math]::Round([double]$_.cpu_pct) })
+        $sMn = ($sVals | Measure-Object -Minimum).Minimum
+        $sAvg = [int][math]::Round(($sVals | Measure-Object -Average).Average)
+        $sMx = ($sVals | Measure-Object -Maximum).Maximum
+        $sLst = $sVals[$sVals.Count - 1]
+        $sendCpuLine = "${sMn}%/${sAvg}%/${sMx}%/${sLst}%"
+    }
+}
+
 # ── WIN_SVC: структурированные данные для master status.sh ───────────────────
 # Строки с префиксом "# WIN_SVC|" отфильтровываются из вывода на терминал,
 # но используются status.sh для построения таблицы сервисов в .md
@@ -308,9 +331,11 @@ if ($count10m -gt 0) {
     $stats10m = "—<br>${motionCpuLine}"
 } else { $stats10m = "--" }
 
-# stats для 2_send: 10м с таймингом
+# stats для 2_send: 10м с таймингом + CPU (cpu.csv клиента). CPU есть даже без отправок.
 if ($sendCount10m -gt 0) {
-    $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 " (10м)"
+    $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 " (10м)" $sendCpuLine
+} elseif ($sendCpuLine -ne "") {
+    $sendStats10m = "—<br>${sendCpuLine}"
 } else { $sendStats10m = "--" }
 
 # Состояние каталога: "N файл.<br>дата-время последнего" или "—" (пусто = очередь не копится)

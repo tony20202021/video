@@ -41,6 +41,46 @@ def _load_env() -> dict[str, str]:
     return load_env_file(REPO_ROOT / ".env")
 
 
+def _start_cpu_logger() -> None:
+    """Фоновый поток: раз в 10с пишет CPU% процесса в cpu.csv (для показа в статусе).
+    Путь: .output/transfer_client/meta/<дата>/cpu.csv — читает sh/status/status_win.ps1."""
+    try:
+        import psutil
+    except ImportError:
+        return
+    import csv as _csv
+    import threading
+    from datetime import datetime, timedelta, timezone
+
+    MSK = timezone(timedelta(hours=3))
+    out_base = REPO_ROOT / ".output" / "transfer_client" / "meta"
+
+    def _loop() -> None:
+        proc = psutil.Process(os.getpid())
+        proc.cpu_percent(interval=None)  # прогрев
+        n_cpu = max(1, psutil.cpu_count() or 1)
+        start = time.monotonic()
+        while True:
+            time.sleep(10)
+            try:
+                cpu = round(min(100.0, proc.cpu_percent(interval=None) / n_cpu), 1)
+                now = datetime.now(tz=MSK)
+                csv_dir = out_base / now.strftime("%Y%m%d")
+                csv_dir.mkdir(parents=True, exist_ok=True)
+                csv_path = csv_dir / "cpu.csv"
+                new = not csv_path.exists()
+                with open(csv_path, "a", newline="", encoding="utf-8") as f:
+                    w = _csv.writer(f)
+                    if new:
+                        w.writerow(["mono_s", "ts_msk", "cpu_pct"])
+                    w.writerow([round(time.monotonic() - start, 1),
+                                now.strftime("%Y%m%d_%H%M%S"), cpu])
+            except Exception:
+                pass
+
+    threading.Thread(target=_loop, daemon=True).start()
+
+
 def _get_server_and_key(args) -> tuple[str, str]:
     env = _load_env()
     server = args.server or os.environ.get("TRANSFER_SERVER") or env.get("TRANSFER_SERVER", "")
@@ -305,6 +345,8 @@ def cmd_watch(args) -> int:
     logger.info("Сервер:  %s", server)
     logger.info("Расш.:   %s", ', '.join(sorted(exts)))
     logger.info("Скор.:   max=%s/с  min=%s/с  poll=%ss", _max_r, _min_r, poll_sec)
+
+    _start_cpu_logger()   # фоновая запись CPU% в cpu.csv для статуса
 
     n_sent = n_failed = 0
     _fail_count: dict[Path, int] = {}   # consecutive failures per file
