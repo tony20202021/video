@@ -11,6 +11,9 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
+TS_SERVER=""
+TS_SERVER_USER=""
+TS_SERVER_REPO=""
 TS_CAMERAS_3=""
 TS_DEVELOP=""
 TS_CAMERAS_1=""
@@ -30,7 +33,11 @@ if [[ -f "$REPO/.env" ]]; then
     while IFS= read -r _line; do
         [[ -z "$_line" || "$_line" =~ ^# ]] && continue
         _val="${_line#*=}"; _val="${_val%%#*}"; _val="${_val%"${_val##*[! ]}"}"
+        _val="${_val#\"}"; _val="${_val%\"}"   # снять обрамляющие кавычки (пути с пробелами)
         case "$_line" in
+            TS_SERVER=*)            TS_SERVER="$_val" ;;
+            TS_SERVER_USER=*)       TS_SERVER_USER="$_val" ;;
+            TS_SERVER_REPO=*)       TS_SERVER_REPO="$_val" ;;
             TS_CAMERAS_3=*)         TS_CAMERAS_3="$_val" ;;
             TS_DEVELOP=*)           TS_DEVELOP="$_val" ;;
             TS_CAMERAS_1=*)         TS_CAMERAS_1="$_val" ;;
@@ -47,6 +54,10 @@ if [[ -f "$REPO/.env" ]]; then
     done < "$REPO/.env"
 fi
 
+# Linux-сервер: дефолты для SSH-опроса (если запускаем НЕ на самом сервере)
+TS_SERVER_USER="${TS_SERVER_USER:-$(whoami)}"
+TS_SERVER_REPO="${TS_SERVER_REPO:-$REPO}"
+
 # Путь к status_win.ps1 на каждой машине = <repo>\sh\status\status_win.ps1
 WIN_SCRIPT_CAMERAS_3="$TS_CAMERAS_3_REPO\sh\status\status_win.ps1"
 WIN_SCRIPT_DEVELOP="$TS_DEVELOP_REPO\sh\status\status_win.ps1"
@@ -57,58 +68,25 @@ mkdir -p "$OUT_DIR"
 TS_FILE=$(date +"%Y%m%d_%H%M%S")
 TS_HUMAN=$(date +"%Y-%m-%d %H:%M:%S")
 MD_OUT="$OUT_DIR/${TS_FILE}.md"
+VER=$(cat "$REPO/VERSION" 2>/dev/null | tr -d '\r\n')
 
 sep() { echo "════════════════════════════════════════════════════════"; }
 
 # ── вспомогательная функция: сбор системных метрик ────────────────────────────
 # Печатает одну строку: "cpu%|ram_used/ram_total MB|disk_used/disk_total GB"
 _linux_sys_stats() {
-    python3 - <<'PYEOF'
-import subprocess, re
-# CPU
-cpu = "?"
-try:
-    r = subprocess.run(["top", "-bn1"], capture_output=True, text=True)
-    for line in r.stdout.splitlines():
-        m = re.search(r"([\d.]+)\s*id", line)
-        if m:
-            cpu = str(round(100 - float(m.group(1))))
-            break
-except Exception:
-    pass
-# RAM
-ram = "?"
-try:
-    r = subprocess.run(["free", "-m"], capture_output=True, text=True)
-    for line in r.stdout.splitlines():
-        if line.startswith("Mem:"):
-            p = line.split()
-            ram = f"{round(int(p[2])/1024,1)}/{round(int(p[1])/1024,1)} GB"
-            break
-except Exception:
-    pass
-# Disk
-disk = "?"
-try:
-    import os
-    r = subprocess.run(["df", "-BG", os.getcwd()], capture_output=True, text=True)
-    p = r.stdout.splitlines()[1].split()
-    used = int(p[2].rstrip("G"))
-    total = int(p[1].rstrip("G"))
-    disk = f"{used}/{total} GB"
-except Exception:
-    pass
-# Active services — list each by name
-svc_lines = []
-for svc in ["video-transfer", "video-yolo", "video-classify", "video-identify"]:
-    try:
-        r = subprocess.run(["systemctl", "is-active", svc], capture_output=True, text=True)
-        icon = "✓" if r.stdout.strip() == "active" else "✗"
-    except Exception:
-        icon = "?"
-    svc_lines.append(f"{icon} {svc}")
-print(f"{cpu}%|{ram}|{disk}|{'<br>'.join(svc_lines)}")
-PYEOF
+    python3 "$REPO/scripts/utils/sys_stats.py" 2>/dev/null
+}
+
+# ── выполняемся ли мы НА этом узле? (IP среди локальных адресов) ───────────────
+_is_self() {
+    local ip="$1"
+    [[ -z "$ip" ]] && return 1
+    {
+        hostname -I 2>/dev/null
+        command -v ip >/dev/null 2>&1 && ip -4 -o addr show 2>/dev/null | grep -oE 'inet [0-9.]+' | awk '{print $2}'
+        command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null
+    } | tr ' ' '\n' | grep -qx "$ip"
 }
 
 # ── парсинг метрик из вывода status_win.ps1 ───────────────────────────────────
@@ -144,14 +122,27 @@ _parse_win_sys() {
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 sep
-echo "  LINUX  ($(hostname))"
+if [[ -z "$TS_SERVER" ]] || _is_self "$TS_SERVER"; then
+    # мы НА сервере (или TS_SERVER не задан) — локально
+    LINUX_LABEL="$(hostname)"; linux_repo="$REPO"
+    linux_out=$(bash "$REPO/sh/status/status_linux.sh" 2>&1)
+    linux_sys=$(_linux_sys_stats)
+else
+    # запуск с другой машины — опрашиваем сервер по SSH
+    LINUX_LABEL="$TS_SERVER"; linux_repo="$TS_SERVER_REPO"
+    _ssh_srv() {
+        ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            "$TS_SERVER_USER@$TS_SERVER" "$@" 2>&1
+    }
+    linux_out=$(_ssh_srv "bash '$TS_SERVER_REPO/sh/status/status_linux.sh'")
+    linux_sys=$(_ssh_srv "python3 '$TS_SERVER_REPO/scripts/utils/sys_stats.py'" | tr -d '\r')
+fi
+echo "  LINUX  ($LINUX_LABEL)"
 sep
-
-linux_out=$(bash "$REPO/sh/status/status_linux.sh" 2>&1)
 echo "$linux_out" | grep -v "^  → "
 
 linux_md=$(echo "$linux_out" | grep -o '/[^ ]*\.md' | tail -1)
-IFS='|' read -r linux_cpu linux_ram linux_disk linux_svcs <<< "$(_linux_sys_stats)"
+IFS='|' read -r linux_cpu linux_ram linux_disk linux_svcs <<< "$linux_sys"
 
 # ── Windows (SSH) ─────────────────────────────────────────────────────────────
 _ssh_win() {
@@ -231,13 +222,13 @@ fi
 {
     echo "# Pipeline Status"
     echo ""
-    echo "_${TS_HUMAN}_"
+    echo "_${TS_HUMAN}  ·  v${VER:-?}_"
     echo ""
     echo "## Ресурсы серверов"
     echo ""
     echo "| Машина | CPU | RAM | Диск | Каталог | Статус |"
     echo "|---|---|---|---|---|---|"
-    echo "| Linux ($(hostname)) | ${linux_cpu} | ${linux_ram} | ${linux_disk} | ${REPO} | ${linux_svcs} |"
+    echo "| Linux (${LINUX_LABEL}) | ${linux_cpu} | ${linux_ram} | ${linux_disk} | ${linux_repo} | ${linux_svcs} |"
     echo "| ${WIN_CAMERAS_3_LABEL} | ${cam3_cpu} | ${cam3_ram} | ${cam3_disk} | ${cam3_repo} | ${cam3_scripts} |"
     echo "| ${WIN_DEVELOP_LABEL} | ${dev_cpu} | ${dev_ram} | ${dev_disk} | ${dev_repo} | ${dev_scripts} |"
     [[ -n "$TS_CAMERAS_1" ]] && echo "| ${WIN_CAMERAS_1_LABEL} | ${cam1_cpu} | ${cam1_ram} | ${cam1_disk} | ${cam1_repo} | ${cam1_scripts} |"
