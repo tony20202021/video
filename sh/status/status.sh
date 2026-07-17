@@ -5,11 +5,11 @@
 #   2. Linux-сервисы с колонкой 10м-статистики
 #
 # Usage:
-#   ./sh/status.sh
+#   ./sh/status/status.sh
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
 TS_CAMERAS_3=""
 TS_DEVELOP=""
@@ -20,8 +20,8 @@ TS_CAMERAS_1_USER=""
 WIN_CAMERAS_3_LABEL="CAMERAS_3"
 WIN_DEVELOP_LABEL="DEVELOP"
 WIN_CAMERAS_1_LABEL="CAMERAS_1"
-WIN_SCRIPT='C:\_Work\video\sh\status_win.ps1'
-WIN_SCRIPT_CAMERAS_1='C:\Work\video\sh\status_win.ps1'
+WIN_SCRIPT='C:\_Work\video\sh\status\status_win.ps1'
+WIN_SCRIPT_CAMERAS_1='C:\Work\video\sh\status\status_win.ps1'
 
 if [[ -f "$REPO/.env" ]]; then
     while IFS= read -r _line; do
@@ -136,7 +136,7 @@ sep
 echo "  LINUX  ($(hostname))"
 sep
 
-linux_out=$(bash "$REPO/sh/status_linux.sh" 2>&1)
+linux_out=$(bash "$REPO/sh/status/status_linux.sh" 2>&1)
 echo "$linux_out" | grep -v "^  → "
 
 linux_md=$(echo "$linux_out" | grep -o '/[^ ]*\.md' | tail -1)

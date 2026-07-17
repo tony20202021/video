@@ -2,12 +2,12 @@
 # Генерация и установка systemd-сервисов для video surveillance.
 #
 # Использование:
-#   ./sh/setup_systemd.sh                    # установить и запустить основные сервисы
-#   ./sh/setup_systemd.sh --with-data        # + data-pipeline (watch-скрипты обучения)
-#   ./sh/setup_systemd.sh --remove           # удалить все сервисы
-#   ./sh/setup_systemd.sh --status           # статус всех сервисов
-#   ./sh/setup_systemd.sh --logs video-classify           # последние 100 строк
-#   ./sh/setup_systemd.sh --logs video-classify --follow  # следить за логами
+#   ./sh/system/setup_systemd.sh                    # установить и запустить основные сервисы
+#   ./sh/system/setup_systemd.sh --with-data        # + data-pipeline (watch-скрипты обучения)
+#   ./sh/system/setup_systemd.sh --remove           # удалить все сервисы
+#   ./sh/system/setup_systemd.sh --status           # статус всех сервисов
+#   ./sh/system/setup_systemd.sh --logs video-classify           # последние 100 строк
+#   ./sh/system/setup_systemd.sh --logs video-classify --follow  # следить за логами
 #
 # Основные сервисы:
 #   video-transfer   — Transfer Server (приём файлов с Windows)
@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 
 # ── Аргументы ─────────────────────────────────────────────────────────────────
@@ -280,8 +280,8 @@ done
 
 echo ""
 echo "Команды управления:"
-echo "  ./sh/setup_systemd.sh --status"
-echo "  ./sh/setup_systemd.sh --logs video-classify --follow"
-echo "  ./sh/setup_systemd.sh --remove"
+echo "  ./sh/system/setup_systemd.sh --status"
+echo "  ./sh/system/setup_systemd.sh --logs video-classify --follow"
+echo "  ./sh/system/setup_systemd.sh --remove"
 echo "  sudo systemctl {start|stop|restart|status} video-classify"
 echo "  journalctl -u video-classify -f"

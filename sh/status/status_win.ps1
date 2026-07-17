@@ -1,6 +1,6 @@
 ﻿# Windows pipeline status
 # Usage:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File sh\status_win.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File sh\status\status_win.ps1
 
 $ErrorActionPreference = "SilentlyContinue"
 # UTF-8 через SSH — иначе cp1251-консоль искажает кириллицу
@@ -34,18 +34,11 @@ function Build-Stats($cnt, $times, $windowSec, $suffix, $cpuLine = "") {
         $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
         $lst = [math]::Round($times[$times.Count - 1], 1)
         $s  += "<br>${mn}с/${avg}с/${mx}с/${lst}с"
-        $avgIv = $windowSec / $cnt
-        $pArr  = @($times | ForEach-Object { [int][math]::Round($_ / $avgIv * 100) })
-        $bp_mn  = ($pArr | Measure-Object -Minimum).Minimum
-        $bp_avg = [int][math]::Round(($pArr | Measure-Object -Average).Average)
-        $bp_mx  = ($pArr | Measure-Object -Maximum).Maximum
-        $bp_lst = $pArr[$pArr.Count - 1]
-        $s += "<br>${bp_mn}%/${bp_avg}%/${bp_mx}%/${bp_lst}%"
     }
     if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
     return $s
 }
-$REPO = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$REPO = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
 Write-Host ""
