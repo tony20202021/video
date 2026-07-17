@@ -283,7 +283,7 @@ def _cpu_csv_paths(svc_name: str, window_min: int) -> list[Path]:
     return []
 
 
-def service_cpu(svc_name: str, window_min: int = WINDOW_MIN) -> str | None:
+def _service_cpu_window(svc_name: str, window_min: int) -> str | None:
     """ЦПУ из cpu.csv за последние window_min минут → мин%/ср%/макс%/посл%."""
     paths = _cpu_csv_paths(svc_name, window_min)
     if not paths:
@@ -315,6 +315,16 @@ def service_cpu(svc_name: str, window_min: int = WINDOW_MIN) -> str | None:
     return f"{mn}%/{avg}%/{mx}%/{last}%"
 
 
+def service_cpu(svc_name: str, window_min: int = WINDOW_MIN) -> str | None:
+    """ЦПУ с тем же фолбэком окон, что и статистика кадров (10м → 60м → 24ч),
+    чтобы CPU показывался у всех сервисов, а не только у непрерывно пишущих cpu.csv."""
+    for w in (window_min, 60, 1440):
+        r = _service_cpu_window(svc_name, w)
+        if r:
+            return r
+    return None
+
+
 def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
     if st["count"] == 0:
         return "—"
@@ -344,7 +354,7 @@ def collect() -> list[dict]:
         out_state = dir_state(s["out_dir"])
         in_label  = transfer_in_label() if s["name"] == "video-transfer" else s["in_label"]
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
-        cpu_line  = service_cpu(s["name"]) if state == "active" else None
+        cpu_line  = service_cpu(s["name"], st.get("window", WINDOW_MIN)) if state == "active" else None
         rows.append({
             "name":      s["name"],
             "input":     _fmt_tree(in_label) + "\n" + in_state,
