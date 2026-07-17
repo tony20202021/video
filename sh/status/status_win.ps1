@@ -225,7 +225,17 @@ if (Test-Path $sendLogFile) {
     $sendCutoff   = (Get-Date).AddMinutes(-10)
     $sendTodayStr = $sendLogDate
     $sendTimes10m = [System.Collections.Generic.List[double]]::new()
-    foreach ($ln in $sendAllLines) {
+    # 2_send.log — ЕДИНЫЙ файл за все дни; все строки датируются одним днём, поэтому старые
+    # отправки с временем суток позже cutoff ложно попадают в 10-мин окно (баг «1997x»).
+    # Считаем только строки ТЕКУЩЕГО запуска — после последнего маркера '=== 2_send start ==='.
+    $sendStartIdx = -1
+    for ($i = $sendAllLines.Count - 1; $i -ge 0; $i--) {
+        if ($sendAllLines[$i] -match '=== 2_send start ===') { $sendStartIdx = $i; break }
+    }
+    $sendRunLines = if ($sendStartIdx -ge 0 -and $sendStartIdx -lt ($sendAllLines.Count - 1)) {
+        $sendAllLines[($sendStartIdx + 1)..($sendAllLines.Count - 1)]
+    } else { $sendAllLines }
+    foreach ($ln in $sendRunLines) {
         # Одна комбинированная regex — $Matches[1]=время, расширение файла в строке
         if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO.+\.(jpg|png|jpeg|bmp|webp)") {
             $ts2 = $Matches[1]
