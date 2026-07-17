@@ -155,13 +155,13 @@ _ssh_win() {
 }
 
 # ── вспомогательная функция: строки WIN_SVC → markdown-строки таблицы ──────────
-# WIN_SVC формат: # WIN_SVC|name|server|status|input|output|file|last_log|last_idle|stats_10m
+# WIN_SVC формат: # WIN_SVC|name|server|status|input|output|last_log|last_idle|stats_10m
 _win_svc_md_rows() {
     local win_out="$1" label="${2:-}"   # label — алиас машины из .env (вместо hostname)
-    echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output file last_log last_idle stats_10m; do
+    echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output last_log last_idle stats_10m; do
         local s_icon
         [[ "$status" == "OK" ]] && s_icon="✓" || s_icon="✗"
-        echo "| ${label:-$server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${file} | ${last_log} | ${last_idle} | ${stats_10m} |"
+        echo "| ${label:-$server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${last_log} | ${last_idle} | ${stats_10m} |"
     done
 }
 

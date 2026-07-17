@@ -37,9 +37,10 @@ RESIDENTS_VER = os.environ.get("RESIDENTS_VER", "v1")
 SERVICES = [
     {
         "name":       "video-transfer",
-        "input":      "Windows → HTTP POST :8765",
-        "output":     ".output/transfer/  diff/  service/",
-        "dir":        REPO / ".output/transfer",
+        "in_label":   "Windows → HTTP :8765",
+        "in_dir":     None,                      # приём по HTTP — локального входного каталога нет
+        "out_label":  ".output/transfer/diff/",
+        "out_dir":    REPO / ".output/transfer/diff",
         "log_work":   r"POST|Готово\. Время:",
         "log_wait":   r"\[recv\].*heartbeat",  # heartbeat-файл = камера idle, движения нет
         "stats_pat":  r"\[recv\].*Готово\. Время:",
@@ -47,9 +48,10 @@ SERVICES = [
     },
     {
         "name":       "video-yolo",
-        "input":      ".output/transfer/  diff/  service/",
-        "output":     ".output/pipeline/  2_yolo_boxes_files/images/",
-        "dir":        REPO / ".output/pipeline/2_yolo_boxes_files/images",
+        "in_label":   ".output/transfer/diff/",
+        "in_dir":     REPO / ".output/transfer/diff",
+        "out_label":  "2_yolo_boxes_files/images/",
+        "out_dir":    REPO / ".output/pipeline/2_yolo_boxes_files/images",
         "log_work":   r"Готово",
         "log_wait":   r"ожидание|Файлов нет",
         "stats_pat":  r"Готово\. Время:",
@@ -57,9 +59,10 @@ SERVICES = [
     },
     {
         "name":       "video-classify",
-        "input":      ".output/pipeline/  2_yolo_boxes_files/images/",
-        "output":     f".data/groups/{GROUPS_VER}/inference/  images/{{date}}/{{class}}/",
-        "dir":        REPO / f".data/groups/{GROUPS_VER}/inference/images",
+        "in_label":   "2_yolo_boxes_files/images/",
+        "in_dir":     REPO / ".output/pipeline/2_yolo_boxes_files/images",
+        "out_label":  f".data/groups/{GROUPS_VER}/inference/",
+        "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/images",
         "log_work":   r"Готово|Найдено кропов",
         "log_wait":   r"ожидание|Кропов нет",
         "stats_pat":  r"Готово\. Время:",
@@ -67,9 +70,10 @@ SERVICES = [
     },
     {
         "name":       "video-identify",
-        "input":      f".data/groups/{GROUPS_VER}/inference/  images/{{date}}/1_resident/ 4_guest/",
-        "output":     f".data/residents/{RESIDENTS_VER}/inference/  images/{{date}}/{{person}}/",
-        "dir":        REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
+        "in_label":   f"groups/{GROUPS_VER}/inference/ 1_resident/ 4_guest/",
+        "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
+        "out_label":  f".data/residents/{RESIDENTS_VER}/inference/",
+        "out_dir":    REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
         "log_work":   r"Готово",
         "log_wait":   r"Идентификаций не найдено|ожидание|Кропов нет",
         "stats_pat":  r"Готово\. Время:",
@@ -87,20 +91,27 @@ def svc_state(name: str) -> str:
         return "unknown"
 
 
-def latest_file(directory: Path) -> tuple[str, str]:
-    best_ts, best_path = 0.0, None
+def dir_state(directory: Path | None) -> str:
+    """Кол-во *.jpg в каталоге + дата-время последнего.
+
+    '—' если каталог пуст/отсутствует/None — очередь не копится (пайплайн успевает).
+    """
+    if directory is None:
+        return "—"
+    count = 0
+    best_ts = 0.0
     try:
         for f in directory.rglob("*.jpg"):
+            count += 1
             ts = f.stat().st_mtime
             if ts > best_ts:
-                best_ts, best_path = ts, f
+                best_ts = ts
     except Exception:
         pass
-    if best_path is None:
-        return "—", "—"
-    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d\n%H:%M")
-    short = f"…/{best_path.parent.name}/{best_path.name}"
-    return t, short
+    if count == 0:
+        return "—"
+    t = datetime.fromtimestamp(best_ts).strftime("%Y-%m-%d %H:%M")
+    return f"{count} файл.\n{t}"
 
 
 def _shorten_log(raw: str) -> str:
@@ -283,16 +294,15 @@ def collect() -> list[dict]:
     rows = []
     for s in SERVICES:
         state     = svc_state(s["name"])
-        file_time, file_name = latest_file(s["dir"])
+        in_state  = dir_state(s["in_dir"])
+        out_state = dir_state(s["out_dir"])
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
         cpu_line  = service_cpu(s["name"]) if state == "active" else None
         rows.append({
             "name":      s["name"],
-            "input":     s["input"],
-            "output":    s["output"],
+            "input":     s["in_label"] + "\n" + in_state,
+            "output":    s["out_label"] + "\n" + out_state,
             "state":     state,
-            "file_time": file_time,
-            "file_name": file_name,
             "log_work":  last_log(s["name"], s["log_work"]),
             "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
             "stats":     fmt_stats(st, s["has_timing"], cpu_line),
@@ -348,16 +358,16 @@ _WRAP   = "\033[?7h"   # включить обратно
 def render_term(rows: list[dict], ts: str) -> str:
     out = [_NOWRAP, "", f"  PIPELINE STATUS    {ts}", ""]
 
-    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
+    headers = ["Сервер", "Сервис", "Статус", "Вход\n(N файл. + послед.)", "Выход\n(N файл. + послед.)",
+               "Лог: работа", "Лог: ожид.",
                "N кадров (за 10м)\n1кадр (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
-    widths  = [7, 20, 8, 100, 100, 40, 150, 120, 65]
+    widths  = [7, 20, 8, 38, 38, 150, 120, 65]
     data = [
         ["Linux",
          r["name"],
          ("✓" if r["state"] == "active" else "✗") + " " + r["state"],
-         _fmt_tree(r["input"]),
-         _fmt_tree(r["output"]),
-         r["file_time"] + ("\n" + (r["file_name"][:38] + "…" if len(r["file_name"]) > 39 else r["file_name"]) if r["file_name"] != "—" else ""),
+         r["input"],
+         r["output"],
          r["log_work"],
          r["log_wait"],
          r["stats"]]
@@ -384,15 +394,15 @@ def _md_table(headers: list[str], rows_data: list[list[str]]) -> list[str]:
 def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
-    headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
+    headers = ["Сервер", "Сервис", "Статус", "Вход<br>(N файл. + послед.)", "Выход<br>(N файл. + послед.)",
+               "Лог: работа", "Лог: ожид.",
                "N кадров (за 10м)<br>1кадр (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
-         _fmt_tree(r["input"]).replace("\n", "<br>"),
-         _fmt_tree(r["output"]).replace("\n", "<br>"),
-         r["file_time"].replace("-", "‑").replace("\n", "<br>"),
+         r["input"].replace("\n", "<br>"),
+         r["output"].replace("\n", "<br>"),
          r["log_work"],
          r["log_wait"],
          r["stats"].replace("\n", "<br>")]

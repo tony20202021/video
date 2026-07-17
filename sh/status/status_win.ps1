@@ -313,22 +313,35 @@ if ($sendCount10m -gt 0) {
     $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 " (10м)"
 } else { $sendStats10m = "--" }
 
+# Состояние каталога: "N файл.<br>дата-время последнего" или "—" (пусто = очередь не копится)
+function Get-DirState($dir) {
+    if (-not $dir -or -not (Test-Path $dir)) { return "—" }
+    $files = @(Get-ChildItem -Path $dir -Recurse -File -Filter *.jpg -ErrorAction SilentlyContinue)
+    if ($files.Count -eq 0) { return "—" }
+    $last = ($files | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+    return ("{0} файл.<br>{1}" -f $files.Count, $last)
+}
+# Очередь кадров: выход 1_motion_diff = вход 2_send (те же файлы до отправки+удаления)
+$motionState = Get-DirState $motionDir
+
 foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]
     $stat  = if ($pid2) { "OK" } else { "NOK" }
     if ($s.label -eq "1_motion_diff") {
-        $file2  = $lastEventTime
-        $log2   = Shorten-WinLog $lastLogLine
-        $idle2  = $motionIdleLine
-        $st2    = $stats10m
+        $in2  = "RTSP камеры<br>—"
+        $out2 = "1_motion_diff/images/<br>$motionState"
+        $log2 = Shorten-WinLog $lastLogLine
+        $idle2 = $motionIdleLine
+        $st2  = $stats10m
     } elseif ($s.label -eq "2_send") {
-        $file2  = $sendLastEventTime
-        $log2   = Shorten-WinLog $sendLastLogLine
-        $idle2  = $sendLastIdleLine
-        $st2    = $sendStats10m
+        $in2  = "1_motion_diff/images/<br>$motionState"
+        $out2 = "→ transfer server<br>—"
+        $log2 = Shorten-WinLog $sendLastLogLine
+        $idle2 = $sendLastIdleLine
+        $st2  = $sendStats10m
     } else {
-        $file2 = "--"; $log2 = "--"; $idle2 = "--"; $st2 = "--"
+        $in2 = "--"; $out2 = "--"; $log2 = "--"; $idle2 = "--"; $st2 = "--"
     }
-    Write-Host ("# WIN_SVC|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}" -f `
-        $s.label, $winHost, $stat, $s.input, $s.output, $file2, $log2, $idle2, $st2)
+    Write-Host ("# WIN_SVC|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f `
+        $s.label, $winHost, $stat, $in2, $out2, $log2, $idle2, $st2)
 }
