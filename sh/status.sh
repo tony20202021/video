@@ -11,32 +11,32 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-TS_WIN_ENTRY=""
-TS_WIN_HOME=""
-TS_WIN_EVELINA=""
-TS_WIN_ENTRY_USER=""
-TS_WIN_HOME_USER=""
-TS_WIN_EVELINA_USER=""
-WIN_ENTRY_LABEL="win-entry"
-WIN_HOME_LABEL="win-home"
-WIN_EVELINA_LABEL="win-evelina"
+TS_CAMERAS_3=""
+TS_DEVELOP=""
+TS_CAMERAS_1=""
+TS_CAMERAS_3_USER=""
+TS_DEVELOP_USER=""
+TS_CAMERAS_1_USER=""
+WIN_CAMERAS_3_LABEL="CAMERAS_3"
+WIN_DEVELOP_LABEL="DEVELOP"
+WIN_CAMERAS_1_LABEL="CAMERAS_1"
 WIN_SCRIPT='C:\_Work\video\sh\status_win.ps1'
-WIN_SCRIPT_EVELINA='C:\Work\video\sh\status_win.ps1'
+WIN_SCRIPT_CAMERAS_1='C:\Work\video\sh\status_win.ps1'
 
 if [[ -f "$REPO/.env" ]]; then
     while IFS= read -r _line; do
         [[ -z "$_line" || "$_line" =~ ^# ]] && continue
         _val="${_line#*=}"; _val="${_val%%#*}"; _val="${_val%"${_val##*[! ]}"}"
         case "$_line" in
-            TS_WIN_ENTRY=*)         TS_WIN_ENTRY="$_val" ;;
-            TS_WIN_HOME=*)          TS_WIN_HOME="$_val" ;;
-            TS_WIN_EVELINA=*)       TS_WIN_EVELINA="$_val" ;;
-            TS_WIN_ENTRY_USER=*)    TS_WIN_ENTRY_USER="$_val" ;;
-            TS_WIN_HOME_USER=*)     TS_WIN_HOME_USER="$_val" ;;
-            TS_WIN_EVELINA_USER=*)  TS_WIN_EVELINA_USER="$_val" ;;
-            TS_WIN_ENTRY_LABEL=*)   WIN_ENTRY_LABEL="$_val" ;;
-            TS_WIN_HOME_LABEL=*)    WIN_HOME_LABEL="$_val" ;;
-            TS_WIN_EVELINA_LABEL=*) WIN_EVELINA_LABEL="$_val" ;;
+            TS_CAMERAS_3=*)         TS_CAMERAS_3="$_val" ;;
+            TS_DEVELOP=*)           TS_DEVELOP="$_val" ;;
+            TS_CAMERAS_1=*)         TS_CAMERAS_1="$_val" ;;
+            TS_CAMERAS_3_USER=*)    TS_CAMERAS_3_USER="$_val" ;;
+            TS_DEVELOP_USER=*)      TS_DEVELOP_USER="$_val" ;;
+            TS_CAMERAS_1_USER=*)    TS_CAMERAS_1_USER="$_val" ;;
+            TS_CAMERAS_3_LABEL=*)   WIN_CAMERAS_3_LABEL="$_val" ;;
+            TS_DEVELOP_LABEL=*)     WIN_DEVELOP_LABEL="$_val" ;;
+            TS_CAMERAS_1_LABEL=*)   WIN_CAMERAS_1_LABEL="$_val" ;;
         esac
     done < "$REPO/.env"
 fi
@@ -163,52 +163,52 @@ _win_svc_md_rows() {
     done
 }
 
-# win-entry
+# CAMERAS_3
 echo ""
 sep
-echo "  WINDOWS  ($WIN_ENTRY_LABEL / $TS_WIN_ENTRY)"
+echo "  WINDOWS  ($WIN_CAMERAS_3_LABEL / $TS_CAMERAS_3)"
 sep
-julie2_out=$(_ssh_win "$TS_WIN_ENTRY" "$TS_WIN_ENTRY_USER")
-if [[ -n "$julie2_out" ]]; then
-    echo "$julie2_out" | grep -v "^# WIN_SVC|"
-    IFS='|' read -r julie2_cpu julie2_ram julie2_disk julie2_repo julie2_scripts <<< "$(_parse_win_sys "$julie2_out")"
+cam3_out=$(_ssh_win "$TS_CAMERAS_3" "$TS_CAMERAS_3_USER")
+if [[ -n "$cam3_out" ]]; then
+    echo "$cam3_out" | grep -v "^# WIN_SVC|"
+    IFS='|' read -r cam3_cpu cam3_ram cam3_disk cam3_repo cam3_scripts <<< "$(_parse_win_sys "$cam3_out")"
 else
-    echo "  [недоступна — $TS_WIN_ENTRY]"
-    julie2_cpu="—"; julie2_ram="—"; julie2_disk="—"; julie2_repo="—"; julie2_scripts="недоступна"
+    echo "  [недоступна — $TS_CAMERAS_3]"
+    cam3_cpu="—"; cam3_ram="—"; cam3_disk="—"; cam3_repo="—"; cam3_scripts="недоступна"
 fi
 
-# win-home
-tony8_cpu="—"; tony8_ram="—"; tony8_disk="—"; tony8_repo="—"; tony8_scripts="недоступна"
-tony8_out=""
+# DEVELOP
+dev_cpu="—"; dev_ram="—"; dev_disk="—"; dev_repo="—"; dev_scripts="недоступна"
+dev_out=""
 echo ""
 sep
-echo "  WINDOWS  ($WIN_HOME_LABEL / $TS_WIN_HOME)"
+echo "  WINDOWS  ($WIN_DEVELOP_LABEL / $TS_DEVELOP)"
 sep
 if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-        "$TS_WIN_HOME_USER@$TS_WIN_HOME" "echo ok" &>/dev/null 2>&1; then
-    tony8_out=$(_ssh_win "$TS_WIN_HOME" "$TS_WIN_HOME_USER")
-    if [[ -n "$tony8_out" ]]; then
-        echo "$tony8_out" | grep -v "^# WIN_SVC|"
-        IFS='|' read -r tony8_cpu tony8_ram tony8_disk tony8_repo tony8_scripts <<< "$(_parse_win_sys "$tony8_out")"
+        "$TS_DEVELOP_USER@$TS_DEVELOP" "echo ok" &>/dev/null 2>&1; then
+    dev_out=$(_ssh_win "$TS_DEVELOP" "$TS_DEVELOP_USER")
+    if [[ -n "$dev_out" ]]; then
+        echo "$dev_out" | grep -v "^# WIN_SVC|"
+        IFS='|' read -r dev_cpu dev_ram dev_disk dev_repo dev_scripts <<< "$(_parse_win_sys "$dev_out")"
     fi
 else
     echo "  [недоступна или SSH не настроен]"
 fi
 
-# win-evelina
-evelina_cpu="—"; evelina_ram="—"; evelina_disk="—"; evelina_repo="—"; evelina_scripts="недоступна"
-evelina_out=""
-if [[ -n "$TS_WIN_EVELINA" ]]; then
+# CAMERAS_1
+cam1_cpu="—"; cam1_ram="—"; cam1_disk="—"; cam1_repo="—"; cam1_scripts="недоступна"
+cam1_out=""
+if [[ -n "$TS_CAMERAS_1" ]]; then
     echo ""
     sep
-    echo "  WINDOWS  ($WIN_EVELINA_LABEL / $TS_WIN_EVELINA)"
+    echo "  WINDOWS  ($WIN_CAMERAS_1_LABEL / $TS_CAMERAS_1)"
     sep
     if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            "$TS_WIN_EVELINA_USER@$TS_WIN_EVELINA" "echo ok" &>/dev/null 2>&1; then
-        evelina_out=$(_ssh_win "$TS_WIN_EVELINA" "$TS_WIN_EVELINA_USER" "$WIN_SCRIPT_EVELINA")
-        if [[ -n "$evelina_out" ]]; then
-            echo "$evelina_out" | grep -v "^# WIN_SVC|"
-            IFS='|' read -r evelina_cpu evelina_ram evelina_disk evelina_repo evelina_scripts <<< "$(_parse_win_sys "$evelina_out")"
+            "$TS_CAMERAS_1_USER@$TS_CAMERAS_1" "echo ok" &>/dev/null 2>&1; then
+        cam1_out=$(_ssh_win "$TS_CAMERAS_1" "$TS_CAMERAS_1_USER" "$WIN_SCRIPT_CAMERAS_1")
+        if [[ -n "$cam1_out" ]]; then
+            echo "$cam1_out" | grep -v "^# WIN_SVC|"
+            IFS='|' read -r cam1_cpu cam1_ram cam1_disk cam1_repo cam1_scripts <<< "$(_parse_win_sys "$cam1_out")"
         fi
     else
         echo "  [недоступна или SSH не настроен]"
@@ -227,9 +227,9 @@ fi
     echo "| Машина | CPU | RAM | Диск | Каталог | Статус |"
     echo "|---|---|---|---|---|---|"
     echo "| Linux ($(hostname)) | ${linux_cpu} | ${linux_ram} | ${linux_disk} | ${REPO} | ${linux_svcs} |"
-    echo "| ${WIN_ENTRY_LABEL} | ${julie2_cpu} | ${julie2_ram} | ${julie2_disk} | ${julie2_repo} | ${julie2_scripts} |"
-    echo "| ${WIN_HOME_LABEL} | ${tony8_cpu} | ${tony8_ram} | ${tony8_disk} | ${tony8_repo} | ${tony8_scripts} |"
-    [[ -n "$TS_WIN_EVELINA" ]] && echo "| ${WIN_EVELINA_LABEL} | ${evelina_cpu} | ${evelina_ram} | ${evelina_disk} | ${evelina_repo} | ${evelina_scripts} |"
+    echo "| ${WIN_CAMERAS_3_LABEL} | ${cam3_cpu} | ${cam3_ram} | ${cam3_disk} | ${cam3_repo} | ${cam3_scripts} |"
+    echo "| ${WIN_DEVELOP_LABEL} | ${dev_cpu} | ${dev_ram} | ${dev_disk} | ${dev_repo} | ${dev_scripts} |"
+    [[ -n "$TS_CAMERAS_1" ]] && echo "| ${WIN_CAMERAS_1_LABEL} | ${cam1_cpu} | ${cam1_ram} | ${cam1_disk} | ${cam1_repo} | ${cam1_scripts} |"
     echo ""
     echo "## Сервисы"
     echo ""
@@ -238,9 +238,9 @@ fi
         grep "^|" "$linux_md" | head -2
     fi
     # Windows-сервисы ПЕРВЫЕ (они первые в пайплайне: камеры → детекция → отправка)
-    _win_svc_md_rows "$julie2_out"
-    [[ -n "$tony8_out" ]] && _win_svc_md_rows "$tony8_out"
-    [[ -n "$evelina_out" ]] && _win_svc_md_rows "$evelina_out"
+    _win_svc_md_rows "$cam3_out"
+    [[ -n "$dev_out" ]] && _win_svc_md_rows "$dev_out"
+    [[ -n "$cam1_out" ]] && _win_svc_md_rows "$cam1_out"
     # Linux-сервисы (пропускаем header/separator — уже выведены)
     if [[ -n "$linux_md" && -f "$linux_md" ]]; then
         grep "^|" "$linux_md" | tail -n +3

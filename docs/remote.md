@@ -5,9 +5,9 @@
 | Переменная `.env` | Метка (`_LABEL`) | Роль | ОС |
 |-------------------|------------------|------|----|
 | `TS_SERVER` | — | Linux-сервер (VDS) | Linux |
-| `TS_WIN_HOME` | `TS_WIN_HOME_LABEL` | Домашний Windows | Windows |
-| `TS_WIN_ENTRY` | `TS_WIN_ENTRY_LABEL` | Подъездный Windows | Windows |
-| `TS_WIN_EVELINA` | `TS_WIN_EVELINA_LABEL` | Дополнительный Windows | Windows |
+| `TS_DEVELOP` | `TS_DEVELOP_LABEL` | DEVELOP — домашний Windows | Windows |
+| `TS_CAMERAS_3` | `TS_CAMERAS_3_LABEL` | CAMERAS_3 — подъездный Windows | Windows |
+| `TS_CAMERAS_1` | `TS_CAMERAS_1_LABEL` | CAMERAS_1 — Windows у Елены | Windows |
 
 Все узлы — в одной Tailscale-сети под одним аккаунтом. IP (`100.x.x.x`) стабильны, не меняются при смене провайдера или роутера. Конкретные адреса и метки — в `.env`.
 
@@ -41,7 +41,7 @@ Start-Service sshd
 
 ```bash
 tailscale status          # список узлов и IP
-tailscale ping $TS_WIN_HOME   # проверить связь
+tailscale ping $TS_DEVELOP   # проверить связь
 ```
 
 ### SSH config (`~/.ssh/config`)
@@ -52,15 +52,15 @@ Host video-server
     HostName $TS_SERVER      # из .env
     User <username>
 
-# Домашний Windows (OpenSSH + ключ)
-Host video-home
-    HostName $TS_WIN_HOME    # из .env
+# DEVELOP (OpenSSH + ключ)
+Host video-develop
+    HostName $TS_DEVELOP     # из .env
     User <username>
     IdentityFile ~/.ssh/id_ed25519
 
-# Подъездный Windows (OpenSSH + ключ)
-Host video-entry
-    HostName $TS_WIN_ENTRY   # из .env
+# CAMERAS_3 (OpenSSH + ключ)
+Host video-cameras-3
+    HostName $TS_CAMERAS_3   # из .env
     User <username>
     IdentityFile ~/.ssh/id_ed25519
 ```
@@ -183,8 +183,9 @@ ssh -o BatchMode=yes <user>@<tailscale-ip> "echo ok"
 ### 3. Добавить в `.env`
 
 ```dotenv
-TS_WIN_<NAME>=<tailscale-ip>
-TS_WIN_<NAME>_LABEL=<метка-в-статусе>
+TS_<NAME>=<tailscale-ip>
+TS_<NAME>_USER=<windows-username>
+TS_<NAME>_LABEL=<метка-в-статусе>
 ```
 
 ### 4. Клонировать репозиторий
@@ -249,7 +250,7 @@ scp /home/tony/repos/video/.env <user>@<tailscale-ip>:'C:\Work\video\.env'
 bash sh/status.sh
 ```
 
-Машина должна появиться в секции `WINDOWS (win-<name> / <ip>)` со статусом скриптов.
+Машина должна появиться в секции `WINDOWS (<метка> / <ip>)` со статусом скриптов.
 
 ---
 
