@@ -20,8 +20,11 @@ TS_CAMERAS_1_USER=""
 WIN_CAMERAS_3_LABEL="CAMERAS_3"
 WIN_DEVELOP_LABEL="DEVELOP"
 WIN_CAMERAS_1_LABEL="CAMERAS_1"
-WIN_SCRIPT='C:\_Work\video\sh\status\status_win.ps1'
-WIN_SCRIPT_CAMERAS_1='C:\Work\video\sh\status\status_win.ps1'
+# Путь к репозиторию на каждой Windows-машине (переопределяется в .env: TS_*_REPO).
+# Разный на разных машинах — отсюда строится путь к status_win.ps1.
+TS_CAMERAS_3_REPO='C:\_Work\video'
+TS_DEVELOP_REPO='E:\_Home\Tony\pet projects\video'
+TS_CAMERAS_1_REPO='C:\Work\video'
 
 if [[ -f "$REPO/.env" ]]; then
     while IFS= read -r _line; do
@@ -37,9 +40,17 @@ if [[ -f "$REPO/.env" ]]; then
             TS_CAMERAS_3_LABEL=*)   WIN_CAMERAS_3_LABEL="$_val" ;;
             TS_DEVELOP_LABEL=*)     WIN_DEVELOP_LABEL="$_val" ;;
             TS_CAMERAS_1_LABEL=*)   WIN_CAMERAS_1_LABEL="$_val" ;;
+            TS_CAMERAS_3_REPO=*)    TS_CAMERAS_3_REPO="$_val" ;;
+            TS_DEVELOP_REPO=*)      TS_DEVELOP_REPO="$_val" ;;
+            TS_CAMERAS_1_REPO=*)    TS_CAMERAS_1_REPO="$_val" ;;
         esac
     done < "$REPO/.env"
 fi
+
+# Путь к status_win.ps1 на каждой машине = <repo>\sh\status\status_win.ps1
+WIN_SCRIPT_CAMERAS_3="$TS_CAMERAS_3_REPO\sh\status\status_win.ps1"
+WIN_SCRIPT_DEVELOP="$TS_DEVELOP_REPO\sh\status\status_win.ps1"
+WIN_SCRIPT_CAMERAS_1="$TS_CAMERAS_1_REPO\sh\status\status_win.ps1"
 
 OUT_DIR="$REPO/.output/status/$(date +%Y-%m-%d)"
 mkdir -p "$OUT_DIR"
@@ -144,7 +155,7 @@ IFS='|' read -r linux_cpu linux_ram linux_disk linux_svcs <<< "$(_linux_sys_stat
 
 # ── Windows (SSH) ─────────────────────────────────────────────────────────────
 _ssh_win() {
-    local host="$1" user="$2" script="${3:-$WIN_SCRIPT}"
+    local host="$1" user="$2" script="${3:-$WIN_SCRIPT_CAMERAS_3}"
     ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
         "$user@$host" \
         "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$script\"" 2>&1 \
@@ -168,7 +179,7 @@ echo ""
 sep
 echo "  WINDOWS  ($WIN_CAMERAS_3_LABEL / $TS_CAMERAS_3)"
 sep
-cam3_out=$(_ssh_win "$TS_CAMERAS_3" "$TS_CAMERAS_3_USER")
+cam3_out=$(_ssh_win "$TS_CAMERAS_3" "$TS_CAMERAS_3_USER" "$WIN_SCRIPT_CAMERAS_3")
 if [[ -n "$cam3_out" ]]; then
     echo "$cam3_out" | grep -v "^# WIN_SVC|"
     IFS='|' read -r cam3_cpu cam3_ram cam3_disk cam3_repo cam3_scripts <<< "$(_parse_win_sys "$cam3_out")"
@@ -186,7 +197,7 @@ echo "  WINDOWS  ($WIN_DEVELOP_LABEL / $TS_DEVELOP)"
 sep
 if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
         "$TS_DEVELOP_USER@$TS_DEVELOP" "echo ok" &>/dev/null 2>&1; then
-    dev_out=$(_ssh_win "$TS_DEVELOP" "$TS_DEVELOP_USER")
+    dev_out=$(_ssh_win "$TS_DEVELOP" "$TS_DEVELOP_USER" "$WIN_SCRIPT_DEVELOP")
     if [[ -n "$dev_out" ]]; then
         echo "$dev_out" | grep -v "^# WIN_SVC|"
         IFS='|' read -r dev_cpu dev_ram dev_disk dev_repo dev_scripts <<< "$(_parse_win_sys "$dev_out")"

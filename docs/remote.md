@@ -123,6 +123,70 @@ LABEL_UI_PORT=8789
 
 ---
 
+## Деплой и синхронизация скриптов на машины
+
+Единственный источник правды — ветка `develop` на GitHub. Скрипты **никогда** не
+копируются между машинами вручную (scp). Любое изменение проходит цикл:
+правка на сервере → `commit` → `push` → `git pull` на машинах.
+
+**Почему не scp:** ручное копирование разъезжается — на машинах остаются untracked-копии
+и локальные правки, репозитории расходятся. git даёт единый источник правды и
+воспроизводимость.
+
+### Выкатить изменение на все машины
+
+```bash
+# 1. На сервере — закоммитить и запушить
+cd /home/tony/repos/video
+git add -A && git commit -m "..."
+git push origin develop
+```
+
+**Linux-сервер** (обновление + перезапуск сервисов, если менялись unit-файлы/пути):
+```bash
+git pull origin develop
+sudo ./sh/system/setup_systemd.sh
+```
+
+**Windows, дерево чистое** (нет локальных правок):
+```powershell
+cd <repo>            # путь машины — TS_*_REPO в .env
+git pull origin develop
+```
+
+**Windows с локальными правками** (сделать байт-в-байт как репо):
+```powershell
+cd <repo>
+git fetch origin
+git reset --hard origin/develop
+git clean -fdn       # сначала dry-run — посмотреть, что удалится
+git clean -fd        # затем удалить untracked-файлы
+```
+> Забэкапить правки перед reset, если могут понадобиться: `git diff HEAD > backup.patch`.
+
+### Машины: доступы и пути (в `.env`)
+
+| Машина | SSH user | IP | Репозиторий (`TS_*_REPO`) | git |
+|--------|----------|----|---------------------------|-----|
+| Linux-сервер | — | `TS_SERVER` | `/home/tony/repos/video` | в PATH |
+| DEVELOP | `Anton` | `TS_DEVELOP` | `E:\_Home\Tony\pet projects\video` | в PATH |
+| CAMERAS_3 | `julia` | `TS_CAMERAS_3` | `C:\_Work\video` | в PATH |
+| CAMERAS_1 | `evelina` | `TS_CAMERAS_1` | `C:\Work\video` | `C:\Work\git\cmd\git.exe` |
+
+`TS_*_REPO` в `.env` — оттуда `sh/status/status.sh` строит путь к `status_win.ps1`
+на каждой машине (пути разные, поэтому хардкодить нельзя).
+
+### Типовые проблемы
+
+- **`git diff origin/develop` → «unknown revision»** — репозиторий склонирован single-branch
+  (только `main`, как было на CAMERAS_1). Починка:
+  ```powershell
+  git remote set-branches origin main develop
+  git fetch origin
+  ```
+- **SSH «Permission denied (publickey)»** — ключ сервера не авторизован или неверный
+  SSH-user (на DEVELOP аккаунт — `Anton`, не `tony`). См. авторизацию ключа ниже.
+
 ## Добавление новой Windows-машины
 
 Чеклист для подключения нового Windows-клиента к инфраструктуре.
