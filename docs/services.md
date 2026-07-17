@@ -152,11 +152,11 @@ Win + R → taskschd.msc → Task Scheduler Library → VideoWatchdog
 Все постоянные процессы запускаются как systemd-сервисы. Установка:
 
 ```bash
-./sh/setup_systemd.sh            # установить и запустить
-./sh/setup_systemd.sh --with-data  # + data-pipeline (watch-скрипты обучения)
-./sh/setup_systemd.sh --remove   # удалить
-./sh/setup_systemd.sh --status   # статус
-./sh/setup_systemd.sh --logs video-classify --follow  # логи
+./sh/system/setup_systemd.sh            # установить и запустить
+./sh/system/setup_systemd.sh --with-data  # + data-pipeline (watch-скрипты обучения)
+./sh/system/setup_systemd.sh --remove   # удалить
+./sh/system/setup_systemd.sh --status   # статус
+./sh/system/setup_systemd.sh --logs video-classify --follow  # логи
 ```
 
 | Сервис | Скрипт | Описание |

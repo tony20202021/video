@@ -12,12 +12,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
+import csv as _csv
 import json
 import os
 import sys
 import tarfile
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -38,7 +41,48 @@ API_KEY: str = os.environ.get("TRANSFER_API_KEY", "")
 ALLOWED_IPS = parse_allowed_ips(os.environ.get("ALLOWED_IPS", ""))
 OUTPUT_DIR: Path = REPO_ROOT / ".output" / "transfer"
 
-app = FastAPI(title="Transfer Server", version="1.0")
+_CPU_INTERVAL = 10  # секунд между замерами
+_START_MONO = time.monotonic()
+
+
+async def _cpu_logger() -> None:
+    try:
+        import psutil
+        proc = psutil.Process(os.getpid())
+        proc.cpu_percent(interval=None)  # warm-up
+        n_cpu = max(1, psutil.cpu_count() or 1)
+    except ImportError:
+        return
+    while True:
+        await asyncio.sleep(_CPU_INTERVAL)
+        try:
+            raw = proc.cpu_percent(interval=None)
+            cpu = round(min(100.0, raw / n_cpu), 1)
+            now = datetime.now(tz=MSK)
+            ts_msk = now.strftime("%Y%m%d_%H%M%S")
+            today = now.strftime("%Y%m%d")
+            mono_s = round(time.monotonic() - _START_MONO, 1)
+            csv_dir = OUTPUT_DIR / "meta" / today
+            csv_dir.mkdir(parents=True, exist_ok=True)
+            csv_path = csv_dir / "cpu.csv"
+            write_header = not csv_path.exists()
+            with open(csv_path, "a", newline="", encoding="utf-8") as f:
+                w = _csv.writer(f)
+                if write_header:
+                    w.writerow(["mono_s", "ts_msk", "cpu_pct"])
+                w.writerow([mono_s, ts_msk, cpu])
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_cpu_logger())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Transfer Server", version="1.0", lifespan=lifespan)
 
 
 class _IPAllowlistMiddleware(BaseHTTPMiddleware):

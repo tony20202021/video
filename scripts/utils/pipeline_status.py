@@ -4,7 +4,7 @@ Pipeline status — таблица сервисов + статистика за 
 
 Usage:
     python scripts/utils/pipeline_status.py
-    ./sh/status_linux.sh
+    ./sh/status/status_linux.sh
 """
 from __future__ import annotations
 
@@ -166,24 +166,14 @@ def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: in
     avg  = round(sum(times) / len(times), 1) if times else None
     mx   = round(max(times), 1) if times else None
     last = round(times[-1], 1) if times else None
-    if times and count > 0:
-        avg_iv = window_min * 60 / count
-        per    = [t / avg_iv * 100 for t in times]
-        bp_mn  = round(min(per))
-        bp_avg = round(sum(per) / len(per))
-        bp_mx  = round(max(per))
-        bp_lst = round(per[-1])
-    else:
-        bp_mn = bp_avg = bp_mx = bp_lst = None
     return dict(count=count, min=mn, avg=avg, max=mx, last=last,
-                bp_mn=bp_mn, bp_avg=bp_avg, bp_mx=bp_mx, bp_lst=bp_lst,
                 window=window_min)
 
 
 def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
     """Статистика: 10м → 60м → 24ч (первое ненулевое окно)."""
     _empty = dict(count=0, min=None, avg=None, max=None, last=None,
-                  bp_mn=None, bp_avg=None, bp_mx=None, bp_lst=None, window=WINDOW_MIN)
+                  window=WINDOW_MIN)
     try:
         for window in [WINDOW_MIN, 60, 1440]:
             st = _stats_for_window(svc, stats_pat, has_timing, window)
@@ -212,6 +202,10 @@ def _cpu_csv_paths(svc_name: str, window_min: int) -> list[Path]:
     """Файлы cpu.csv сервиса за последние window_min минут."""
     today   = datetime.now().strftime("%Y%m%d")
     cutoff  = datetime.now().timestamp() - window_min * 60
+
+    if svc_name == "video-transfer":
+        p = REPO / ".output/transfer/meta" / today / "cpu.csv"
+        return [p] if p.is_file() else []
 
     if svc_name == "video-yolo":
         p = REPO / ".output/pipeline/2_yolo_boxes_files/meta" / today / "cpu.csv"
@@ -278,9 +272,6 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
     if has_timing and st["avg"] is not None:
         mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
         lines.append(f"{mn}с/{avg}с/{mx}с/{lst}с")
-        if st["bp_avg"] is not None:
-            bp = st["bp_mn"], st["bp_avg"], st["bp_mx"], st["bp_lst"]
-            lines.append(f"{bp[0]}%/{bp[1]}%/{bp[2]}%/{bp[3]}%")
     if cpu_line is not None:
         lines.append(cpu_line)
     return "\n".join(lines)
@@ -358,7 +349,7 @@ def render_term(rows: list[dict], ts: str) -> str:
     out = [_NOWRAP, "", f"  PIPELINE STATUS    {ts}", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "N кадров (за 10м)\n1кадр (мин/ср/макс/посл)\nвремя % (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
+               "N кадров (за 10м)\n1кадр (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
     widths  = [7, 20, 8, 100, 100, 40, 150, 120, 65]
     data = [
         ["Linux",
@@ -394,7 +385,7 @@ def render_md(rows: list[dict], ts: str) -> str:
     out = ["# Pipeline Status", "", f"_{ts}_", ""]
 
     headers = ["Сервер", "Сервис", "Статус", "Вход", "Выход", "Файл", "Лог: работа", "Лог: ожид.",
-               "N кадров (за 10м)<br>1кадр (мин/ср/макс/посл)<br>время % (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
+               "N кадров (за 10м)<br>1кадр (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
