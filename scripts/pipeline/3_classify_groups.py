@@ -478,14 +478,14 @@ def main() -> int:
         min_interval=(1.0 / _cl_max_fps) if _cl_max_fps > 0 else 0.0,
         max_interval=(1.0 / _cl_min_fps) if _cl_min_fps > 0 else 30.0,
         factor=_ef("CLASSIFY_ADAPT_FACTOR", 2.0),
-        high=_ef("CLASSIFY_ADAPT_HIGH", 0.90),
-        low=_ef("CLASSIFY_ADAPT_LOW", 0.40),
+        high=_ef("CLASSIFY_ADAPT_HIGH", 0.50),
+        low=_ef("CLASSIFY_ADAPT_LOW", 0.25),
         window=int(_ef("CLASSIFY_ADAPT_WINDOW", 10)),
         label="adaptive-cl", unit=" кроп/с",
     ) if _cl_max_fps > 0 else None
     if _cl_limiter is not None:
         logger.info(f"Адапт.лимит: {_cl_max_fps:g}→{_cl_min_fps:g} кроп/с, "
-                    f"HIGH={_ef('CLASSIFY_ADAPT_HIGH', 0.90):g}")
+                    f"HIGH={_ef('CLASSIFY_ADAPT_HIGH', 0.50):g}")
     for rd, ps in run_pairs:
         prefix = f"{ps}/" if ps else ""
         crops_by_subrun = _find_crops(rd, args.ext)

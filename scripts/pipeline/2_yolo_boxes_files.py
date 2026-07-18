@@ -484,8 +484,8 @@ def main() -> int:
     _yolo_min_fps      = _ef("YOLO_MIN_FPS",      0.033)
     _yolo_interval_max = (1.0 / _yolo_min_fps) if _yolo_min_fps > 0 else 30.0
     _ADAPT_WINDOW      = int(_ef("YOLO_ADAPT_WINDOW", 10))
-    _ADAPT_HIGH        = _ef("YOLO_ADAPT_HIGH",   0.90)
-    _ADAPT_LOW         = _ef("YOLO_ADAPT_LOW",    0.40)
+    _ADAPT_HIGH        = _ef("YOLO_ADAPT_HIGH",   0.50)
+    _ADAPT_LOW         = _ef("YOLO_ADAPT_LOW",    0.25)
     _ADAPT_FACTOR      = _ef("YOLO_ADAPT_FACTOR", 2.0)
 
     _yolo_limiter = AdaptiveRateLimiter(

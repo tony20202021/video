@@ -492,14 +492,14 @@ def main() -> int:
         min_interval=(1.0 / _id_max_fps) if _id_max_fps > 0 else 0.0,
         max_interval=(1.0 / _id_min_fps) if _id_min_fps > 0 else 30.0,
         factor=_ef("IDENTIFY_ADAPT_FACTOR", 2.0),
-        high=_ef("IDENTIFY_ADAPT_HIGH", 0.90),
-        low=_ef("IDENTIFY_ADAPT_LOW", 0.40),
+        high=_ef("IDENTIFY_ADAPT_HIGH", 0.50),
+        low=_ef("IDENTIFY_ADAPT_LOW", 0.25),
         window=int(_ef("IDENTIFY_ADAPT_WINDOW", 10)),
         label="adaptive-id", unit=" кроп/с",
     ) if _id_max_fps > 0 else None
     if _id_limiter is not None:
         logger.info(f"Адапт.лимит: {_id_max_fps:g}→{_id_min_fps:g} кроп/с, "
-                    f"HIGH={_ef('IDENTIFY_ADAPT_HIGH', 0.90):g}")
+                    f"HIGH={_ef('IDENTIFY_ADAPT_HIGH', 0.50):g}")
     logger.info(f"Вывод:     {out_dir}")
     logger.info(f"Формат:    {'плоский (inference)' if flat_format else 'camera-run'}")
     logger.info(f"Прогонов:  {len(run_pairs)}")
