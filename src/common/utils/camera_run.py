@@ -563,14 +563,17 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
         pts_norm = [(p - pts0) / 1000  for p in pts]
         wall_s   = [(w - wall0)        for w in wall]
 
-        # Убираем сброс PTS при реконнекте (резкое уменьшение).
-        # Сравниваем по СЫРЫМ pts_norm — иначе каждый кадр после дропа тоже
-        # триггерит условие и offset растёт лавинообразно до переполнения.
+        # PTS сабпотока «рваный»: прыгает и НАЗАД (реконнект), и ВПЕРЁД на десятки
+        # секунд. Сшиваем ЛЮБОЙ разрыв |Δ|>30 с по реальному времени (mono) —
+        # иначе forward-скачки копятся в фейковый «дрейф» на сотни тысяч секунд.
         pts_clean = list(pts_norm)
         offset = 0.0
+        n_breaks = 0
         for i in range(1, len(pts_norm)):
-            if pts_norm[i] < pts_norm[i - 1] - 30.0:  # только при реконнекте (>30 с)
-                offset += pts_norm[i - 1] - pts_norm[i] + 0.1
+            if abs(pts_norm[i] - pts_norm[i - 1]) > 30.0:     # разрыв потока
+                n_breaks += 1
+                step = mono_s[i] - mono_s[i - 1]              # ожидаемый шаг по mono
+                offset += (pts_norm[i - 1] + step) - pts_norm[i]
             pts_clean[i] = pts_norm[i] + offset
 
         ax = axes[ax_idx][0]
@@ -589,7 +592,7 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
         ax.scatter(mono, drift_pts, color="#cc5500", s=2, marker="^", alpha=0.2)
         ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
         ax.set_ylabel("с")
-        ax.set_title(f"{url_id} — дрейф PTS − mono (с)")
+        ax.set_title(f"{url_id} — дрейф PTS − mono (с); разрывов PTS сшито: {n_breaks}")
         ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
         ax.grid(True, linestyle="--", alpha=0.35)
         ax_idx += 1

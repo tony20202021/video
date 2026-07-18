@@ -166,7 +166,8 @@ def _short_cam(url_id: str) -> str:
 # ─── Построение ────────────────────────────────────────────────────────────────
 
 def build_charts(cpu_log: list, durations: list, out_path: Path,
-                 frames: "list | None" = None, heartbeat_s: float = 599.0) -> dict:
+                 frames: "list | None" = None, heartbeat_s: float = 599.0,
+                 fps_bin: float = 5.0) -> dict:
     """Фигура из 2–3 панелей (ЦПУ + интервалы сохранений + опц. fps захвата),
     общая ось «минуты от старта». Возвращает словарь со статистикой."""
     import matplotlib
@@ -179,7 +180,7 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
     if cpu_log:
         run_start = ts_msk_to_sec(cpu_log[0][1]) - float(cpu_log[0][0])
 
-    fps_series = compute_fps_series(frames) if frames else {}
+    fps_series = compute_fps_series(frames, fps_bin) if frames else {}
     has_fps = bool(fps_series)
     n = 2 + (1 if has_fps else 0)
     ratios = [3, 2] + ([2] if has_fps else [])
@@ -247,7 +248,8 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
             fps_avgs[_short_cam(cam)] = round(s["avg"], 1)
         ax_fps.set_ylim(bottom=0)
         ax_fps.set_ylabel("захват, кадр/с")
-        ax_fps.set_title("Реальный fps захвата (frames.csv, ok=1, бин 2 с)")
+        ax_fps.set_title(f"Реальный fps захвата (frames.csv, ok=1, бин {fps_bin:g} с); "
+                         f"кратковременные всплески > номинала — бурсты буфера после стойлов/реконнектов")
         ax_fps.legend(loc="upper right", fontsize=8)
         ax_fps.grid(True, linestyle="--", alpha=0.3)
         stats["fps_avg"] = fps_avgs
@@ -270,6 +272,8 @@ def main() -> int:
     ap.add_argument("--cpu", type=Path, help="Путь к cpu.csv (если не meta_dir)")
     ap.add_argument("--log", type=Path, help="Путь к run.log (если не meta_dir)")
     ap.add_argument("--frames", type=Path, help="Путь к frames.csv (для fps; иначе meta_dir/frames.csv)")
+    ap.add_argument("--fps-bin", type=float, default=5.0, metavar="SEC",
+                    help="Окно бина fps в секундах (default 5.0; меньше — виднее бурсты)")
     ap.add_argument("--out", type=Path, help="Каталог/файл вывода (default: рядом с входом)")
     args = ap.parse_args()
 
@@ -298,7 +302,7 @@ def main() -> int:
         base_dir.mkdir(parents=True, exist_ok=True)
         out_path = base_dir / "meta_charts.png"
 
-    stats = build_charts(cpu_log, durations, out_path, frames=frames)
+    stats = build_charts(cpu_log, durations, out_path, frames=frames, fps_bin=args.fps_bin)
     print(f"cpu.csv: {stats.get('cpu_samples', 0)} замеров"
           f" (avg {stats.get('cpu_avg', '—')}% / max {stats.get('cpu_max', '—')}%)")
     print(f"run.log: {stats.get('events', 0)} сохранений"

@@ -522,8 +522,13 @@ def main() -> int:
 
     _current_date = ts_for_file()[:8]  # YYYYMMDD MSK при старте
 
-    def _flush_day_stats(date_str: str) -> None:
-        """Сохранить логи за date_str в images_dir/date_str/ и обнулить их."""
+    def _flush_day_stats(date_str: str, clear: bool = True) -> None:
+        """Сохранить логи за date_str в images_dir/date_str/.
+
+        clear=True (смена суток / конец прогона) — записать и обнулить.
+        clear=False (периодически во время прогона) — записать без обнуления,
+        чтобы frames.csv/diffs.csv были доступны на диске у ИДУЩЕГО прогона
+        (иначе они появлялись только при смене суток или в самом конце)."""
         if not date_str or not (saves_log or frame_log or diffs_log or pts_log):
             return
         day_dir = images_dir / date_str
@@ -539,11 +544,16 @@ def main() -> int:
                     _w = csv.writer(_f)
                     _w.writerow(_hdr)
                     _w.writerows(_log)
-                _log.clear()
-        logger.info(f"  [день] {date_str} → статистика → {day_dir}")
+                if clear:
+                    _log.clear()
+        if clear:
+            logger.info(f"  [день] {date_str} → статистика → {day_dir}")
 
     deadline = (time.monotonic() + args.duration) if args.duration > 0 else None
     _last_csv_save = t_start
+    _last_stats_save = t_start
+    # frames/diffs/pts на диск реже, чем cpu (тяжелее): раз в 5 мин или 5×интервал cpu
+    _STATS_SAVE_INTERVAL = max(300.0, args.csv_save_interval * 5)
 
     try:
         while True:
@@ -639,6 +649,9 @@ def main() -> int:
                 if _now - _last_csv_save >= args.csv_save_interval:
                     _save_cpu_csv(cpu_monitor.snapshot(), meta_dir)
                     _last_csv_save = _now
+                if _now - _last_stats_save >= _STATS_SAVE_INTERVAL:
+                    _flush_day_stats(_current_date, clear=False)  # без обнуления
+                    _last_stats_save = _now
 
     except KeyboardInterrupt:
         logger.info("Останов по Ctrl+C")

@@ -74,16 +74,22 @@ Write-Host ""
 # ── Pipeline scripts ─────────────────────────────────────────────────────────
 $scriptDefs = @(
     @{ file = "1_motion_diff.ps1"; label = "1_motion_diff";
+       # Ловим и штатный .ps1-обёртку, и прямой python-прогон (напр. бенчмарк
+       # `python 1_motion_diff.py --env _bench.env` в каталоге 1_motion_diff_3cam),
+       # иначе идущий бенчмарк показывается ложным NOK.
+       match = @("1_motion_diff.ps1", "1_motion_diff.py");
        input = "RTSP cameras"; output = ".output\pipeline\1_motion_diff" },
     @{ file = "2_send.ps1";        label = "2_send";
+       match = @("2_send.ps1");
        input = "1_motion_diff"; output = "transfer server (HTTP POST)" }
 )
 
 $scriptPids = @{}
 Write-Host "  Scripts:"
 foreach ($s in $scriptDefs) {
+    $pats  = if ($s.match) { $s.match } else { @($s.file) }
     $procs = Get-WmiObject Win32_Process |
-             Where-Object { $_.CommandLine -like "*$($s.file)*" }
+             Where-Object { $cl = $_.CommandLine; $cl -and (@($pats | Where-Object { $cl -like "*$_*" }).Count -gt 0) }
     if ($procs) {
         $ids = ($procs | ForEach-Object { $_.ProcessId }) -join ", "
         $scriptPids[$s.label] = $ids
