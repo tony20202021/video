@@ -61,6 +61,7 @@ from common.utils.camera_run import (
     draw_cpu_on_ax as _draw_cpu_on_ax,
 )
 from common.utils.time_msk import ts_for_dir
+from common.utils.adaptive_rate import AdaptiveRateLimiter
 import logging
 from common.utils.log_setup import setup_logging, add_file_handler
 
@@ -461,6 +462,30 @@ def main() -> int:
     logger.info(f"Порог M1:  {args.classify_conf}")
     logger.info(f"Вывод:     images={images_dir}  meta={meta_dir}")
     logger.info(f"Прогонов:  {len(run_pairs)}")
+
+    # Адаптивное замедление (как у YOLO): держим долю работы ≤ HIGH, оставляя ЦПУ-запас.
+    # env: CLASSIFY_MAX_FPS (быстрее нельзя), CLASSIFY_MIN_FPS (медленнее нельзя),
+    #      CLASSIFY_ADAPT_HIGH/LOW/FACTOR/WINDOW. MAX_FPS=0 → без замедления.
+    def _ef(_k: str, _d: float) -> float:
+        _v = (os.environ.get(_k) or "").strip()
+        try:
+            return float(_v) if _v else _d
+        except ValueError:
+            return _d
+    _cl_max_fps = _ef("CLASSIFY_MAX_FPS", 20.0)
+    _cl_min_fps = _ef("CLASSIFY_MIN_FPS", 0.5)
+    _cl_limiter = AdaptiveRateLimiter(
+        min_interval=(1.0 / _cl_max_fps) if _cl_max_fps > 0 else 0.0,
+        max_interval=(1.0 / _cl_min_fps) if _cl_min_fps > 0 else 30.0,
+        factor=_ef("CLASSIFY_ADAPT_FACTOR", 2.0),
+        high=_ef("CLASSIFY_ADAPT_HIGH", 0.90),
+        low=_ef("CLASSIFY_ADAPT_LOW", 0.40),
+        window=int(_ef("CLASSIFY_ADAPT_WINDOW", 10)),
+        label="adaptive-cl", unit=" кроп/с",
+    ) if _cl_max_fps > 0 else None
+    if _cl_limiter is not None:
+        logger.info(f"Адапт.лимит: {_cl_max_fps:g}→{_cl_min_fps:g} кроп/с, "
+                    f"HIGH={_ef('CLASSIFY_ADAPT_HIGH', 0.90):g}")
     for rd, ps in run_pairs:
         prefix = f"{ps}/" if ps else ""
         crops_by_subrun = _find_crops(rd, args.ext)
@@ -529,6 +554,14 @@ def main() -> int:
                     })
                     grand_classified[out_class] += 1
                     n_cam += 1
+
+                    # Адаптивное замедление: спим между кропами, чтобы не занимать 100% ЦПУ
+                    if _cl_limiter is not None:
+                        _w_ms = (time.monotonic() - t0) * 1000.0
+                        _s_ms = _cl_limiter.sleep(t0)
+                        _m = _cl_limiter.adapt(_w_ms, _s_ms)
+                        if _m:
+                            logger.info(_m)
 
                 grand_total += n_cam
                 n_run += n_cam

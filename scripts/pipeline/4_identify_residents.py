@@ -53,6 +53,7 @@ from common.utils.camera_run import (
     draw_cpu_on_ax as _draw_cpu_on_ax,
 )
 from common.utils.time_msk import ts_for_dir
+from common.utils.adaptive_rate import AdaptiveRateLimiter
 import logging
 from common.utils.log_setup import setup_logging, add_file_handler
 
@@ -475,6 +476,30 @@ def main() -> int:
 
     logger.info(f"ML:        {'PersonIdentifier готов' if ident and ident.ready else 'не загружен (unknown_resident/)'}")
     logger.info(f"Порог M2:  {args.identify_conf}")
+
+    # Адаптивное замедление (как у YOLO): держим долю работы ≤ HIGH, оставляя ЦПУ-запас
+    # для остальных сервисов. env: IDENTIFY_MAX_FPS (быстрее нельзя), IDENTIFY_MIN_FPS
+    # (медленнее нельзя), IDENTIFY_ADAPT_HIGH/LOW/FACTOR/WINDOW. MAX_FPS=0 → без замедления.
+    def _ef(_k: str, _d: float) -> float:
+        _v = (os.environ.get(_k) or "").strip()
+        try:
+            return float(_v) if _v else _d
+        except ValueError:
+            return _d
+    _id_max_fps = _ef("IDENTIFY_MAX_FPS", 20.0)
+    _id_min_fps = _ef("IDENTIFY_MIN_FPS", 0.5)
+    _id_limiter = AdaptiveRateLimiter(
+        min_interval=(1.0 / _id_max_fps) if _id_max_fps > 0 else 0.0,
+        max_interval=(1.0 / _id_min_fps) if _id_min_fps > 0 else 30.0,
+        factor=_ef("IDENTIFY_ADAPT_FACTOR", 2.0),
+        high=_ef("IDENTIFY_ADAPT_HIGH", 0.90),
+        low=_ef("IDENTIFY_ADAPT_LOW", 0.40),
+        window=int(_ef("IDENTIFY_ADAPT_WINDOW", 10)),
+        label="adaptive-id", unit=" кроп/с",
+    ) if _id_max_fps > 0 else None
+    if _id_limiter is not None:
+        logger.info(f"Адапт.лимит: {_id_max_fps:g}→{_id_min_fps:g} кроп/с, "
+                    f"HIGH={_ef('IDENTIFY_ADAPT_HIGH', 0.90):g}")
     logger.info(f"Вывод:     {out_dir}")
     logger.info(f"Формат:    {'плоский (inference)' if flat_format else 'camera-run'}")
     logger.info(f"Прогонов:  {len(run_pairs)}")
@@ -564,6 +589,14 @@ def main() -> int:
             id_log.append(entry)
             grand_identified[out_class] += 1
             grand_total += 1
+
+            # Адаптивное замедление: спим между кропами, чтобы не занимать 100% ЦПУ
+            if _id_limiter is not None:
+                _w_ms = (time.monotonic() - t0) * 1000.0
+                _s_ms = _id_limiter.sleep(t0)
+                _m = _id_limiter.adapt(_w_ms, _s_ms)
+                if _m:
+                    logger.info(_m)
 
         logger.info(f"  → обработано: {len(crops) - grand_skipped}  пропущено (уже есть): {grand_skipped}")
         logger.info('')
