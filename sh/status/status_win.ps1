@@ -38,6 +38,32 @@ function Build-Stats($cnt, $times, $windowSec, $suffix, $cpuLine = "") {
     if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
     return $s
 }
+
+function _Plural($n, $one, $few, $many) {
+    $n100 = [math]::Abs($n) % 100
+    if ($n100 -ge 11 -and $n100 -le 14) { return $many }
+    $n10 = $n100 % 10
+    if ($n10 -eq 1) { return $one }
+    if ($n10 -ge 2 -and $n10 -le 4) { return $few }
+    return $many
+}
+
+# Единый формат «N прогонов (X файлов)» (как у Linux-сервисов). motion_diff → runs=1
+# (непрерывный цикл), 2_send → runs=число батчей отправки.
+function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "") {
+    $rw = _Plural $runs "прогон" "прогона" "прогонов"
+    $fw = _Plural $files "файл" "файла" "файлов"
+    $s = "${runs} ${rw}${suffix} (${files} ${fw})"
+    if ($times.Count -gt 0) {
+        $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
+        $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
+        $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
+        $lst = [math]::Round($times[$times.Count - 1], 1)
+        $s  += "<br>1кадр ${mn}с/${avg}с/${mx}с/${lst}с"
+    }
+    if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
+    return $s
+}
 $REPO = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))
 $ts   = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
@@ -204,7 +230,7 @@ Write-Host ""
 
 # ── 2_send log ────────────────────────────────────────────────────────────────
 $sendLogFile = Join-Path $REPO ".output\logs\2_send.log"
-$sendLastLogLine = "--"; $sendLastEventTime = "--"; $sendLastIdleLine = "--"; $sendCount10m = 0
+$sendLastLogLine = "--"; $sendLastEventTime = "--"; $sendLastIdleLine = "--"; $sendCount10m = 0; $sendBatches10m = 0
 
 Write-Host "  Log 2_send (last 5 lines):"
 if (Test-Path $sendLogFile) {
@@ -249,6 +275,7 @@ if (Test-Path $sendLogFile) {
                 $lt = [DateTime]::ParseExact("$sendTodayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
                 if ($lt -ge $sendCutoff) {
                     $sendCount10m++
+                    if ($ln -match 'в батче 1/') { $sendBatches10m++ }
                     # "(47.8 КБ  297мс)" → 0.297с
                     if ($ln -match '\([\d.,]+\s*КБ\s+([\d.,]+)мс\)') {
                         $sendTimes10m.Add([double]($Matches[1] -replace ',', '.') / 1000.0)
@@ -334,22 +361,24 @@ if (Test-Path $sendCpuCsv) {
 $winHost    = $env:COMPUTERNAME.ToLower()
 
 # stats для 1_motion_diff: 10м, fallback 60м, fallback кадры из diffs.csv
+# motion_diff — непрерывный цикл: «1 прогон (X файлов)», X = сохранённые кадры с движением
 if ($count10m -gt 0) {
-    $stats10m = Build-Stats $count10m $times10m 600 " (10м)" $motionCpuLine
+    $stats10m = Fmt-Runs 1 $count10m " (10м)" $times10m $motionCpuLine
 } elseif ($count60m -gt 0) {
-    $stats10m = Build-Stats $count60m $times60m 3600 " (60м)" $motionCpuLine
+    $stats10m = Fmt-Runs 1 $count60m " (60м)" $times60m $motionCpuLine
 } elseif ($frameCount10m -gt 0) {
-    # нет событий движения, но кадры обрабатываются — показываем счётчик кадров
-    $stats10m = "${frameCount10m}× кадров (10м)"
-    if ($motionCpuLine -ne "") { $stats10m += "<br>${motionCpuLine}" }
+    # нет событий движения, но кадры обрабатываются
+    $stats10m = Fmt-Runs 1 $frameCount10m " (10м)" @() $motionCpuLine
 } elseif ($motionCpuLine -ne "") {
     # нет ни движения ни diffs.csv, но CPU есть — хотя бы покажем CPU
     $stats10m = "—<br>${motionCpuLine}"
 } else { $stats10m = "--" }
 
 # stats для 2_send: 10м с таймингом + CPU (cpu.csv клиента). CPU есть даже без отправок.
+# 2_send — батчи отправки: «N прогонов (X файлов)», N = число батчей [в батче 1/K]
 if ($sendCount10m -gt 0) {
-    $sendStats10m = Build-Stats $sendCount10m $sendTimes10m 600 " (10м)" $sendCpuLine
+    $sb = if ($sendBatches10m -gt 0) { $sendBatches10m } else { 1 }
+    $sendStats10m = Fmt-Runs $sb $sendCount10m " (10м)" $sendTimes10m $sendCpuLine
 } elseif ($sendCpuLine -ne "") {
     $sendStats10m = "—<br>${sendCpuLine}"
 } else { $sendStats10m = "--" }
