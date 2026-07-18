@@ -13,7 +13,12 @@
 Строит в <meta_dir> (или --out):
   meta_charts.png — 2 панели с общей осью времени:
     • ЦПУ%/утилизация/частота  (из cpu.csv, стиль camera_run.draw_cpu_on_ax)
-    • длительности операций    (из run.log, строки 'Готово. Время: N с.')
+    • интервалы между сохранёнными кадрами (из run.log, 'Готово. Время: N с.')
+
+ВАЖНО: 'Готово. Время: N с.' в motion_diff — это ВРЕМЯ С ПРОШЛОГО СОХРАНЁННОГО КАДРА
+(_now - last_save_time), т.е. «сколько было тихо до этого движения», а НЕ время обработки
+одного кадра. Камера читается ~12 кадр/с непрерывно (дешёвый diff, низкий ЦПУ), а кадр
+сохраняется лишь при diff>порога или раз в HEARTBEAT (пульс).
 """
 from __future__ import annotations
 
@@ -148,7 +153,7 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
 
         ax_dur.vlines(work_x, 0.1, work_d, color="#2255cc", linewidth=1.0, alpha=0.5)
         ax_dur.scatter(work_x, work_d, s=14, color="#2255cc", zorder=5,
-                       label=f"цикл движения ({len(work_d)})")
+                       label=f"движение ({len(work_d)})")
         if hb_x:
             ax_dur.scatter(hb_x, hb_d, s=26, color="#999999", marker="s", zorder=5,
                            label=f"пульс/heartbeat ({len(hb_d)})")
@@ -156,14 +161,15 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
             avg = sum(work_d) / len(work_d)
             ax_dur.axhline(avg, color="orange", linestyle="--", linewidth=0.8)
             ax_dur.text(x[0] if x else 0, avg * 1.1,
-                        f"среднее (без пульса) {avg:.1f} с",
+                        f"средний интервал между движениями {avg:.1f} с",
                         fontsize=8, color="orange")
-            stats["dur_avg_work"] = round(avg, 1)
-            stats["dur_min_work"] = round(min(work_d), 1)
-            stats["dur_max_work"] = round(max(work_d), 1)
+            stats["gap_avg_work"] = round(avg, 1)
+            stats["gap_min_work"] = round(min(work_d), 1)
+            stats["gap_max_work"] = round(max(work_d), 1)
         ax_dur.set_yscale("log")
-        ax_dur.set_ylabel("длительность, с (log)")
-        ax_dur.set_title("Длительности операций (run.log: 'Готово. Время')")
+        ax_dur.set_ylabel("интервал с прошлого сохранения, с (log)")
+        ax_dur.set_title("Интервалы между сохранёнными кадрами — время «тишины» до движения/пульса "
+                         "(run.log 'Готово. Время', НЕ время обработки кадра)")
         ax_dur.legend(loc="upper right", fontsize=8)
         ax_dur.grid(True, which="both", linestyle="--", alpha=0.3)
 
@@ -212,9 +218,9 @@ def main() -> int:
     stats = build_charts(cpu_log, durations, out_path)
     print(f"cpu.csv: {stats.get('cpu_samples', 0)} замеров"
           f" (avg {stats.get('cpu_avg', '—')}% / max {stats.get('cpu_max', '—')}%)")
-    print(f"run.log: {stats.get('events', 0)} событий"
-          f" (цикл движения avg {stats.get('dur_avg_work', '—')} с,"
-          f" min {stats.get('dur_min_work', '—')} / max {stats.get('dur_max_work', '—')})")
+    print(f"run.log: {stats.get('events', 0)} сохранений"
+          f" (интервал между движениями avg {stats.get('gap_avg_work', '—')} с,"
+          f" min {stats.get('gap_min_work', '—')} / max {stats.get('gap_max_work', '—')})")
     print(f"→ {stats['out']}")
     return 0
 
