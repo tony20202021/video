@@ -205,6 +205,7 @@ video/
       1_motion_diff/
         images/YYYYMMDD/  — дифф-кадры по датам (MSK)
         meta/YYYYMMDD/    — CSV, JSON, графики, run.log
+                           (перестроить графики из cpu.csv+run.log: scripts/utils/plot_meta_charts.py <meta_dir>)
       2_yolo_boxes_files/
         images/YYYYMMDD/  — кропы людей
         annotated/YYYYMMDD/ — аннотированные кадры с боксами
