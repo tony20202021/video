@@ -371,20 +371,27 @@ if (Test-Path $envFileTS) {
     }
 }
 
+# Префикс даты лог-файла к строке лога — время в логе есть, а дата может быть старой
+# (у выключенной машины показывает реальную дату последней активности).
+function _WithDate($line, $date) {
+    if (-not $line -or $line -in @('--', '—', '-') -or -not $date) { return $line }
+    return "$date<br>$line"
+}
+
 foreach ($s in $scriptDefs) {
     $pid2  = $scriptPids[$s.label]
     $stat  = if ($pid2) { "OK" } else { "NOK" }
     if ($s.label -eq "1_motion_diff") {
         $in2  = "RTSP камеры<br>—"
         $out2 = "1_motion_diff/images/<br>$motionState"
-        $log2 = Shorten-WinLog $lastLogLine
-        $idle2 = $motionIdleLine
+        $log2 = _WithDate (Shorten-WinLog $lastLogLine) $logDate
+        $idle2 = _WithDate $motionIdleLine $logDate
         $st2  = $stats10m
     } elseif ($s.label -eq "2_send") {
         $in2  = "1_motion_diff/images/<br>$motionState"
         $out2 = "→ $transferAddr<br>—"
-        $log2 = Shorten-WinLog $sendLastLogLine
-        $idle2 = $sendLastIdleLine
+        $log2 = _WithDate (Shorten-WinLog $sendLastLogLine) $sendLogDate
+        $idle2 = _WithDate $sendLastIdleLine $sendLogDate
         $st2  = $sendStats10m
     } else {
         $in2 = "--"; $out2 = "--"; $log2 = "--"; $idle2 = "--"; $st2 = "--"

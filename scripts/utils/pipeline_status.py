@@ -180,16 +180,24 @@ def _shorten_log(raw: str) -> str:
     return msg.strip()
 
 
+def _with_date(raw: str) -> str:
+    """Строка лога с датой первой строкой (journalctl -o short-iso: '2026-07-18T…').
+    Дата берётся из журнала — видно, если событие старое."""
+    m = re.match(r"(\d{4}-\d{2}-\d{2})", raw)
+    short = _shorten_log(raw)
+    return f"{m.group(1)}\n{short}" if m else short
+
+
 def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
     try:
         r = subprocess.run(
-            ["journalctl", "-u", svc, "--no-pager", "-n5000"],
+            ["journalctl", "-u", svc, "--no-pager", "-o", "short-iso", "-n5000"],
             capture_output=True, text=True,
         )
         all_lines = r.stdout.splitlines()
         matched = [l for l in all_lines if re.search(pattern, l)]
         if matched:
-            return _shorten_log(matched[-1])
+            return _with_date(matched[-1])
         if exclude_pat:
             # fallback: строки не работа, содержат признак ожидания
             idle_hint = re.compile(r"нет|ожид|пуст|\bwait\b|\bidle\b|\bempty\b", re.IGNORECASE)
@@ -198,7 +206,7 @@ def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
                           and re.search(r"\d{2}:\d{2}:\d{2}", l)
                           and idle_hint.search(l)]
             if candidates:
-                return _shorten_log(candidates[-1])
+                return _with_date(candidates[-1])
         return "—"
     except Exception:
         return "—"
@@ -460,8 +468,8 @@ def render_md(rows: list[dict], ts: str) -> str:
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
          r["input"].replace("\n", "<br>"),
          r["output"].replace("\n", "<br>"),
-         r["log_work"],
-         r["log_wait"],
+         r["log_work"].replace("\n", "<br>"),
+         r["log_wait"].replace("\n", "<br>"),
          r["stats"].replace("\n", "<br>")]
         for r in rows
     ]
