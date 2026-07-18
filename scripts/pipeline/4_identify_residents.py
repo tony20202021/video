@@ -653,7 +653,7 @@ def main() -> int:
             f"Время: {stats['duration_sec']} с."
         )
     else:
-        logger.info(f"Готово. Время: {stats['duration_sec']} с.  Вывод: {_base_out}")
+        logger.info(f"1 батч ({grand_total} кадров)  Готово. Время: {stats['duration_sec']} с.  Вывод: {_base_out}")
         summary = "  ".join(f"{p}: {n}" for p, n in sorted(grand_identified.items()))
         if summary:
             logger.info(f"Итог: {summary}")

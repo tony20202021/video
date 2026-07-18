@@ -18,6 +18,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 
 WINDOW_MIN = 10  # статистика за последние N минут
+BURST_GAP_SEC = 15  # пауза между событиями > этого = новый «прогон/всплеск» (для transfer)
 
 # ─── .env ─────────────────────────────────────────────────────────────────────
 
@@ -220,6 +221,8 @@ def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: in
     )
     count = 0
     times: list[float] = []
+    frames = 0                    # сумма «X кадров» из '1 батч (X кадров)' (батч-сервисы)
+    ts_secs: list[int] = []       # секунды-в-сутках событий (для подсчёта всплесков)
     for line in r.stdout.splitlines():
         if re.search(stats_pat, line):
             count += 1
@@ -227,18 +230,31 @@ def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: in
                 m = re.search(r"Время:\s*([\d.,]+)\s*с", line)
                 if m:
                     times.append(float(m.group(1).replace(",", ".")))
+            fm = re.search(r"(\d+)\s*кадров", line)
+            if fm:
+                frames += int(fm.group(1))
+            tm = re.search(r"\b(\d{2}):(\d{2}):(\d{2})\b", line)
+            if tm:
+                ts_secs.append(int(tm.group(1)) * 3600 + int(tm.group(2)) * 60 + int(tm.group(3)))
+    # всплески: группы событий, разделённые паузой > BURST_GAP_SEC (для transfer — приём пачками)
+    bursts = 0
+    if ts_secs:
+        bursts = 1
+        for i in range(1, len(ts_secs)):
+            if ts_secs[i] - ts_secs[i - 1] > BURST_GAP_SEC:
+                bursts += 1
     mn   = round(min(times), 1) if times else None
     avg  = round(sum(times) / len(times), 1) if times else None
     mx   = round(max(times), 1) if times else None
     last = round(times[-1], 1) if times else None
     return dict(count=count, min=mn, avg=avg, max=mx, last=last,
-                window=window_min)
+                frames=frames, bursts=bursts, window=window_min)
 
 
 def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
     """Статистика: 10м → 60м → 24ч (первое ненулевое окно)."""
     _empty = dict(count=0, min=None, avg=None, max=None, last=None,
-                  window=WINDOW_MIN)
+                  frames=0, bursts=0, window=WINDOW_MIN)
     try:
         for window in [WINDOW_MIN, 60, 1440]:
             st = _stats_for_window(svc, stats_pat, has_timing, window)
@@ -346,25 +362,13 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
     return many
 
 
-def out_files_in_window(out_dir: Path | None, window_min: int) -> int:
-    """Сколько выходных файлов (*.jpg) произведено за последние window_min минут (по mtime)."""
-    if not out_dir or not Path(out_dir).is_dir():
-        return 0
-    cutoff = datetime.now().timestamp() - window_min * 60
-    n = 0
-    for root, _dirs, files in os.walk(out_dir):
-        for f in files:
-            if f.endswith(".jpg"):
-                try:
-                    if os.path.getmtime(os.path.join(root, f)) >= cutoff:
-                        n += 1
-                except OSError:
-                    pass
-    return n
-
-
 def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None,
-              n_is_runs: bool = False, files_n: int | None = None) -> str:
+              kind: str = "batch") -> str:
+    """Единообразно «N прогонов (X ...)»:
+      kind='batch'  (yolo/classify/identify) — N=прогоны (лог 'Готово'),
+                    X=обработанные КАДРЫ (сумма '1 батч (X кадров)'). Тайминг «1прогон».
+      kind='burst'  (transfer) — N=всплески приёма (паузы>BURST_GAP), X=принятые ФАЙЛЫ.
+                    Тайминг «1кадр»."""
     if st["count"] == 0:
         return "—"
     w = st.get("window", WINDOW_MIN)
@@ -374,18 +378,22 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None,
         suffix = f" ({w // 60}ч)" if w % 60 == 0 else f" ({w}м)"
     else:
         suffix = f" ({w}м)"
-    if n_is_runs:
-        # N× для этих сервисов — это ПРОГОНЫ (poll-циклы), а не файлы; показываем оба
-        cnt = st["count"]
-        head = f"{cnt} {_plural(cnt, 'прогон', 'прогона', 'прогонов')}{suffix}"
-        if files_n is not None:
-            head += f" ({files_n} {_plural(files_n, 'файл', 'файла', 'файлов')})"
-    else:
-        head = f"{st['count']}×{suffix}"
+    if kind == "burst":
+        n = st.get("bursts", 1) or 1
+        x = st["count"]
+        head = (f"{n} {_plural(n, 'прогон', 'прогона', 'прогонов')}{suffix} "
+                f"({x} {_plural(x, 'файл', 'файла', 'файлов')})")
+        time_unit = "1кадр"
+    else:  # batch
+        n = st["count"]
+        x = st.get("frames", 0)
+        head = (f"{n} {_plural(n, 'прогон', 'прогона', 'прогонов')}{suffix} "
+                f"({x} {_plural(x, 'кадр', 'кадра', 'кадров')})")
+        time_unit = "1прогон"
     lines = [head]
     if has_timing and st["avg"] is not None:
         mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
-        lines.append(f"{mn}с/{avg}с/{mx}с/{lst}с")
+        lines.append(f"{time_unit} {mn}с/{avg}с/{mx}с/{lst}с")
     if cpu_line is not None:
         lines.append(cpu_line)
     return "\n".join(lines)
@@ -402,11 +410,9 @@ def collect() -> list[dict]:
         in_label  = transfer_in_label() if s["name"] == "video-transfer" else s["in_label"]
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
         cpu_line  = service_cpu(s["name"], st.get("window", WINDOW_MIN)) if state == "active" else None
-        # у transfer N× = принятые кадры (файлы); у yolo/classify/identify N× = прогоны,
-        # поэтому дополнительно считаем реально произведённые файлы за то же окно
-        n_is_runs = s["name"] != "video-transfer"
-        files_n   = (out_files_in_window(s["out_dir"], st.get("window", WINDOW_MIN))
-                     if n_is_runs else None)
+        # transfer — непрерывный приём пачками (N=всплески, X=файлы); yolo/classify/identify —
+        # батч-обработка (N=прогоны, X=обработанные кадры из лога «1 батч (X кадров)»)
+        kind = "burst" if s["name"] == "video-transfer" else "batch"
         rows.append({
             "name":      s["name"],
             "input":     _fmt_tree(in_label) + "\n" + in_state,
@@ -414,7 +420,7 @@ def collect() -> list[dict]:
             "state":     state,
             "log_work":  last_log(s["name"], s["log_work"]),
             "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
-            "stats":     fmt_stats(st, s["has_timing"], cpu_line, n_is_runs, files_n),
+            "stats":     fmt_stats(st, s["has_timing"], cpu_line, kind),
         })
     return rows
 
@@ -469,7 +475,7 @@ def render_term(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход\n(N файл. + послед.)", "Выход\n(N файл. + послед.)",
                "Лог: работа", "Лог: ожид.",
-               "N кадров · прогонов(файлов) (за 10м/1ч/24ч)\n1кадр (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
+               "прогонов (кадров/файлов) (за 10м/1ч/24ч)\nвремя обраб. (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
     widths  = [7, 20, 8, 38, 38, 150, 120, 65]
     data = [
         ["Linux",
@@ -505,7 +511,7 @@ def render_md(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход<br>(N файл. + послед.)", "Выход<br>(N файл. + послед.)",
                "Лог: работа", "Лог: ожид.",
-               "N кадров · прогонов(файлов) (за 10м/1ч/24ч)<br>1кадр (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
+               "прогонов (кадров/файлов) (за 10м/1ч/24ч)<br>время обраб. (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",

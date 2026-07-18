@@ -643,7 +643,7 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"Готово. Время: {stats['duration_sec']} с.  images={images_dir}  meta={meta_dir}")
+    logger.info(f"1 батч ({grand_total} кадров)  Готово. Время: {stats['duration_sec']} с.  images={images_dir}  meta={meta_dir}")
     summary = "  ".join(f"{cls}: {n}" for cls, n in sorted(grand_classified.items()))
     if summary:
         logger.info(f"Итог: {summary}")

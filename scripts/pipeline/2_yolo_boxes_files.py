@@ -803,7 +803,7 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"Готово. Время: {stats['duration_sec']} с.  images={images_dir}  annotated={annotated_dir}  meta={meta_dir}")
+    logger.info(f"1 батч ({grand_total_checked} кадров)  Готово. Время: {stats['duration_sec']} с.  images={images_dir}  annotated={annotated_dir}  meta={meta_dir}")
     return 0
 
 
