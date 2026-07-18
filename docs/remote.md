@@ -186,6 +186,16 @@ git clean -fd        # затем удалить untracked-файлы
   ```
 - **SSH «Permission denied (publickey)»** — ключ сервера не авторизован или неверный
   SSH-user (на DEVELOP аккаунт — `Anton`, не `tony`). См. авторизацию ключа ниже.
+- **`git pull` → exit 128, `fetch` при этом проходит** — у ветки не настроен upstream
+  (`fatal: no tracking information`). Так было на CAMERAS_1. Починка (git по полному пути,
+  если не в PATH):
+  ```powershell
+  & "C:\Work\git\cmd\git.exe" -C "C:\Work\video" branch --set-upstream-to=origin/develop develop
+  & "C:\Work\git\cmd\git.exe" -C "C:\Work\video" pull --ff-only
+  ```
+- **git не в PATH (портативный, `C:\Work\git`)** — это штатно (раздел 4a). Все git-команды
+  звать по полному пути `C:\Work\git\cmd\git.exe` (см. столбец «git» в таблице выше и `TS_*_GIT` в `.env`).
+  «Ставить git заново» не нужно — PortableGit и есть штатный способ.
 
 ## Добавление новой Windows-машины
 

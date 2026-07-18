@@ -24,6 +24,19 @@ conda run -n conda_video pytest
 conda run -n conda_video pytest tests/test_motion_utils.py -s
 ```
 
+> **Неинтерактивная / SSH-оболочка:** `conda ...` — это shell-функция, которой нужна
+> переменная `CONDA_EXE`. В неинтерактивном окружении (по SSH, из скрипта, из инструмента)
+> `conda init` не отрабатывает, `CONDA_EXE` пуст → `conda run` падает с `__conda_exe: permission denied`.
+> Сам conda при этом цел. Надёжно — звать в обход функции-обёртки:
+> ```bash
+> # через бинарник conda напрямую
+> $HOME/miniconda3/bin/conda run -n conda_video python scripts/tests/run_tests.py
+> # или сразу python окружения (как это делают sh-скрипты пайплайна)
+> $HOME/miniconda3/envs/conda_video/bin/python scripts/tests/run_tests.py
+> ```
+> Сервисы (`sh/**`, systemd) уже используют абсолютный путь `…/envs/conda_video/bin/python`,
+> поэтому от этой засады не страдают — она проявляется только при ручном вызове `conda run`.
+
 ---
 
 ## Что и когда запускать
