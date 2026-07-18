@@ -333,7 +333,38 @@ def service_cpu(svc_name: str, window_min: int = WINDOW_MIN) -> str | None:
     return None
 
 
-def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    """Русское склонение: 1 прогон, 2 прогона, 5 прогонов."""
+    n100 = abs(n) % 100
+    if 11 <= n100 <= 14:
+        return many
+    n10 = n100 % 10
+    if n10 == 1:
+        return one
+    if 2 <= n10 <= 4:
+        return few
+    return many
+
+
+def out_files_in_window(out_dir: Path | None, window_min: int) -> int:
+    """Сколько выходных файлов (*.jpg) произведено за последние window_min минут (по mtime)."""
+    if not out_dir or not Path(out_dir).is_dir():
+        return 0
+    cutoff = datetime.now().timestamp() - window_min * 60
+    n = 0
+    for root, _dirs, files in os.walk(out_dir):
+        for f in files:
+            if f.endswith(".jpg"):
+                try:
+                    if os.path.getmtime(os.path.join(root, f)) >= cutoff:
+                        n += 1
+                except OSError:
+                    pass
+    return n
+
+
+def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None,
+              n_is_runs: bool = False, files_n: int | None = None) -> str:
     if st["count"] == 0:
         return "—"
     w = st.get("window", WINDOW_MIN)
@@ -343,7 +374,15 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None) -> str:
         suffix = f" ({w // 60}ч)" if w % 60 == 0 else f" ({w}м)"
     else:
         suffix = f" ({w}м)"
-    lines = [f"{st['count']}×{suffix}"]
+    if n_is_runs:
+        # N× для этих сервисов — это ПРОГОНЫ (poll-циклы), а не файлы; показываем оба
+        cnt = st["count"]
+        head = f"{cnt} {_plural(cnt, 'прогон', 'прогона', 'прогонов')}{suffix}"
+        if files_n is not None:
+            head += f" ({files_n} {_plural(files_n, 'файл', 'файла', 'файлов')})"
+    else:
+        head = f"{st['count']}×{suffix}"
+    lines = [head]
     if has_timing and st["avg"] is not None:
         mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
         lines.append(f"{mn}с/{avg}с/{mx}с/{lst}с")
@@ -363,6 +402,11 @@ def collect() -> list[dict]:
         in_label  = transfer_in_label() if s["name"] == "video-transfer" else s["in_label"]
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
         cpu_line  = service_cpu(s["name"], st.get("window", WINDOW_MIN)) if state == "active" else None
+        # у transfer N× = принятые кадры (файлы); у yolo/classify/identify N× = прогоны,
+        # поэтому дополнительно считаем реально произведённые файлы за то же окно
+        n_is_runs = s["name"] != "video-transfer"
+        files_n   = (out_files_in_window(s["out_dir"], st.get("window", WINDOW_MIN))
+                     if n_is_runs else None)
         rows.append({
             "name":      s["name"],
             "input":     _fmt_tree(in_label) + "\n" + in_state,
@@ -370,7 +414,7 @@ def collect() -> list[dict]:
             "state":     state,
             "log_work":  last_log(s["name"], s["log_work"]),
             "log_wait":  last_log(s["name"], s["log_wait"], exclude_pat=s["log_work"]),
-            "stats":     fmt_stats(st, s["has_timing"], cpu_line),
+            "stats":     fmt_stats(st, s["has_timing"], cpu_line, n_is_runs, files_n),
         })
     return rows
 
@@ -425,7 +469,7 @@ def render_term(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход\n(N файл. + послед.)", "Выход\n(N файл. + послед.)",
                "Лог: работа", "Лог: ожид.",
-               "N кадров (за 10м/1ч/24ч)\n1кадр (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
+               "N кадров · прогонов(файлов) (за 10м/1ч/24ч)\n1кадр (мин/ср/макс/посл)\nцпу% (мин/ср/макс/посл)"]
     widths  = [7, 20, 8, 38, 38, 150, 120, 65]
     data = [
         ["Linux",
@@ -461,7 +505,7 @@ def render_md(rows: list[dict], ts: str) -> str:
 
     headers = ["Сервер", "Сервис", "Статус", "Вход<br>(N файл. + послед.)", "Выход<br>(N файл. + послед.)",
                "Лог: работа", "Лог: ожид.",
-               "N кадров (за 10м/1ч/24ч)<br>1кадр (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
+               "N кадров · прогонов(файлов) (за 10м/1ч/24ч)<br>1кадр (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
     data = [
         ["Linux",
          f"`{r['name']}`",
