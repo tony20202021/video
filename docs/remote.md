@@ -171,7 +171,7 @@ git clean -fd        # затем удалить untracked-файлы
 | Linux-сервер | — | `TS_SERVER` | `/home/tony/repos/video` | в PATH |
 | DEVELOP | `Anton` | `TS_DEVELOP` | `E:\_Home\Tony\pet projects\video` | в PATH |
 | CAMERAS_3 | `julia` | `TS_CAMERAS_3` | `C:\_Work\video` | в PATH |
-| CAMERAS_1 | `evelina` | `TS_CAMERAS_1` | `C:\Work\video` | `C:\Work\git\cmd\git.exe` |
+| CAMERAS_1 | `evelina` | `TS_CAMERAS_1` | `C:\Work\video` | в PATH (портативный, `C:\Work\git\cmd`) |
 
 `TS_*_REPO` в `.env` — оттуда `sh/status/status.sh` строит путь к `status_win.ps1`
 на каждой машине (пути разные, поэтому хардкодить нельзя).
@@ -193,9 +193,10 @@ git clean -fd        # затем удалить untracked-файлы
   & "C:\Work\git\cmd\git.exe" -C "C:\Work\video" branch --set-upstream-to=origin/develop develop
   & "C:\Work\git\cmd\git.exe" -C "C:\Work\video" pull --ff-only
   ```
-- **git не в PATH (портативный, `C:\Work\git`)** — это штатно (раздел 4a). Все git-команды
-  звать по полному пути `C:\Work\git\cmd\git.exe` (см. столбец «git» в таблице выше и `TS_*_GIT` в `.env`).
-  «Ставить git заново» не нужно — PortableGit и есть штатный способ.
+- **git — портативный (`C:\Work\git`)** — это штатно (раздел 4a), «ставить заново» не нужно.
+  Либо добавить `C:\Work\git\cmd` в User PATH (рецепт в 4a — так сделано на CAMERAS_1), либо
+  звать по полному пути `C:\Work\git\cmd\git.exe`. Актуальное состояние — столбец «git» в таблице
+  выше и `TS_*_GIT` в `.env`.
 
 ## Добавление новой Windows-машины
 
@@ -276,6 +277,16 @@ curl.exe -L -o C:\Work\PortableGit.exe `
 Start-Process -Wait "C:\Work\PortableGit.exe" -ArgumentList "-o `"C:\Work\git`" -y"
 & "C:\Work\git\cmd\git.exe" --version   # проверка
 ```
+
+**Добавить в User PATH** (чтобы `git` работал коротко, без полного пути; только для evelina, без прав админа):
+```powershell
+$p = [Environment]::GetEnvironmentVariable('Path','User')
+$parts = @($p -split ';' | Where-Object { $_ -ne '' })          # @() — обязателен, иначе скаляр склеится
+if ($parts -notcontains 'C:\Work\git\cmd') {
+    [Environment]::SetEnvironmentVariable('Path', (@($parts) + 'C:\Work\git\cmd' -join ';'), 'User')
+}
+```
+> Применяется в **новых** сессиях (sshd читает реестр при входе). Проверка из новой SSH-сессии: `ssh <user>@<ip> "git --version"`.
 
 #### 4b. SSH-ключ для GitHub
 
