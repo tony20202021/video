@@ -81,3 +81,40 @@ def test_unwrap_midnight():
     # 23:59:58 → 00:00:02  должно стать 86402 (не откат назад)
     out = pmc._unwrap_midnight([86398.0, 86399.0, 2.0, 3.0])
     assert out == [86398.0, 86399.0, 86402.0, 86403.0]
+
+
+def test_load_frames_csv(tmp_path):
+    p = tmp_path / "frames.csv"
+    p.write_text(
+        "mono_s,ts_msk,url_id,ok,plausible,event\n"
+        "0.5,ts,CAM_A_URL,1,1,\n"
+        "0.6,ts,CAM_A_URL,0,1,\n"          # ok=0 — пропуск
+        "0.7,ts,CAM_A_URL,1,1,\n"
+        "битая\n",                          # мало колонок — пропуск
+        encoding="utf-8",
+    )
+    fr = pmc.load_frames_csv(p)
+    assert fr == [(0.5, "CAM_A_URL"), (0.7, "CAM_A_URL")]
+
+
+def test_compute_fps_series():
+    # 12 кадров за 1 секунду одной камеры → ~12 fps
+    frames = [(i / 12.0, "CAM_A_URL") for i in range(13)]  # 0..1.0 c
+    s = pmc.compute_fps_series(frames, bin_s=1.0)
+    assert "CAM_A_URL" in s
+    # 13 кадров за ~1.083 c → avg ≈ 12
+    assert s["CAM_A_URL"]["avg"] == pytest.approx(13 / (12 / 12.0), rel=0.01)
+    assert len(s["CAM_A_URL"]["t"]) == len(s["CAM_A_URL"]["fps"])
+
+
+def test_compute_fps_series_two_cams():
+    frames = [(0.1, "CAM_A_URL"), (0.2, "CAM_A_URL"),
+              (0.1, "CAM_B_URL"), (0.5, "CAM_B_URL"), (0.9, "CAM_B_URL")]
+    s = pmc.compute_fps_series(frames, bin_s=1.0)
+    assert set(s) == {"CAM_A_URL", "CAM_B_URL"}
+
+
+def test_short_cam():
+    assert pmc._short_cam("CAM_01_9_D_URL") == "01_9_D"
+    assert pmc._short_cam("CAM_B1_URL") == "B1"
+    assert pmc._short_cam("other") == "other"

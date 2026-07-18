@@ -11,9 +11,10 @@
   python scripts/utils/plot_meta_charts.py --cpu cpu.csv --log run.log --out DIR
 
 Строит в <meta_dir> (или --out):
-  meta_charts.png — 2 панели с общей осью времени:
+  meta_charts.png — 2–3 панели с общей осью времени:
     • ЦПУ%/утилизация/частота  (из cpu.csv, стиль camera_run.draw_cpu_on_ax)
     • интервалы между сохранёнными кадрами (из run.log, 'Готово. Время: N с.')
+    • реальный fps захвата (из frames.csv, если есть) — по камерам, бин 2 с
 
 ВАЖНО: 'Готово. Время: N с.' в motion_diff — это ВРЕМЯ С ПРОШЛОГО СОХРАНЁННОГО КАДРА
 (_now - last_save_time), т.е. «сколько было тихо до этого движения», а НЕ время обработки
@@ -107,12 +108,67 @@ def _unwrap_midnight(t_secs: list) -> list:
     return out
 
 
+def load_frames_csv(path: Path) -> list:
+    """frames.csv → [(mono_s(float), url_id(str)), ...] по успешно прочитанным кадрам (ok=1).
+
+    Колонки: mono_s, ts_msk, url_id, ok, plausible, event."""
+    out: list = []
+    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    for ln in lines[1:]:
+        p = ln.split(",")
+        if len(p) < 4:
+            continue
+        try:
+            mono = float(p[0])
+        except ValueError:
+            continue
+        if p[3].strip() not in ("1", ""):     # ok=0 — неудачный кадр, не считаем
+            continue
+        out.append((mono, p[2]))
+    return out
+
+
+def compute_fps_series(frames: list, bin_s: float = 2.0) -> dict:
+    """[(mono_s, url_id)] → {url_id: {'t': [центры бинов, с], 'fps': [...], 'avg': X}}.
+    fps в бине = число кадров / bin_s (один проход)."""
+    by_cam: dict = {}
+    for mono, cam in frames:
+        by_cam.setdefault(cam, []).append(mono)
+    series: dict = {}
+    for cam, ts in by_cam.items():
+        if len(ts) < 2:
+            continue
+        ts.sort()
+        t0, t1 = ts[0], ts[-1]
+        buckets: dict = {}
+        for t in ts:
+            b = int((t - t0) / bin_s)
+            buckets[b] = buckets.get(b, 0) + 1
+        keys = sorted(buckets)
+        series[cam] = {
+            "t":   [t0 + (b + 0.5) * bin_s for b in keys],
+            "fps": [buckets[b] / bin_s for b in keys],
+            "avg": len(ts) / (t1 - t0) if t1 > t0 else 0.0,
+        }
+    return series
+
+
+def _short_cam(url_id: str) -> str:
+    """'CAM_01_9_D_URL' → '01_9_D'."""
+    s = url_id
+    if s.upper().startswith("CAM_"):
+        s = s[4:]
+    if s.upper().endswith("_URL"):
+        s = s[:-4]
+    return s
+
+
 # ─── Построение ────────────────────────────────────────────────────────────────
 
 def build_charts(cpu_log: list, durations: list, out_path: Path,
-                 heartbeat_s: float = 599.0) -> dict:
-    """2-панельная фигура (CPU + длительности), общая ось «минуты от старта».
-    Возвращает словарь со статистикой."""
+                 frames: "list | None" = None, heartbeat_s: float = 599.0) -> dict:
+    """Фигура из 2–3 панелей (ЦПУ + интервалы сохранений + опц. fps захвата),
+    общая ось «минуты от старта». Возвращает словарь со статистикой."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -123,9 +179,15 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
     if cpu_log:
         run_start = ts_msk_to_sec(cpu_log[0][1]) - float(cpu_log[0][0])
 
-    fig, (ax_cpu, ax_dur) = plt.subplots(
-        2, 1, figsize=(14, 8), sharex=True,
-        gridspec_kw={"height_ratios": [3, 2]})
+    fps_series = compute_fps_series(frames) if frames else {}
+    has_fps = bool(fps_series)
+    n = 2 + (1 if has_fps else 0)
+    ratios = [3, 2] + ([2] if has_fps else [])
+    fig, axes = plt.subplots(n, 1, figsize=(14, 3.7 * n), sharex=True,
+                             squeeze=False, gridspec_kw={"height_ratios": ratios})
+    axcol = [a[0] for a in axes]
+    ax_cpu, ax_dur = axcol[0], axcol[1]
+    ax_fps = axcol[2] if has_fps else None
 
     # ── ЦПУ (mono_s → минуты) ──
     stats: dict = {"cpu_samples": len(cpu_log), "events": len(durations)}
@@ -173,7 +235,24 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
         ax_dur.legend(loc="upper right", fontsize=8)
         ax_dur.grid(True, which="both", linestyle="--", alpha=0.3)
 
-    ax_dur.set_xlabel("время от старта, мин")
+    # ── Реальный fps захвата (frames.csv) ──
+    if ax_fps is not None:
+        fps_avgs = {}
+        for cam in sorted(fps_series):
+            s = fps_series[cam]
+            xm = [t / 60.0 for t in s["t"]]
+            ax_fps.plot(xm, s["fps"], linewidth=1.0, marker=".", markersize=4,
+                        alpha=0.8, label=f"{_short_cam(cam)}  avg {s['avg']:.1f} fps")
+            ax_fps.axhline(s["avg"], color="orange", linestyle="--", linewidth=0.7, alpha=0.6)
+            fps_avgs[_short_cam(cam)] = round(s["avg"], 1)
+        ax_fps.set_ylim(bottom=0)
+        ax_fps.set_ylabel("захват, кадр/с")
+        ax_fps.set_title("Реальный fps захвата (frames.csv, ok=1, бин 2 с)")
+        ax_fps.legend(loc="upper right", fontsize=8)
+        ax_fps.grid(True, linestyle="--", alpha=0.3)
+        stats["fps_avg"] = fps_avgs
+
+    axcol[-1].set_xlabel("время от старта, мин")
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
@@ -190,11 +269,13 @@ def main() -> int:
                     help="Каталог meta/<дата> с cpu.csv и run.log")
     ap.add_argument("--cpu", type=Path, help="Путь к cpu.csv (если не meta_dir)")
     ap.add_argument("--log", type=Path, help="Путь к run.log (если не meta_dir)")
+    ap.add_argument("--frames", type=Path, help="Путь к frames.csv (для fps; иначе meta_dir/frames.csv)")
     ap.add_argument("--out", type=Path, help="Каталог/файл вывода (default: рядом с входом)")
     args = ap.parse_args()
 
     cpu_path = args.cpu or (args.meta_dir / "cpu.csv" if args.meta_dir else None)
     log_path = args.log or (args.meta_dir / "run.log" if args.meta_dir else None)
+    frames_path = args.frames or (args.meta_dir / "frames.csv" if args.meta_dir else None)
     if not cpu_path and not log_path:
         ap.error("укажите meta_dir или --cpu/--log")
 
@@ -202,6 +283,8 @@ def main() -> int:
     durations = (parse_run_log_durations(
         Path(log_path).read_text(encoding="utf-8", errors="replace"))
         if log_path and Path(log_path).exists() else [])
+    frames = (load_frames_csv(frames_path)
+              if frames_path and Path(frames_path).exists() else [])
 
     if not cpu_log and not durations:
         print("нет данных: cpu.csv и run.log пусты/отсутствуют", file=sys.stderr)
@@ -215,12 +298,14 @@ def main() -> int:
         base_dir.mkdir(parents=True, exist_ok=True)
         out_path = base_dir / "meta_charts.png"
 
-    stats = build_charts(cpu_log, durations, out_path)
+    stats = build_charts(cpu_log, durations, out_path, frames=frames)
     print(f"cpu.csv: {stats.get('cpu_samples', 0)} замеров"
           f" (avg {stats.get('cpu_avg', '—')}% / max {stats.get('cpu_max', '—')}%)")
     print(f"run.log: {stats.get('events', 0)} сохранений"
           f" (интервал между движениями avg {stats.get('gap_avg_work', '—')} с,"
           f" min {stats.get('gap_min_work', '—')} / max {stats.get('gap_max_work', '—')})")
+    if stats.get("fps_avg"):
+        print(f"frames.csv: {len(frames)} кадров, реальный fps захвата {stats['fps_avg']}")
     print(f"→ {stats['out']}")
     return 0
 
