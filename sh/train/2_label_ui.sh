@@ -23,10 +23,15 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-# groups (v4 multi-label: dataset = single/<class>/ + multi/ + labels.json)
+# groups v4 — просмотр датасета (single/<class>/ + multi/ + labels.json)
+INPUT="$REPO/.data/groups/v4/dataset"
+LABELS="$REPO/.data/groups/v4/dataset/labels.json"
+DATASET="$REPO/.data/groups/v4/dataset"
+
+# groups — разметка нового инференса:
 # INPUT="$REPO/.data/groups/v3/inference/images/20260720"
 # LABELS="$REPO/.data/groups/v3/inference/images/20260720/labels.json"
-DATASET="$REPO/.data/groups/v4/dataset"
+# DATASET="$REPO/.data/groups/v4/dataset"
 # PROBS_CSV="$REPO/.data/groups/v3/inference/images/20260720/classifications.csv"
 
 # # residents
@@ -54,6 +59,12 @@ while [[ $# -gt 0 ]]; do
         *) echo "[!] Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
+
+# Устойчивость к незаданным переменным (set -u) + удобство: если задан только DATASET
+# (смотрим датасет) — берём его как вход; метки по умолчанию — labels.json внутри входа.
+INPUT="${INPUT:-}"; DATASET="${DATASET:-}"; PROBS_CSV="${PROBS_CSV:-}"; LABELS="${LABELS:-}"
+[[ -z "$INPUT" && -n "$DATASET" ]] && INPUT="$DATASET"
+[[ -z "$LABELS" && -n "$INPUT" ]] && LABELS="$INPUT/labels.json"
 
 [[ -z "$LABELS" ]] && LABELS="$REPO/.output/train/2_label_ui/labels.json"
 
