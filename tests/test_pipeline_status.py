@@ -72,15 +72,25 @@ def test_dir_state_by_date(tmp_path):
     for d in ("20260718", "20260719"):
         (root / d / "single" / "1_resident").mkdir(parents=True)
         (root / d / "single" / "1_resident" / "a.jpg").write_bytes(b"x")
-    (root / "dataset" / "p1").mkdir(parents=True)          # не-дата → игнор
+    (root / "dataset" / "p1").mkdir(parents=True)          # не-дата → показать как лишнее
     (root / "dataset" / "p1" / "z.jpg").write_bytes(b"x")
     assert ps._is_inference_images(root) is True
     out = ps.dir_state_by_date(root)
     assert "20260718: 1" in out
     assert "20260719: 1" in out
-    assert "ИТОГО: 2 (2 дат)" in out
-    assert "не-даты пропущены: 1" in out                   # dataset/ исключён
-    assert "dataset" not in out.replace("не-даты", "")     # сама папка не в списке
+    assert "ИТОГО: 2 (2 дат)" in out                       # итог — только по датам
+    assert "[!] dataset: 1 (не дата)" in out               # dataset/ виден отдельной строкой
+
+
+def test_dir_state_by_date_empty_nondate_hidden(tmp_path):
+    # пустая не-дата (без картинок) не засоряет — показываем только с данными
+    root = tmp_path / "v1" / "inference" / "images"
+    (root / "20260719").mkdir(parents=True)
+    (root / "20260719" / "a.jpg").write_bytes(b"x")
+    (root / "tmp_empty").mkdir()
+    out = ps.dir_state_by_date(root)
+    assert "tmp_empty" not in out
+    assert "ИТОГО: 1 (1 дат)" in out
 
 
 def test_dir_state_by_date_dispatch(tmp_path):

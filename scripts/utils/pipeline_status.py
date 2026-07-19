@@ -132,30 +132,31 @@ def _is_inference_images(directory: Path | None) -> bool:
 
 
 def dir_state_by_date(directory: Path | None) -> str:
-    """Разбивка *.jpg по папкам-датам YYYYMMDD/ + итог. Не-даты (dataset/ и т.п.) игнорируются —
-    для пайплайна важен только инференс. Полный список: видно накопление к след. обучению.
-    '—' если дат нет/каталог отсутствует."""
+    """Разбивка *.jpg по папкам-датам YYYYMMDD/ + чистый итог по датам. Полный список: видно
+    накопление к след. обучению. Не-даты (dataset/ и пр.) НЕ прячем, а показываем отдельной
+    строкой с пометкой [!] — чтобы сразу видеть лишнее/залётное. '—' если пусто."""
     if directory is None or not directory.is_dir():
         return "—"
     dated: list[tuple[str, int]] = []
-    skipped = 0
+    extra: list[tuple[str, int]] = []
     try:
         for d in sorted(directory.iterdir()):
             if not d.is_dir():
                 continue
+            n = sum(1 for _ in d.rglob("*.jpg"))
             if _DATE_RE.match(d.name):
-                dated.append((d.name, sum(1 for _ in d.rglob("*.jpg"))))
-            else:
-                skipped += 1
+                dated.append((d.name, n))
+            elif n > 0:                      # не-дата с картинками = лишнее → показать
+                extra.append((d.name, n))
     except OSError:
         return "—"
-    if not dated:
+    if not dated and not extra:
         return "—"
     total = sum(n for _, n in dated)
     lines = [f"{name}: {n}" for name, n in dated]
     lines.append(f"ИТОГО: {total} ({len(dated)} дат)")
-    if skipped:
-        lines.append(f"(не-даты пропущены: {skipped})")
+    for name, n in extra:
+        lines.append(f"[!] {name}: {n} (не дата)")
     return "\n".join(lines)
 
 
