@@ -9,11 +9,15 @@
   python scripts/train/label_ui.py --input .output/cameras/5_diff_yolo_boxes_low/run_XXX/crops
   python scripts/train/label_ui.py --port 8750
 
-Горячие клавиши в браузере:
-  1-5  — присвоить класс (1=resident, 2=courier, 3=delivery, 4=utilities, 5=other)
-  →    — следующий без разметки
-  ←    — предыдущий
-  U    — пропустить (unknown)
+MULTI-LABEL: один кроп может иметь НЕСКОЛЬКО классов (в кроп YOLO попадает несколько людей).
+Классы выбираются ТОГГЛАМИ (не радио). labels.json — формат v2 {img: [classes]}; старый
+формат v1 {img: "class"} читается как 1-элементный список. Пустой список = «размечено, ни одного».
+
+Горячие клавиши в браузере (режим разметки):
+  1-N     — переключить (вкл/выкл) класс N для текущего кропа
+  ←  →    — предыдущий / следующий кроп
+  Space   — следующий кроп (Enter — тоже)
+  U       — очистить классы (размечено «ни одного») и вперёд
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.access import IpAllowlist, is_ip_allowed, log_ip_denied, parse_allowed_ips
 from common.utils.classes import EXTRA_DATASET_DIRS, GROUP_CLASSES
+from common.utils import multilabel as _ml
 
 _DEFAULT_PORT = int(os.environ.get("LABEL_UI_PORT", "8750"))
 
@@ -45,16 +50,33 @@ _EXTRA_CLASSES = set(EXTRA_DATASET_DIRS)
 
 def _load_classes(dataset_dir: Path | None) -> tuple[list[str], Path]:
     """Читает классы из папок датасета (sorted, без skip/unknown/new).
-    Возвращает (classes, resolved_dataset_dir)."""
+    Возвращает (classes, resolved_dataset_dir).
+
+    v4 (multi-label): классы — из single/<class>/ ∪ GROUP_CLASSES (все группы доступны кнопками,
+    даже если кропов ещё нет). legacy: подпапки = классы (кроме single/multi/служебных)."""
     if dataset_dir is None:
         versions = sorted(DEFAULT_DATASET.glob("v*/dataset.json"))
-        if not versions:
-            print("[!] Датасет не найден. Укажите --dataset .data/groups/v1", file=sys.stderr)
-            sys.exit(1)
-        dataset_dir = versions[-1].parent
+        if versions:
+            dataset_dir = versions[-1].parent
+        else:                                    # fallback: последняя vN/ (в т.ч. v4 без dataset.json)
+            vdirs = [d for d in sorted(DEFAULT_DATASET.glob("v*")) if d.is_dir()]
+            if not vdirs:
+                print("[!] Датасет не найден. Укажите --dataset .data/groups/v4/dataset", file=sys.stderr)
+                sys.exit(1)
+            dataset_dir = vdirs[-1]
+
+    # v4: single/<class>/ + multi/ → классы модели фиксированы (GROUP_CLASSES) + любые доп. из single/
+    single_root = dataset_dir / "single"
+    if single_root.is_dir() or (dataset_dir / "multi").is_dir():
+        extra = sorted(
+            d.name for d in (single_root.iterdir() if single_root.is_dir() else [])
+            if d.is_dir() and d.name not in _EXTRA_CLASSES and d.name not in GROUP_CLASSES
+        )
+        return list(GROUP_CLASSES) + extra, dataset_dir
+
     classes = sorted(
         d.name for d in dataset_dir.iterdir()
-        if d.is_dir() and d.name not in _EXTRA_CLASSES
+        if d.is_dir() and d.name not in _EXTRA_CLASSES and d.name not in ("single", "multi")
     )
     if not classes:
         classes = list(GROUP_CLASSES)
@@ -160,17 +182,30 @@ async function loadState() {
   render();
 }
 
-async function setLabel(cls) {
-  if (idx >= crops.length) return;
+function curClasses() { return (labels[crops[idx]] || []).slice(); }
+
+async function saveClasses(list) {
+  // multi-label: сохраняем НАБОР классов для текущего кропа (не переходим дальше)
   const r = await fetch('/api/label', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({file: crops[idx], label: cls})
+    body: JSON.stringify({file: crops[idx], classes: list})
   });
-  const d = await r.json();
-  labels = d.labels;
-  idx = Math.min(idx + 1, crops.length - 1);
+  labels = (await r.json()).labels;
   render();
+}
+
+function toggleClass(cls) {
+  if (idx >= crops.length) return;
+  const cur = new Set(curClasses());
+  cur.has(cls) ? cur.delete(cls) : cur.add(cls);
+  saveClasses([...cur].sort());
+}
+
+async function skipNext() {
+  // очистить классы («размечено ни одного») и вперёд
+  await saveClasses([]);
+  navigate(1);
 }
 
 async function navigate(delta) {
@@ -184,15 +219,17 @@ function render() {
     return;
   }
   const f = crops[idx];
-  const lbl = labels[f] || '';
+  const cur = new Set(labels[f] || []);
+  const lblText = cur.size ? [...cur].sort().join(' + ') : '—';
   const labeled = Object.keys(labels).length;
 
   const classButtons = classes.map((cls, i) => {
     const key = String(i + 1);
     const color = CLASS_COLORS[i] || '#888888';
-    const active = lbl === cls;
-    return `<button class="btn-class${active?' active':''}" onclick="setLabel('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">[${key}] ${cls}</button>`;
+    const active = cur.has(cls);
+    return `<button class="btn-class${active?' active':''}" onclick="toggleClass('${cls}')"
+      style="${active?'border-left-color:'+color+';color:'+color:''}">
+      <span style="opacity:.6">[${key}]</span> ${active?'☑':'☐'} ${cls}</button>`;
   }).join('');
 
   const shortcuts = classes.map((cls, i) => `${i+1}=${cls}`).join('<br>');
@@ -205,16 +242,16 @@ function render() {
           <span class="labeled-count">Размечено: ${labeled}</span>
         </div>
         <div class="fname">${f}</div>
-        <div class="current-label">Класс: <span>${lbl || '—'}</span></div>
+        <div class="current-label">Классы: <span>${lblText}</span></div>
         ${probBars(f)}
         <div class="buttons">${classButtons}</div>
         <div class="nav-row">
           <button class="btn-nav" onclick="navigate(-1)">← Назад</button>
-          <button class="btn-nav" onclick="navigate(1)">Вперёд →</button>
+          <button class="btn-nav" onclick="navigate(1)">Готово / Вперёд →</button>
         </div>
-        <button class="btn-skip" onclick="setLabel('skip')">Пропустить (U)</button>
+        <button class="btn-skip" onclick="skipNext()">Очистить + вперёд (U)</button>
         <div class="shortcuts">
-          ${shortcuts}<br>← → = навигация<br>U = пропустить
+          ${shortcuts} (тоггл)<br>← → = навигация · Space/Enter = вперёд<br>U = очистить + вперёд
         </div>
       </div>
       <div class="drag-handle" id="drag-handle"></div>
@@ -246,10 +283,11 @@ function probBars(filename) {
 
 document.addEventListener('keydown', e => {
   const n = parseInt(e.key);
-  if (!isNaN(n) && n >= 1 && n <= classes.length) { setLabel(classes[n-1]); return; }
+  if (!isNaN(n) && n >= 1 && n <= classes.length) { toggleClass(classes[n-1]); return; }
   if (e.key === 'ArrowRight') navigate(1);
   if (e.key === 'ArrowLeft')  navigate(-1);
-  if (e.key === 'u' || e.key === 'U') setLabel('skip');
+  if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); navigate(1); }
+  if (e.key === 'u' || e.key === 'U') skipNext();
 });
 
 loadState();
@@ -395,38 +433,57 @@ function probBars(filename) {
   return `<div style="border-top:1px solid #2a2a4a;padding-top:6px;margin-top:4px">${rows}</div>`;
 }
 
+function comboKey(arr) { return (arr && arr.length) ? [...arr].sort().join(' + ') : '—'; }
+function comboColor(key) {
+  const ci = classes.indexOf(key);
+  if (ci >= 0) return CLASS_COLORS[ci];        // одиночный класс
+  if (key === '—') return '#444';              // без метки
+  return '#c56cd6';                            // мульти-комбинация
+}
+function sortCombos(keys) {
+  // порядок: одиночные классы (по индексу) → мульти-комбо (алфавит) → «—»
+  const rank = k => k === '—' ? 3 : (classes.indexOf(k) >= 0 ? 0 : 1);
+  return keys.sort((a, b) => {
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (ra === 0) return classes.indexOf(a) - classes.indexOf(b);
+    return a.localeCompare(b);
+  });
+}
+
 function render() {
   const labeled = Object.keys(labels).length;
   document.getElementById('stats').textContent =
     `${crops.length} кропов · размечено ${labeled}`;
 
+  // Батч: добавить класс всем выбранным (+ очистить). Мульти-лейбл — добавление, не замена.
   document.getElementById('bulk-btns').innerHTML =
+    '<span style="color:#666;font-size:11px;align-self:center">+класс:</span>' +
     classes.map((cls, i) => {
       const color = CLASS_COLORS[i] || '#888';
-      return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}')"
-        style="border-left-color:${color}">${cls}</button>`;
+      return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','add')"
+        style="border-left-color:${color}">+ ${cls}</button>`;
     }).join('') +
-    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk('skip')">Пропустить</button>`;
+    classes.map((cls, i) => {
+      const color = CLASS_COLORS[i] || '#888';
+      return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','remove')"
+        style="border-left-color:${color};opacity:.7">− ${cls}</button>`;
+    }).join('') +
+    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'clear')">Очистить</button>`;
 
+  // Группируем по КОМБИНАЦИИ классов (мульти-кроп — в своей группе-комбо)
   const groups = {};
-  const ORDER = [...classes, 'skip', 'unknown'];
-  ORDER.forEach(c => groups[c] = []);
-  groups['—'] = [];
-
   crops.forEach((f, i) => {
-    const lbl = labels[f] || '—';
-    const key = ORDER.includes(lbl) ? lbl : '—';
-    groups[key].push(i);
+    const key = comboKey(labels[f]);
+    (groups[key] = groups[key] || []).push(i);
   });
-
-  const sections = [...ORDER, '—'].filter(k => groups[k] && groups[k].length);
+  const sections = sortCombos(Object.keys(groups));
 
   flatOrder = [];
   sections.forEach(cls => groups[cls].forEach(i => flatOrder.push(i)));
 
   document.getElementById('gallery').innerHTML = sections.map(cls => {
-    const cidx = classes.indexOf(cls);
-    const color = cidx >= 0 ? CLASS_COLORS[cidx] : (cls === '—' ? '#444' : '#888');
+    const color = comboColor(cls);
     const tiles = groups[cls].map(i => {
       const f = crops[i];
       const name = f.split('/').pop();
@@ -507,13 +564,13 @@ function updateBulkBar() {
   requestAnimationFrame(_syncGalleryPadding);
 }
 
-async function applyBulk(cls) {
+async function applyBulk(cls, action) {
   if (!selected.size) return;
   const files = [...selected].map(i => crops[i]);
   await fetch('/api/label/bulk', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({files, label: cls})
+    body: JSON.stringify({files, class: cls, action: action || 'add'})
   });
   const d = await (await fetch('/api/state')).json();
   labels = d.labels;
@@ -525,36 +582,47 @@ async function applyBulk(cls) {
 function openModal(i) {
   modalIdx = i;
   modalFile = crops[i];
-  const lbl = labels[modalFile] || '';
+  const cur = new Set(labels[modalFile] || []);
   document.getElementById('modal-img').src = '/image/' + encodeURIComponent(modalFile);
-  document.getElementById('modal-fname').textContent = modalFile.split('/').pop();
+  const lblText = cur.size ? [...cur].sort().join(' + ') : '—';
+  document.getElementById('modal-fname').textContent =
+    modalFile.split('/').pop() + '  ·  [' + lblText + ']';
   document.getElementById('modal-probs').innerHTML = probBars(modalFile);
   const btns = classes.map((cls, ci) => {
     const color = CLASS_COLORS[ci] || '#888';
-    const active = lbl === cls;
+    const active = cur.has(cls);
     return `<button class="btn-class${active?' active':''}" onclick="relabel('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">${cls}</button>`;
+      style="${active?'border-left-color:'+color+';color:'+color:''}">${active?'☑':'☐'} ${cls}</button>`;
   }).join('');
   document.getElementById('modal-btns').innerHTML =
     btns +
-    `<button class="btn-skip" onclick="relabel('skip')">Пропустить</button>` +
+    `<button class="btn-skip" onclick="relabelClear()">Очистить</button>` +
     `<button class="btn-go" onclick="goLabel()">→ Разметка</button>` +
     `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
   document.getElementById('modal').classList.add('open');
 }
 
-async function relabel(cls) {
+async function _saveModal(list) {
   await fetch('/api/label', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({file: modalFile, label: cls})
+    body: JSON.stringify({file: modalFile, classes: list})
   });
   const d = await (await fetch('/api/state')).json();
   labels = d.labels;
   lastToggleIdx = -1;
-  openModal(modalIdx);
+  openModal(modalIdx);   // перерисовать модалку с новым набором
   render();
 }
+
+function relabel(cls) {
+  // тоггл класса (мульти-лейбл), модалка остаётся открытой
+  const cur = new Set(labels[modalFile] || []);
+  cur.has(cls) ? cur.delete(cls) : cur.add(cls);
+  _saveModal([...cur].sort());
+}
+
+function relabelClear() { _saveModal([]); }
 
 function goLabel() {
   location.href = '/?idx=' + modalIdx;
@@ -673,25 +741,47 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
 <script>
 const CLASS_COLORS = ["#27ae60","#e67e22","#9b59b6","#95a5a6","#3498db",
                       "#e74c3c","#1abc9c","#f39c12","#8e44ad"];
-let groups = {}, classes = [];
+let files = [], classes = [], layout = 'v4';
 let probs = {};
-let modalFile = '', modalCls = '';
+let modalPath = '';         // абсолютный путь файла в модалке
 const ZOOM_STEPS = [60, 90, 120, 180, 240, 360];
 let zoomIdx = 2;
-let selected = new Set();  // indices into allFiles
-let allFiles = [];          // [{f, cls}, ...] flat list built each render
-let lastToggleFile = null;  // anchor tracked by file path (allFiles indices shift on render)
+let selected = new Set();   // индексы в allFiles (плоский список в порядке рендера)
+let allFiles = [];          // [{path, classes, key}] — строится каждый render()
+let lastTogglePath = null;  // якорь диапазонного выбора (по пути; индексы сдвигаются)
 
 function zoom(d) {
   zoomIdx = Math.max(0, Math.min(ZOOM_STEPS.length - 1, zoomIdx + d));
   document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
 }
 
+function fileClasses(path) {
+  const rec = files.find(x => x.path === path);
+  return rec ? (rec.classes || []) : [];
+}
+
 async function loadState() {
   const d = await (await fetch('/api/dataset')).json();
-  groups = d.groups; classes = d.classes;
+  files = d.files || []; classes = d.classes || []; layout = d.layout || 'v4';
   probs = d.probs || {};
   render();
+}
+
+function comboKey(arr) { return (arr && arr.length) ? [...arr].sort().join(' + ') : '—'; }
+function comboColor(key) {
+  const ci = classes.indexOf(key);
+  if (ci >= 0) return CLASS_COLORS[ci];
+  if (key === '—') return '#444';
+  return '#c56cd6';                            // мульти-комбинация
+}
+function sortCombos(keys) {
+  const rank = k => k === '—' ? 3 : (classes.indexOf(k) >= 0 ? 0 : 1);
+  return keys.sort((a, b) => {
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (ra === 0) return classes.indexOf(a) - classes.indexOf(b);
+    return a.localeCompare(b);
+  });
 }
 
 function probBars(filename) {
@@ -714,38 +804,52 @@ function probBars(filename) {
 }
 
 function render() {
-  const total = Object.values(groups).reduce((s, a) => s + a.length, 0);
-  document.getElementById('stats').textContent = `${total} файлов`;
+  document.getElementById('stats').textContent =
+    `${files.length} файлов · ${layout === 'v4' ? 'multi-label' : 'single-label'}`;
 
-  document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) => {
-    const color = CLASS_COLORS[i] || '#888';
-    return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}')"
-      style="border-left-color:${color}">${cls}</button>`;
-  }).join('');
+  // Батч: v4 — добавить/убрать класс; legacy — переместить в класс
+  if (layout === 'v4') {
+    document.getElementById('bulk-btns').innerHTML =
+      '<span style="color:#666;font-size:11px;align-self:center">+класс:</span>' +
+      classes.map((cls, i) => `<button class="btn-bulk btn-bulk-cls"
+        onclick="applyBulk('${cls}','add')" style="border-left-color:${CLASS_COLORS[i]||'#888'}">+ ${cls}</button>`).join('') +
+      classes.map((cls, i) => `<button class="btn-bulk btn-bulk-cls"
+        onclick="applyBulk('${cls}','remove')" style="border-left-color:${CLASS_COLORS[i]||'#888'};opacity:.7">− ${cls}</button>`).join('') +
+      `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить</button>`;
+  } else {
+    document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) =>
+      `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','move')"
+        style="border-left-color:${CLASS_COLORS[i]||'#888'}">${cls}</button>`).join('');
+  }
 
-  // rebuild flat list for range selection
+  // Группируем по КОМБИНАЦИИ классов
+  const groups = {};
+  files.forEach(rec => {
+    const key = comboKey(rec.classes);
+    (groups[key] = groups[key] || []).push(rec);
+  });
+  const sections = sortCombos(Object.keys(groups));
+
   allFiles = [];
-  const orderedCls = classes.filter(cls => groups[cls] && groups[cls].length);
-  orderedCls.forEach(cls => groups[cls].forEach(f => allFiles.push({f, cls})));
+  sections.forEach(key => groups[key].forEach(rec => allFiles.push({...rec, key})));
 
   let fi = 0;
-  document.getElementById('gallery').innerHTML = orderedCls.map(cls => {
-    const cidx = classes.indexOf(cls);
-    const color = CLASS_COLORS[cidx] || '#888';
-    const tiles = groups[cls].map(f => {
+  document.getElementById('gallery').innerHTML = sections.map(key => {
+    const color = comboColor(key);
+    const tiles = groups[key].map(rec => {
       const i = fi++;
       const sel = selected.has(i);
-      const name = f.split('/').pop();
+      const name = rec.path.split('/').pop();
       return `<div class="tile${sel ? ' selected' : ''}" data-fidx="${i}"
-        onclick="tileClick(${i},'${f}','${cls}',event)" title="${name}">
+        onclick="tileClick(${i},event)" title="${name}">
         <div class="tile-check" onclick="toggleSelect(${i},event)">${sel ? '✓' : ''}</div>
-        <img src="/image/${encodeURIComponent(f)}" loading="lazy">
+        <img src="/image/${encodeURIComponent(rec.path)}" loading="lazy">
         <div class="tile-label">${name}</div>
       </div>`;
     }).join('');
     return `<div class="section">
       <div class="section-title" style="background:${color}22;color:${color}">
-        ${cls} &nbsp;(${groups[cls].length})
+        ${key === '—' ? 'без метки' : key} &nbsp;(${groups[key].length})
       </div>
       <div class="grid">${tiles}</div>
     </div>`;
@@ -754,25 +858,25 @@ function render() {
   updateBulkBar();
 }
 
-function tileClick(i, f, cls, e) {
+function tileClick(i, e) {
   if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(i, e);
-  else openModal(f, cls);
+  else openModal(allFiles[i].path);
 }
 
 function toggleSelect(idx, e) {
   e.stopPropagation();
-  if (e.shiftKey && lastToggleFile !== null) {
-    const anchorPos = allFiles.findIndex(x => x.f === lastToggleFile);
+  if (e.shiftKey && lastTogglePath !== null) {
+    const anchorPos = allFiles.findIndex(x => x.path === lastTogglePath);
     if (anchorPos >= 0) {
       const lo = Math.min(anchorPos, idx), hi = Math.max(anchorPos, idx);
       for (let j = lo; j <= hi; j++) selected.add(j);
     } else {
       selected.add(idx);
-      lastToggleFile = allFiles[idx].f;
+      lastTogglePath = allFiles[idx].path;
     }
   } else {
     if (selected.has(idx)) selected.delete(idx);
-    else { selected.add(idx); lastToggleFile = allFiles[idx].f; }
+    else { selected.add(idx); lastTogglePath = allFiles[idx].path; }
   }
   updateSelectionDOM();
   updateBulkBar();
@@ -811,65 +915,88 @@ function updateBulkBar() {
   requestAnimationFrame(_syncGalleryPadding);
 }
 
-async function applyBulk(toCls) {
+async function applyBulk(cls, action) {
   if (!selected.size) return;
-  const files = [...selected].map(i => allFiles[i].f);
-  await fetch('/api/dataset/move/bulk', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({files, to_class: toCls})
-  });
-  const d = await (await fetch('/api/dataset')).json();
-  groups = d.groups; classes = d.classes;
+  const sel = [...selected].map(i => allFiles[i].path);
+  if (layout === 'v4') {
+    await fetch('/api/dataset/label/bulk', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({files: sel, class: cls, action: action || 'add'})
+    });
+  } else {
+    await fetch('/api/dataset/move/bulk', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({files: sel, to_class: cls})
+    });
+  }
   selected.clear();
-  lastToggleFile = null;
-  render();
+  lastTogglePath = null;
+  await loadState();
 }
 
-function openModal(f, cls) {
-  modalFile = f; modalCls = cls;
-  document.getElementById('modal-img').src = '/image/' + encodeURIComponent(f);
-  document.getElementById('modal-cls').textContent = cls;
-  document.getElementById('modal-fname').textContent = f.split('/').pop();
-  document.getElementById('modal-probs').innerHTML = probBars(f);
+function openModal(path) {
+  modalPath = path;
+  const cur = new Set(fileClasses(path));
+  document.getElementById('modal-img').src = '/image/' + encodeURIComponent(path);
+  document.getElementById('modal-cls').textContent =
+    cur.size ? [...cur].sort().join(' + ') : '—';
+  document.getElementById('modal-fname').textContent = path.split('/').pop();
+  document.getElementById('modal-probs').innerHTML = probBars(path);
   buildModalBtns();
   document.getElementById('modal').classList.add('open');
 }
 
 function buildModalBtns() {
+  const cur = new Set(fileClasses(modalPath));
   const btns = classes.map((cls, i) => {
     const color = CLASS_COLORS[i] || '#888';
-    const active = cls === modalCls;
-    return `<button class="btn-class${active?' active':''}" onclick="moveTo('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">${cls}</button>`;
+    const active = cur.has(cls);
+    const mark = layout === 'v4' ? (active ? '☑ ' : '☐ ') : '';
+    return `<button class="btn-class${active?' active':''}" onclick="setCls('${cls}')"
+      style="${active?'border-left-color:'+color+';color:'+color:''}">${mark}${cls}</button>`;
   }).join('');
+  const extra = layout === 'v4'
+    ? `<button class="btn-skip" onclick="clearCls()">Очистить</button>`
+    : '';
   document.getElementById('modal-btns').innerHTML =
-    btns +
-    `<button class="btn-skip" onclick="moveTo('skip')">Пропустить</button>` +
-    `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
+    btns + extra + `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
 }
 
-async function moveTo(toCls) {
-  if (toCls === modalCls) { closeModal(); return; }
+async function setCls(cls) {
+  if (layout === 'v4') {
+    // тоггл класса → изменить набор + переложить (single/multi/skip)
+    const cur = new Set(fileClasses(modalPath));
+    cur.has(cls) ? cur.delete(cls) : cur.add(cls);
+    await _apiSetLabel(modalPath, [...cur].sort());
+  } else {
+    // legacy: одиночный класс → переместить
+    document.getElementById('modal-btns').classList.add('moving');
+    const r = await fetch('/api/dataset/move', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({file: modalPath, to_class: cls})
+    });
+    const d = await r.json();
+    document.getElementById('modal-btns').classList.remove('moving');
+    if (d.ok) { modalPath = d.new_path; await loadState(); openModal(modalPath); }
+  }
+}
+
+async function clearCls() { await _apiSetLabel(modalPath, []); }
+
+async function _apiSetLabel(path, list) {
   document.getElementById('modal-btns').classList.add('moving');
-  const r = await fetch('/api/dataset/move', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({file: modalFile, to_class: toCls})
+  const r = await fetch('/api/dataset/label', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({file: path, classes: list})
   });
   const d = await r.json();
-  if (d.ok) {
-    groups[modalCls] = groups[modalCls].filter(f => f !== modalFile);
-    if (!groups[toCls]) groups[toCls] = [];
-    groups[toCls].push(d.new_path);
-    modalFile = d.new_path;
-    modalCls = toCls;
-    lastToggleFile = null;
-    render();
-    buildModalBtns();
-    document.getElementById('modal-cls').textContent = toCls;
-  }
   document.getElementById('modal-btns').classList.remove('moving');
+  if (d.ok) {
+    modalPath = d.new_path;
+    lastTogglePath = null;
+    await loadState();
+    openModal(modalPath);      // перерисовать модалку с новым набором/путём
+  }
 }
 
 function closeModal() {
@@ -915,6 +1042,88 @@ def _load_probs(csv_path: Path, classes: list[str]) -> dict[str, dict[str, float
     return result
 
 
+def _dataset_layout(dataset_dir: Path) -> str:
+    """'v4' если есть labels.json / single/ / multi/ (multi-label), иначе 'legacy' (подпапки=классы)."""
+    if ((dataset_dir / "labels.json").is_file() or (dataset_dir / "single").is_dir()
+            or (dataset_dir / "multi").is_dir()):
+        return "v4"
+    return "legacy"
+
+
+def _dataset_files(dataset_dir: Path, image_exts: set[str]) -> tuple[list[dict], str]:
+    """Файлы датасета с классами. Возвращает ([{path, rel, classes}], layout).
+
+    v4:     single/<class>/ + multi/; истина классов — labels.json (fallback — из каталога).
+    legacy: подпапки = классы (single-label); classes = [dirname].
+    """
+    layout = _dataset_layout(dataset_dir)
+    out: list[dict] = []
+    if layout == "v4":
+        labels = _ml.load_labels(dataset_dir / "labels.json")   # {rel: [classes]}
+        single_root = dataset_dir / "single"
+        if single_root.is_dir():
+            for cls_dir in sorted(single_root.iterdir()):
+                if not cls_dir.is_dir():
+                    continue
+                for f in sorted(cls_dir.iterdir()):
+                    if f.is_file() and f.suffix.lower() in image_exts:
+                        rel = f.relative_to(dataset_dir).as_posix()
+                        out.append({"path": f.resolve().as_posix(), "rel": rel,
+                                    "classes": labels.get(rel) or [cls_dir.name]})
+        multi_root = dataset_dir / "multi"
+        if multi_root.is_dir():
+            for f in sorted(multi_root.iterdir()):
+                if f.is_file() and f.suffix.lower() in image_exts:
+                    rel = f.relative_to(dataset_dir).as_posix()
+                    out.append({"path": f.resolve().as_posix(), "rel": rel,
+                                "classes": labels.get(rel) or []})
+    else:
+        for subdir in sorted(dataset_dir.iterdir()):
+            if not subdir.is_dir() or subdir.name in ("single", "multi"):
+                continue
+            for f in sorted(subdir.iterdir()):
+                if f.is_file() and f.suffix.lower() in image_exts:
+                    out.append({"path": f.resolve().as_posix(),
+                                "rel": f"{subdir.name}/{f.name}", "classes": [subdir.name]})
+    return out, layout
+
+
+def _v4_target_dir(dataset_dir: Path, classes: list[str]) -> Path:
+    """Каталог размещения по числу классов: 1→single/<class>/, ≥2→multi/, 0→skip/."""
+    if len(classes) == 1:
+        return dataset_dir / "single" / classes[0]
+    if len(classes) >= 2:
+        return dataset_dir / "multi"
+    return dataset_dir / "skip"
+
+
+def _v4_current_rel(dataset_dir: Path, src: Path) -> str:
+    try:
+        return src.resolve().relative_to(dataset_dir.resolve()).as_posix()
+    except ValueError:
+        return src.name
+
+
+def _v4_relocate(dataset_dir: Path, src: Path, new_classes: list[str],
+                 labels_map: dict) -> Path:
+    """Переносит файл в каталог по new_classes и правит labels_map (без записи на диск).
+    Возвращает новый путь. Пустой набор → skip/ и ключ удаляется из labels.json."""
+    import shutil as _sh
+    old_rel = _v4_current_rel(dataset_dir, src)
+    dst_dir = _v4_target_dir(dataset_dir, new_classes)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    if src.resolve() != dst.resolve() and src.exists() and not dst.exists():
+        _sh.move(str(src), str(dst))
+    new_rel = _v4_current_rel(dataset_dir, dst)
+    labels_map.pop(old_rel, None)
+    if new_classes:
+        labels_map[new_rel] = new_classes
+    else:
+        labels_map.pop(new_rel, None)
+    return dst
+
+
 def run_server(input_dir: Path, port: int, labels_path: Path,
                unlabeled_only: bool = False,
                classes: list[str] | None = None,
@@ -949,15 +1158,13 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         if f.is_file() and f.suffix.lower() in _exts:
             crops.append(f.resolve().as_posix())
 
-    # Загружаем существующую разметку
-    labels: dict[str, str] = {}
-    if labels_path.is_file():
-        existing = json.loads(labels_path.read_text(encoding="utf-8"))
-        labels = existing.get("labels", existing)  # плоский или вложенный формат
+    # Загружаем существующую разметку (multi-label {img: [classes]}; старый v1 {img:'class'}
+    # читается как 1-элементный список — ПОДХВАТ старой разметки, шаг B1).
+    labels: dict[str, list] = _ml.load_labels(labels_path)
 
     # Нормализуем ключи labels к абсолютным путям кропов.
-    # labels.json может хранить: абсолютный путь, basename, или basename с префиксом scene0042_.
-    # Сопоставляем с реальными файлами в crops по stripped-basename.
+    # labels.json может хранить: абсолютный путь, basename, или basename с префиксом scene0042_,
+    # либо путь относительно images/<date>/ (v4). Сопоставляем по stripped-basename.
     _re_scene = re.compile(r"^scene\d+_")
     _stripped_to_crop = {_re_scene.sub("", Path(c).name): c for c in crops}
     for k, v in list(labels.items()):
@@ -969,7 +1176,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
     _classes = classes or []
     _valid_set = set(_classes)
     if unlabeled_only:
-        crops = [c for c in crops if c not in labels or labels[c] not in _valid_set]
+        # неразмеченный = ключа нет вовсе (пустой список [] = уже отсмотрено «ни одного»)
+        crops = [c for c in crops if c not in labels]
 
     current = 0
 
@@ -992,29 +1200,67 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         return jsonify({"crops": crops, "labels": labels, "current_idx": current,
                         "classes": _classes, "probs": _probs})
 
+    def _dataset_labels_path() -> Path:
+        return dataset_dir / "labels.json"
+
     @app.route("/api/dataset")
     def api_dataset():
         if dataset_dir is None or not dataset_dir.exists():
             return jsonify({"error": "no dataset"}), 404
-        grps: dict[str, list[str]] = {}
-        for subdir in sorted(dataset_dir.iterdir()):
-            if not subdir.is_dir():
-                continue
-            files = sorted(
-                f.resolve().as_posix()
-                for f in subdir.iterdir()
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTS
-            )
-            if files:
-                grps[subdir.name] = files
-        return jsonify({"groups": grps, "classes": _classes, "probs": _probs})
+        files, layout = _dataset_files(dataset_dir, _exts)
+        return jsonify({"files": files, "classes": _classes, "probs": _probs,
+                        "layout": layout})
 
+    # ── v4 (multi-label): изменить набор классов файла + переложить в single/multi/skip ──
+    @app.route("/api/dataset/label", methods=["POST"])
+    def api_dataset_label():
+        if dataset_dir is None:
+            return jsonify({"error": "no dataset"}), 404
+        data = request.get_json()
+        src = Path(data["file"]) if Path(data["file"]).is_absolute() else REPO_ROOT / data["file"]
+        new_classes = sorted(set(_ml.normalize_label(data.get("classes"))))
+        dmap = _ml.load_labels(_dataset_labels_path())
+        dst = _v4_relocate(dataset_dir, src, new_classes, dmap)
+        _ml.save_labels(_dataset_labels_path(), dmap, task="classify")
+        return jsonify({"ok": True, "new_path": dst.resolve().as_posix(),
+                        "classes": new_classes})
+
+    @app.route("/api/dataset/label/bulk", methods=["POST"])
+    def api_dataset_label_bulk():
+        if dataset_dir is None:
+            return jsonify({"error": "no dataset"}), 404
+        data = request.get_json()
+        files = data.get("files", [])
+        action = data.get("action", "add")     # add | remove | clear
+        cls = data.get("class")
+        dmap = _ml.load_labels(_dataset_labels_path())
+        n = 0
+        for fpath in files:
+            src = Path(fpath) if Path(fpath).is_absolute() else REPO_ROOT / fpath
+            rel = _v4_current_rel(dataset_dir, src)
+            cur = set(_ml.normalize_label(dmap.get(rel)))
+            if not cur:                          # ключа нет — выведем классы из каталога
+                parts = Path(rel).parts
+                if len(parts) >= 2 and parts[0] == "single":
+                    cur = {parts[1]}
+            if action == "clear":
+                cur = set()
+            elif action == "remove" and cls:
+                cur.discard(cls)
+            elif cls:
+                cur.add(cls)
+            _v4_relocate(dataset_dir, src, sorted(cur), dmap)
+            n += 1
+        _ml.save_labels(_dataset_labels_path(), dmap, task="classify")
+        return jsonify({"ok": True, "moved": n})
+
+    # ── legacy (single-label): переместить файл в каталог-класс ──
     @app.route("/api/dataset/move", methods=["POST"])
     def api_dataset_move():
         if dataset_dir is None:
             return jsonify({"error": "no dataset"}), 404
         data = request.get_json()
-        src = REPO_ROOT / data["file"]
+        src = Path(data["file"]) if Path(data["file"]).is_absolute() else REPO_ROOT / data["file"]
         to_cls = data["to_class"]
         dst_dir = dataset_dir / to_cls
         dst_dir.mkdir(exist_ok=True)
@@ -1048,22 +1294,36 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
     def label():
         nonlocal current
         data = request.get_json()
-        fname, cls = data["file"], data["label"]
-        if cls is not None:
-            labels[fname] = cls
+        fname = data["file"]
+        # multi-label: принимаем список classes; back-compat — одиночный label (строка)
+        if "classes" in data:
+            labels[fname] = _ml.normalize_label(data.get("classes"))
+        else:
+            lbl = data.get("label")
+            labels[fname] = [] if (not lbl or lbl in _EXTRA_CLASSES) else [lbl]
         _save_labels(labels_path, labels)
         return jsonify({"labels": labels})
 
     @app.route("/api/label/bulk", methods=["POST"])
     def label_bulk():
+        """Батч над выбранными кропами. action: add (доб. класс) | remove | clear (очистить)."""
         data = request.get_json()
         files = data.get("files", [])
-        cls = data.get("label")
-        if cls and files:
+        action = data.get("action", "add")
+        cls = data.get("class") or data.get("label")
+        if files:
             crop_set = set(crops)
             for f in files:
-                if f in crop_set:
-                    labels[f] = cls
+                if f not in crop_set:
+                    continue
+                cur = set(_ml.normalize_label(labels.get(f, [])))
+                if action == "clear":
+                    cur = set()
+                elif action == "remove" and cls:
+                    cur.discard(cls)
+                elif cls:                       # add
+                    cur.add(cls)
+                labels[f] = sorted(cur)
             _save_labels(labels_path, labels)
         return jsonify({"labels": labels, "updated": len(files)})
 
@@ -1095,11 +1355,9 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
 
 
 def _save_labels(path: Path, labels: dict) -> None:
+    """Сохраняет multi-label разметку в labels.json v2 ({img: [classes]}, шаг B3)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps({"version": 1, "labels": labels}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _ml.save_labels(path, labels, task="classify")
 
 
 def main() -> int:
