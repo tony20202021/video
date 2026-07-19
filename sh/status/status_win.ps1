@@ -181,6 +181,7 @@ if (-not (Test-Path $logFile)) {
 $logDate = if (Test-Path $logFile) { (Get-Item $logFile).LastWriteTime.ToString("yyyy-MM-dd") } else { Get-Date -Format "yyyy-MM-dd" }
 
 $lastLogLine = "--"; $lastEventTime = "--"; $motionIdleLine = "--"; $count10m = 0
+$motionRuns10m = 1; $motionRuns60m = 1
 
 Write-Host ""
 Write-Host "  Log motion_diff (last 5 lines):"
@@ -204,25 +205,35 @@ if (Test-Path $logFile) {
         $motionIdleLine = Shorten-WinLog (@($hbLines)[-1])
     }
 
-    # Количество событий (diff-кадры): 10м + 60м fallback
+    # Diff-кадры (файлы) И число прогонов (стартов «Порог:») за 10м/60м.
+    # Рестарт motion_diff / переход через полночь → строки прогона попадают в РАЗНЫЕ
+    # date-каталоги → читаем 2 свежих каталога, у каждой строки своя дата (имя каталога).
     $cutoff   = (Get-Date).AddMinutes(-10)
     $cutoff60 = (Get-Date).AddMinutes(-60)
-    $todayStr = $logDate
     $times10m = [System.Collections.Generic.List[double]]::new()
     $count60m = 0; $times60m = [System.Collections.Generic.List[double]]::new()
-    foreach ($ln in $allLogLines) {
-        # Одна комбинированная regex — $Matches[1]=время, diff= в строке
-        if ($ln -match "^(\d{2}:\d{2}:\d{2})\s+INFO.+diff=") {
+    $runs10m  = 0; $runs60m  = 0
+    $metaRoot2  = Join-Path $motionDir "meta"
+    $recentDirs = if (Test-Path $metaRoot2) { Get-ChildItem $metaRoot2 -Directory | Sort-Object Name -Descending | Select-Object -First 2 } else { @() }
+    foreach ($d in $recentDirs) {
+        $rf = Join-Path $d.FullName "run.log"
+        if (-not (Test-Path $rf)) { continue }
+        try { $dIso = [datetime]::ParseExact($d.Name, "yyyyMMdd", $null).ToString("yyyy-MM-dd") } catch { continue }
+        foreach ($ln in (Get-Content $rf -Encoding UTF8)) {
+            if ($ln -notmatch "^(\d{2}:\d{2}:\d{2})\s+INFO") { continue }
             $ts2 = $Matches[1]
-            try {
-                $lt  = [DateTime]::ParseExact("$todayStr $ts2", "yyyy-MM-dd HH:mm:ss", $null)
-                $t_v = $null
-                if ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с') { $t_v = [double]($Matches[1] -replace ',', '.') }
-                if ($lt -ge $cutoff)   { $count10m++; if ($t_v -ne $null) { $times10m.Add($t_v) } }
-                if ($lt -ge $cutoff60) { $count60m++; if ($t_v -ne $null) { $times60m.Add($t_v) } }
-            } catch {}
+            try { $lt = [DateTime]::ParseExact("$dIso $ts2", "yyyy-MM-dd HH:mm:ss", $null) } catch { continue }
+            $isStart = ($ln -match "Порог:")          # старт прогона motion_diff
+            $isDiff  = ($ln -match "diff=")           # сохранённый diff-кадр
+            $t_v = $null
+            if ($isDiff -and ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с')) { $t_v = [double]($Matches[1] -replace ',', '.') }
+            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++; if ($t_v -ne $null) { $times10m.Add($t_v) } }; if ($isStart) { $runs10m++ } }
+            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++; if ($t_v -ne $null) { $times60m.Add($t_v) } }; if ($isStart) { $runs60m++ } }
         }
     }
+    # нет стартов в окне, но есть активность → 1 непрерывный прогон; иначе N рестартов
+    $motionRuns10m = if ($runs10m -gt 0) { $runs10m } else { 1 }
+    $motionRuns60m = if ($runs60m -gt 0) { $runs60m } else { 1 }
 } else {
     Write-Host "    (log not found: $logFile)"
 }
@@ -361,14 +372,15 @@ if (Test-Path $sendCpuCsv) {
 $winHost    = $env:COMPUTERNAME.ToLower()
 
 # stats для 1_motion_diff: 10м, fallback 60м, fallback кадры из diffs.csv
-# motion_diff — непрерывный цикл: «1 прогон (X файлов)», X = сохранённые кадры с движением
+# motion_diff — непрерывный цикл: обычно «1 прогон (X файлов)», но при рестарте(ах) в окне —
+# «N прогонов» (N = число стартов «Порог:», в т.ч. из соседнего date-каталога у полуночи).
 if ($count10m -gt 0) {
-    $stats10m = Fmt-Runs 1 $count10m " (10м)" $times10m $motionCpuLine
+    $stats10m = Fmt-Runs $motionRuns10m $count10m " (10м)" $times10m $motionCpuLine
 } elseif ($count60m -gt 0) {
-    $stats10m = Fmt-Runs 1 $count60m " (60м)" $times60m $motionCpuLine
+    $stats10m = Fmt-Runs $motionRuns60m $count60m " (60м)" $times60m $motionCpuLine
 } elseif ($frameCount10m -gt 0) {
     # нет событий движения, но кадры обрабатываются
-    $stats10m = Fmt-Runs 1 $frameCount10m " (10м)" @() $motionCpuLine
+    $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine
 } elseif ($motionCpuLine -ne "") {
     # нет ни движения ни diffs.csv, но CPU есть — хотя бы покажем CPU
     $stats10m = "—<br>${motionCpuLine}"
