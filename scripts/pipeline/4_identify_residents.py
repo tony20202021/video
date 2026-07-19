@@ -43,6 +43,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.classes import EXTRA_DATASET_DIRS, GROUP_CLASSES, RESIDENT_CLASS
+from common.utils import multilabel as _ml
 
 GUEST_CLASS = "4_guest"
 # Классы, кропы которых подаются на идентификацию
@@ -67,23 +68,42 @@ UNKNOWN_CLASS  = "unknown_resident"
 
 
 
-def _has_identify_crops(run_dir: Path) -> bool:
-    """Проверяет наличие кропов для идентификации (resident + guest) в run_dir.
+def _v4_identify_crops(run_dir: Path) -> list[Path]:
+    """v4 multi-label раскладка Модели 1: кропы resident/guest на идентификацию.
 
-    Форматы:
-      1. Старый (camera-run): run_dir/.../classified/<class>/*.jpg
-      2. Новый (inference):   run_dir/<class>/*.jpg
-    """
-    try:
-        for cls in _IDENTIFY_CLASSES:
-            for pattern in (f"classified/{cls}", cls):
-                for d in run_dir.rglob(pattern) if "/" in pattern else [run_dir / pattern]:
-                    if d.is_dir() and any(f.suffix.lower() == ".jpg"
-                                          for f in d.iterdir() if f.is_file()):
-                        return True
-    except OSError:
-        pass
-    return False
+      single/1_resident/*.jpg, single/4_guest/*.jpg — кроп с ОДНИМ классом (напрямую)
+      multi/*.jpg                                    — кроп с НЕСКОЛЬКИМИ классами; берём
+        только те, чей набор в labels.json содержит 1_resident или 4_guest
+    Дедуп по имени файла (кроп размещён ровно в одном каталоге)."""
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    for cls in _IDENTIFY_CLASSES:
+        d = run_dir / "single" / cls
+        if d.is_dir():
+            for f in sorted(d.iterdir()):
+                if f.is_file() and f.suffix.lower() == ".jpg" and f.name not in seen:
+                    seen.add(f.name)
+                    out.append(f)
+
+    multi_dir = run_dir / "multi"
+    if multi_dir.is_dir():
+        labels = _ml.load_labels(run_dir / "labels.json")   # {rel: [classes]}
+        have_labels = bool(labels)
+        for f in sorted(multi_dir.iterdir()):
+            if not (f.is_file() and f.suffix.lower() == ".jpg") or f.name in seen:
+                continue
+            classes = labels.get(f"multi/{f.name}", [])
+            # нет labels.json → консервативно берём все multi-кропы (multi = несколько людей)
+            if (not have_labels) or any(c in _IDENTIFY_CLASSES for c in classes):
+                seen.add(f.name)
+                out.append(f)
+    return out
+
+
+def _has_identify_crops(run_dir: Path) -> bool:
+    """Есть ли кропы для идентификации (v4 single/+multi/, старый flat или camera-run)."""
+    return bool(_find_identify_crops(run_dir)[0])
 
 
 # Оставляем старое имя как алиас для совместимости
@@ -93,13 +113,20 @@ _has_resident_crops = _has_identify_crops
 def _find_identify_crops(run_dir: Path) -> tuple[list[tuple[Path, Path]], bool]:
     """Возвращает ([(crop_path, rel_cam_dir)], flat_format).
 
-    flat_format=True  → плоская структура inference (run_dir/<class>/*.jpg)
-    flat_format=False → camera-run структура (run_dir/.../classified/<class>/*.jpg)
+    Приоритет форматов:
+      1. v4 inference (multi-label): single/<class>/ + multi/ (по labels.json) → flat_format=True
+      2. camera-run: run_dir/.../classified/<class>/*.jpg                       → flat_format=False
+      3. старый плоский inference: run_dir/<class>/*.jpg                        → flat_format=True
     """
+    # 1. v4 multi-label раскладка
+    v4 = _v4_identify_crops(run_dir)
+    if v4:
+        return [(c, Path(".")) for c in v4], True
+
     results: list[tuple[Path, Path]] = []
     seen: set[Path] = set()
 
-    # Старый camera-run формат: classified/<class>/
+    # 2. Старый camera-run формат: classified/<class>/
     patterns = []
     for cls in _IDENTIFY_CLASSES:
         patterns += [f"classified/{cls}"]
@@ -125,7 +152,7 @@ def _find_identify_crops(run_dir: Path) -> tuple[list[tuple[Path, Path]], bool]:
     if results:
         return results, False
 
-    # Новый плоский формат inference: run_dir/<class>/*.jpg
+    # 3. Старый плоский формат inference: run_dir/<class>/*.jpg
     try:
         for cls_name in list(_IDENTIFY_CLASSES) + ["resident"]:
             cls_dir = run_dir / cls_name

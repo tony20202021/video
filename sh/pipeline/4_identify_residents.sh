@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Идентификация жителей и гостей из кропов 3_classify_groups (Модель 2) — watch-режим.
 #
-# Следит за .data/groups/v2/inference/images/<date>/{1_resident,4_guest}/,
+# Следит за .data/groups/<ver>/inference/images/<date>/ (v4: single/{1_resident,4_guest} + multi/),
 # запускает идентификацию при появлении новых кропов.
 # Пропуск уже обработанных файлов — на стороне Python (skip-if-exists).
 #
@@ -77,8 +77,10 @@ echo ""
 _count_crops() {
     local date_dir="$1"
     local n=0
-    for cls in 1_resident 4_guest; do
-        local d="$date_dir/$cls"
+    # v4 multi-label раскладка Модели 1: single/{1_resident,4_guest} + multi/ (триггер;
+    # фильтрацию multi/ по labels.json делает Python). Плюс старый плоский формат <class>/.
+    for d in "$date_dir/single/1_resident" "$date_dir/single/4_guest" "$date_dir/multi" \
+             "$date_dir/1_resident" "$date_dir/4_guest"; do
         if [[ -d "$d" ]]; then
             n=$(( n + $(find "$d" -name "*.jpg" -type f 2>/dev/null | wc -l) ))
         fi
