@@ -620,7 +620,8 @@ function openModal(i) {
   }).join('');
   document.getElementById('modal-btns').innerHTML =
     btns +
-    `<button class="btn-skip" onclick="relabelClear()">Очистить</button>` +
+    `<button class="btn-skip" onclick="relabelSkip()">Пропустить</button>` +
+    `<button class="btn-go" onclick="relabelClear()" style="background:#2a2a4a;color:#aaa">Очистить</button>` +
     `<button class="btn-go" onclick="goLabel()">→ Разметка</button>` +
     `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
   document.getElementById('modal').classList.add('open');
@@ -647,6 +648,7 @@ function relabel(cls) {
 }
 
 function relabelClear() { _saveModal([]); }
+function relabelSkip() { _saveModal(['skip']); }   // пропустить (skip — отложить, не в обучение)
 
 function goLabel() {
   location.href = '/?idx=' + modalIdx;
@@ -1013,7 +1015,8 @@ function buildModalBtns() {
       style="${active?'border-left-color:'+color+';color:'+color:''}">${mark}${cls}</button>`;
   }).join('');
   const extra = layout === 'v4'
-    ? `<button class="btn-skip" onclick="clearCls()">Очистить</button>`
+    ? `<button class="btn-skip" onclick="skipCls()">Пропустить</button>` +
+      `<button class="btn-skip" onclick="clearCls()" style="background:#2a2a4a;color:#aaa">Очистить</button>`
     : '';
   document.getElementById('modal-btns').innerHTML =
     btns + extra + `<button class="btn-close" onclick="closeModal()">✕ Закрыть</button>`;
@@ -1039,6 +1042,7 @@ async function setCls(cls) {
 }
 
 async function clearCls() { await _apiSetLabel(modalPath, []); }
+async function skipCls() { await _apiSetLabel(modalPath, ['skip']); }   // пропустить → skip/
 
 async function _apiSetLabel(path, list) {
   document.getElementById('modal-btns').classList.add('moving');
