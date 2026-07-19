@@ -9,8 +9,10 @@ GROUP_CLASSES: list[str] = [
 
 RESIDENT_CLASS = "1_resident"
 
-# Папки датасета, не являющиеся классами модели
-EXTRA_DATASET_DIRS: list[str] = ["skip", "unknown", "new"]
+# Папки/псевдо-метки, не являющиеся классами модели (взаимоисключающи с настоящими классами:
+# uncertain/unknown — «нет уверенного класса», skip — отложено, new — ещё не размечено).
+# Исключаются из кнопок разметчика и из обучения.
+EXTRA_DATASET_DIRS: list[str] = ["skip", "unknown", "new", "uncertain"]
 
 GROUP_CLASS_COLORS: dict[str, str] = {
     "1_resident":  "#228833",

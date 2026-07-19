@@ -45,7 +45,16 @@ DEFAULT_INPUT   = REPO_ROOT / ".output" / "pipeline" / "2_yolo_boxes_files"
 DEFAULT_LABELS  = REPO_ROOT / ".output" / "train" / "2_label_ui"
 DEFAULT_DATASET = REPO_ROOT / ".data" / "groups"
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
-_EXTRA_CLASSES = set(EXTRA_DATASET_DIRS)
+_EXTRA_CLASSES = set(EXTRA_DATASET_DIRS)   # псевдо-метки: skip/unknown/new/uncertain
+
+
+def _clean_label_set(classes) -> list[str]:
+    """Настоящие классы и псевдо-метки (skip/unknown/uncertain/new) взаимоисключающи:
+    если выбран хоть один настоящий класс — псевдо-метки убираем (кроп уже не uncertain/skip).
+    Если настоящих нет — оставляем псевдо как есть (напр. ['skip'])."""
+    vals = _ml.normalize_label(classes)
+    real = [c for c in vals if c not in _EXTRA_CLASSES]
+    return sorted(set(real)) if real else sorted(set(vals))
 
 
 def _load_classes(dataset_dir: Path | None) -> tuple[list[str], Path]:
@@ -1130,14 +1139,14 @@ def _dataset_files(dataset_dir: Path, image_exts: set[str]) -> tuple[list[dict],
                     if f.is_file() and f.suffix.lower() in image_exts:
                         rel = f.relative_to(dataset_dir).as_posix()
                         out.append({"path": f.resolve().as_posix(), "rel": rel,
-                                    "classes": labels.get(rel) or [cls_dir.name]})
+                                    "classes": _clean_label_set(labels.get(rel) or [cls_dir.name])})
         multi_root = dataset_dir / "multi"
         if multi_root.is_dir():
             for f in sorted(multi_root.iterdir()):
                 if f.is_file() and f.suffix.lower() in image_exts:
                     rel = f.relative_to(dataset_dir).as_posix()
                     out.append({"path": f.resolve().as_posix(), "rel": rel,
-                                "classes": labels.get(rel) or []})
+                                "classes": _clean_label_set(labels.get(rel) or [])})
     else:
         for subdir in sorted(dataset_dir.iterdir()):
             if not subdir.is_dir() or subdir.name in ("single", "multi"):
@@ -1223,7 +1232,9 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
 
     # Загружаем существующую разметку (multi-label {img: [classes]}; старый v1 {img:'class'}
     # читается как 1-элементный список — ПОДХВАТ старой разметки, шаг B1).
-    labels: dict[str, list] = _ml.load_labels(labels_path)
+    # Чистим старые смешанные наборы (класс+uncertain/skip) → показываем без псевдо-меток.
+    labels: dict[str, list] = {k: _clean_label_set(v)
+                               for k, v in _ml.load_labels(labels_path).items()}
 
     # Нормализуем ключи labels к абсолютным путям кропов.
     # labels.json может хранить: абсолютный путь, basename, или basename с префиксом scene0042_,
@@ -1281,7 +1292,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
             return jsonify({"error": "no dataset"}), 404
         data = request.get_json()
         src = Path(data["file"]) if Path(data["file"]).is_absolute() else REPO_ROOT / data["file"]
-        new_classes = sorted(set(_ml.normalize_label(data.get("classes"))))
+        new_classes = _clean_label_set(data.get("classes"))
         dmap = _ml.load_labels(_dataset_labels_path())
         dst = _v4_relocate(dataset_dir, src, new_classes, dmap)
         _ml.save_labels(_dataset_labels_path(), dmap, task="classify")
@@ -1314,7 +1325,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                 cur.discard(cls)
             elif cls:
                 cur.add(cls)
-            _v4_relocate(dataset_dir, src, sorted(cur), dmap)
+            _v4_relocate(dataset_dir, src, _clean_label_set(cur), dmap)
             n += 1
         _ml.save_labels(_dataset_labels_path(), dmap, task="classify")
         return jsonify({"ok": True, "moved": n})
@@ -1362,10 +1373,10 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         fname = data["file"]
         # multi-label: принимаем список classes; back-compat — одиночный label (строка)
         if "classes" in data:
-            labels[fname] = _ml.normalize_label(data.get("classes"))
+            labels[fname] = _clean_label_set(data.get("classes"))
         else:
             lbl = data.get("label")
-            labels[fname] = [] if (not lbl or lbl in _EXTRA_CLASSES) else [lbl]
+            labels[fname] = _clean_label_set([lbl] if lbl else [])
         _save_labels(labels_path, labels)
         return jsonify({"labels": labels})
 
@@ -1391,7 +1402,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                     cur.discard(cls)
                 elif cls:                       # add
                     cur.add(cls)
-                labels[f] = sorted(cur)
+                labels[f] = _clean_label_set(cur)   # выбран класс → снимаем uncertain/skip
             _save_labels(labels_path, labels)
         return jsonify({"labels": labels, "updated": len(files)})
 

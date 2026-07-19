@@ -164,6 +164,18 @@ def test_labelui_target_dir_skip(tmp_path):
     assert LABELUI._v4_target_dir(ds, ["1_resident", "2_delivery"]) == ds / "multi"
 
 
+def test_labelui_clean_label_set():
+    """Настоящий класс и псевдо-метки (skip/unknown/uncertain/new) взаимоисключающи."""
+    c = LABELUI._clean_label_set
+    assert c(["1_resident", "uncertain"]) == ["1_resident"]      # класс → uncertain убрать
+    assert c(["1_resident", "skip"]) == ["1_resident"]
+    assert c(["4_guest", "1_resident", "unknown"]) == ["1_resident", "4_guest"]
+    assert c(["uncertain"]) == ["uncertain"]                     # только псевдо — оставить
+    assert c(["skip"]) == ["skip"]
+    assert c([]) == []
+    assert "uncertain" in set(LABELUI.EXTRA_DATASET_DIRS)        # uncertain — псевдо-метка
+
+
 # ─── 4_identify_residents: v4-маршрутизация ───────────────────────────────────
 
 def test_v4_identify_routing(tmp_path):
