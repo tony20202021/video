@@ -109,7 +109,11 @@ def write_classify_manifest(
     dataset_version: str | None = None,
     dataset_path: str = "",
     notes: str = "",
+    multi_label: bool = False,
+    thresholds: dict | None = None,
 ) -> Path:
+    """Манифест модели. multi_label=True + thresholds{class: порог} — для multi-label
+    моделей (BCE-обучение): classify.py читает эти поля и переключает sigmoid+пороги."""
     path = classify_manifest_path(tag)
     path.write_text(
         json.dumps({
@@ -118,6 +122,8 @@ def write_classify_manifest(
             "dataset_path": dataset_path,
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "notes": notes,
+            "multi_label": bool(multi_label),
+            "thresholds": {k: float(v) for k, v in (thresholds or {}).items()},
             "metrics": metrics or {},
         }, ensure_ascii=False, indent=2),
         encoding="utf-8",
