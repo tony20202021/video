@@ -60,3 +60,41 @@ def test_fmt_stats_timing_unit():
 
 def test_fmt_stats_zero():
     assert ps.fmt_stats(_st(0, 10), False, kind="batch") == "—"
+
+
+# ─── parse_stat_lines (разбор строк журнала) ──────────────────────────────────
+
+def test_parse_stat_lines_batch():
+    # yolo/classify/identify: '1 батч (X кадров)  Готово. Время: N с.'
+    lines = [
+        "Jul 19 08:39:23 h bash[1]: 08:39:23  INFO      1 батч (23 кадров)  Готово. Время: 5.8 с.  images=/x",
+        "Jul 19 08:45:10 h bash[1]: 08:45:10  INFO      1 батч (7 кадров)  Готово. Время: 12.0 с.  images=/x",
+        "Jul 19 08:45:05 h bash[1]: 08:45:05  INFO        (нет детекций YOLO)",   # не совпадает
+    ]
+    st = ps.parse_stat_lines(lines, r"Готово\. Время:", has_timing=True)
+    assert st["count"] == 2           # 2 прогона (Готово)
+    assert st["frames"] == 30         # 23 + 7 кадров (суммируется)
+    assert st["min"] == 5.8
+    assert st["max"] == 12.0
+    assert st["avg"] == 8.9
+    assert st["last"] == 12.0
+
+
+def test_parse_stat_lines_bursts():
+    # transfer: [recv] с таймстампами; пауза > BURST_GAP_SEC делит на всплески
+    lines = [
+        "Jul 19 08:39:01 h bash[1]: 08:39:01  INFO      [recv] diff/x.jpg  Готово. Время: 0.1 с.",
+        "Jul 19 08:39:02 h bash[1]: 08:39:02  INFO      [recv] diff/y.jpg  Готово. Время: 0.1 с.",
+        "Jul 19 08:39:03 h bash[1]: 08:39:03  INFO      [recv] diff/z.jpg  Готово. Время: 0.1 с.",
+        "Jul 19 08:45:00 h bash[1]: 08:45:00  INFO      [recv] diff/w.jpg  Готово. Время: 0.1 с.",
+    ]
+    st = ps.parse_stat_lines(lines, r"\[recv\].*Готово\. Время:", has_timing=True)
+    assert st["count"] == 4           # 4 принятых файла
+    assert st["bursts"] == 2          # 3 подряд + 1 после паузы > 15с
+    assert st["frames"] == 0          # у transfer нет 'кадров'
+
+
+def test_parse_stat_lines_empty():
+    st = ps.parse_stat_lines(["нет совпадений тут"], r"Готово\. Время:", has_timing=True)
+    assert st["count"] == 0 and st["frames"] == 0 and st["bursts"] == 0
+    assert st["avg"] is None

@@ -213,17 +213,18 @@ def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
         return "—"
 
 
-def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: int) -> dict:
-    r = subprocess.run(
-        ["journalctl", "-u", svc, "--no-pager",
-         "--since", f"{window_min} minutes ago"],
-        capture_output=True, text=True,
-    )
+def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
+    """Разбор строк журнала (чистая функция — тестируема без journalctl):
+      count   — число совпавших событий (прогонов/приёмов);
+      times   — тайминги из 'Время: N с' (min/avg/max/last);
+      frames  — сумма «X кадров» из '1 батч (X кадров)' (батч-сервисы);
+      bursts  — число всплесков (группы событий, разделённые паузой > BURST_GAP_SEC).
+    """
     count = 0
     times: list[float] = []
-    frames = 0                    # сумма «X кадров» из '1 батч (X кадров)' (батч-сервисы)
-    ts_secs: list[int] = []       # секунды-в-сутках событий (для подсчёта всплесков)
-    for line in r.stdout.splitlines():
+    frames = 0
+    ts_secs: list[int] = []
+    for line in lines:
         if re.search(stats_pat, line):
             count += 1
             if has_timing:
@@ -236,19 +237,30 @@ def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: in
             tm = re.search(r"\b(\d{2}):(\d{2}):(\d{2})\b", line)
             if tm:
                 ts_secs.append(int(tm.group(1)) * 3600 + int(tm.group(2)) * 60 + int(tm.group(3)))
-    # всплески: группы событий, разделённые паузой > BURST_GAP_SEC (для transfer — приём пачками)
     bursts = 0
     if ts_secs:
         bursts = 1
         for i in range(1, len(ts_secs)):
             if ts_secs[i] - ts_secs[i - 1] > BURST_GAP_SEC:
                 bursts += 1
-    mn   = round(min(times), 1) if times else None
-    avg  = round(sum(times) / len(times), 1) if times else None
-    mx   = round(max(times), 1) if times else None
-    last = round(times[-1], 1) if times else None
-    return dict(count=count, min=mn, avg=avg, max=mx, last=last,
-                frames=frames, bursts=bursts, window=window_min)
+    return dict(
+        count=count, frames=frames, bursts=bursts,
+        min=round(min(times), 1) if times else None,
+        avg=round(sum(times) / len(times), 1) if times else None,
+        max=round(max(times), 1) if times else None,
+        last=round(times[-1], 1) if times else None,
+    )
+
+
+def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: int) -> dict:
+    r = subprocess.run(
+        ["journalctl", "-u", svc, "--no-pager",
+         "--since", f"{window_min} minutes ago"],
+        capture_output=True, text=True,
+    )
+    st = parse_stat_lines(r.stdout.splitlines(), stats_pat, has_timing)
+    st["window"] = window_min
+    return st
 
 
 def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
