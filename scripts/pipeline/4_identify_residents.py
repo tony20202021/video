@@ -52,6 +52,7 @@ from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
     draw_cpu_on_ax as _draw_cpu_on_ax,
+    compute_per_frame_log as _compute_per_frame_log,
 )
 from common.utils.time_msk import ts_for_dir
 from common.utils.adaptive_rate import AdaptiveRateLimiter
@@ -680,7 +681,8 @@ def main() -> int:
             f"Время: {stats['duration_sec']} с."
         )
     else:
-        logger.info(f"1 батч ({grand_total} кадров)  Готово. Время: {stats['duration_sec']} с.  Вывод: {_base_out}")
+        _cpf = _compute_per_frame_log([r[1] for r in timing_log])
+        logger.info(f"1 батч ({grand_total} кадров)  Готово. Время: {stats['duration_sec']} с.{_cpf}  Вывод: {_base_out}")
         summary = "  ".join(f"{p}: {n}" for p, n in sorted(grand_identified.items()))
         if summary:
             logger.info(f"Итог: {summary}")

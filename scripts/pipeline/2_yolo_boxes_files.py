@@ -51,6 +51,7 @@ from common.utils.camera_run import (
     draw_cpu_on_ax as _draw_cpu_on_ax,
     parse_img_filename as _parse_img_filename,
     save_cpu_csv as _save_cpu_csv,
+    compute_per_frame_log as _compute_per_frame_log,
 )
 from common.utils.adaptive_rate import AdaptiveRateLimiter
 from common.utils.atomic import copy as _copy, imwrite as _imwrite
@@ -803,7 +804,8 @@ def main() -> int:
         _json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    logger.info(f"1 батч ({grand_total_checked} кадров)  Готово. Время: {stats['duration_sec']} с.  images={images_dir}  annotated={annotated_dir}  meta={meta_dir}")
+    _cpf = _compute_per_frame_log([r[1] for r in timing_log])   # r[1] = inference_ms (чистый счёт)
+    logger.info(f"1 батч ({grand_total_checked} кадров)  Готово. Время: {stats['duration_sec']} с.{_cpf}  images={images_dir}  annotated={annotated_dir}  meta={meta_dir}")
     return 0
 
 

@@ -512,6 +512,18 @@ def save_cpu_csv(cpu_log: list, out_dir: Path) -> None:
     logger.info("cpu.csv:    %d замеров", len(cpu_log))
 
 
+def compute_per_frame_log(ms_values) -> str:
+    """Строка ' счёт/кадр: min/avg/max мс' по ЧИСТОМУ времени вычисления кадра (только счёт,
+    без сна адаптивного лимитера и без батч-оверхеда). Показывает, справляется ли ЦПУ.
+    Пустой список → '' (нечего добавлять)."""
+    if not ms_values:
+        return ""
+    mn = min(ms_values)
+    mx = max(ms_values)
+    av = sum(ms_values) / len(ms_values)
+    return f"  счёт/кадр: {mn:.0f}/{av:.0f}/{mx:.0f} мс"
+
+
 # ─── pts_chart.png ────────────────────────────────────────────────────────────
 
 def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:

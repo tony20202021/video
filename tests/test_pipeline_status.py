@@ -28,9 +28,10 @@ def test_plural_frames():
     assert p(330) == "кадров"    # …0 → many
 
 
-def _st(count, window, frames=0, bursts=0, dur_sum=0.0, **kw):
+def _st(count, window, frames=0, bursts=0, **kw):
     d = {"count": count, "window": window, "frames": frames, "bursts": bursts,
-         "dur_sum": dur_sum, "min": None, "avg": None, "max": None, "last": None}
+         "min": None, "avg": None, "max": None, "last": None,
+         "cmin": None, "cavg": None, "cmax": None}
     d.update(kw)
     return d
 
@@ -52,24 +53,24 @@ def test_fmt_stats_burst():
         == "12 прогонов (10м) (328 файлов)"
 
 
-def test_fmt_stats_timing_unit():
-    # min/avg/max/last — реальные длительности ПРОГОНОВ; «≈с/кадр» — честное Σвремя/Σкадры
-    cell = ps.fmt_stats(_st(5, 10, frames=100, dur_sum=22.0, min=3.9, avg=5.1, max=6.3, last=3.9),
+def test_fmt_stats_compute():
+    # compute-сервисы: чистое время вычисления кадра (счёт/кадр min/avg/max мс)
+    cell = ps.fmt_stats(_st(5, 10, frames=100, cmin=8, cavg=26, cmax=54),
                         has_timing=True, kind="batch")
-    assert cell == "5 прогонов (10м) (100 кадров)\n≈0.22с/кадр · прогон 3.9с/5.1с/6.3с/3.9с"
+    assert cell == "5 прогонов (10м) (100 кадров)\nсчёт/кадр 8/26/54 мс"
 
 
 def test_fmt_stats_cpu_label():
-    cell = ps.fmt_stats(_st(5, 10, frames=100, dur_sum=22.0, min=3.9, avg=5.1, max=6.3, last=3.9),
+    cell = ps.fmt_stats(_st(5, 10, frames=100, cmin=8, cavg=26, cmax=54),
                         has_timing=True, cpu_line="9%/29%/74%/65%", kind="batch")
-    assert cell.endswith("≈0.22с/кадр · прогон 3.9с/5.1с/6.3с/3.9с\n9%/29%/74%/65% (цпу)")
+    assert cell.endswith("счёт/кадр 8/26/54 мс\n9%/29%/74%/65% (цпу)")
 
 
-def test_fmt_stats_burst_unit_file():
-    # transfer: среднее на 1 файл = Σвремя/count (строка = 1 файл)
-    cell = ps.fmt_stats(_st(328, 10, bursts=12, dur_sum=32.8, min=0.1, avg=0.1, max=0.2, last=0.1),
+def test_fmt_stats_burst_receive():
+    # transfer: чистое время приёма файла (I/O)
+    cell = ps.fmt_stats(_st(328, 10, bursts=12, min=0.1, avg=0.1, max=0.2),
                         has_timing=True, kind="burst")
-    assert cell.endswith("≈0.10с/файл · прогон 0.1с/0.1с/0.2с/0.1с")
+    assert cell.endswith("приём 0.1с/0.1с/0.2с (на файл)")
 
 
 # ─── dir_state_by_date (разбивка инференса по датам) ──────────────────────────
@@ -125,12 +126,20 @@ def test_parse_stat_lines_batch():
     st = ps.parse_stat_lines(lines, r"Готово\. Время:", has_timing=True)
     assert st["count"] == 2           # 2 прогона (Готово)
     assert st["frames"] == 30         # 23 + 7 кадров (суммируется)
-    # min/avg/max/last — реальные длительности ПРОГОНОВ (не делим на кадры)
-    assert st["min"] == 5.8
-    assert st["max"] == 12.0
-    assert st["avg"] == 8.9
-    assert st["last"] == 12.0
-    assert st["dur_sum"] == 17.8      # для среднего на кадр = 17.8/30 ≈ 0.59с/кадр
+    assert st["cavg"] is None         # нет 'счёт/кадр' в этих строках
+
+
+def test_parse_stat_lines_compute():
+    # чистое время вычисления кадра из 'счёт/кадр: min/avg/max мс'
+    lines = [
+        "Jul 19 08:39:23 h bash[1]: 08:39:23  INFO  1 батч (10 кадров)  Готово. Время: 3.0 с.  счёт/кадр: 8/20/50 мс  images=/x",
+        "Jul 19 08:45:10 h bash[1]: 08:45:10  INFO  1 батч (30 кадров)  Готово. Время: 9.0 с.  счёт/кадр: 5/30/90 мс  images=/x",
+    ]
+    st = ps.parse_stat_lines(lines, r"Готово\. Время:", has_timing=True)
+    assert st["frames"] == 40
+    assert st["cmin"] == 5            # min из минимумов (8, 5)
+    assert st["cmax"] == 90           # max из максимумов (50, 90)
+    assert st["cavg"] == 28           # взвеш. по кадрам: (20*10 + 30*30)/40 = 27.5 → 28
 
 
 def test_parse_stat_lines_bursts():
