@@ -53,9 +53,43 @@ def test_fmt_stats_burst():
 
 
 def test_fmt_stats_timing_unit():
+    # единица «на 1прогон» — в конце строки; ЦПУ помечен «(цпу)»
     cell = ps.fmt_stats(_st(5, 10, frames=100, min=3.4, avg=43.7, max=202.5, last=5.2),
                         has_timing=True, kind="batch")
-    assert cell == "5 прогонов (10м) (100 кадров)\n1прогон 3.4с/43.7с/202.5с/5.2с"
+    assert cell == "5 прогонов (10м) (100 кадров)\n3.4с/43.7с/202.5с/5.2с (на 1прогон)"
+
+
+def test_fmt_stats_cpu_label():
+    cell = ps.fmt_stats(_st(5, 10, frames=100, min=3.4, avg=43.7, max=202.5, last=5.2),
+                        has_timing=True, cpu_line="9%/29%/74%/65%", kind="batch")
+    assert cell.endswith("3.4с/43.7с/202.5с/5.2с (на 1прогон)\n9%/29%/74%/65% (цпу)")
+
+
+# ─── dir_state_by_date (разбивка инференса по датам) ──────────────────────────
+
+def test_dir_state_by_date(tmp_path):
+    root = tmp_path / "v1" / "inference" / "images"
+    for d in ("20260718", "20260719"):
+        (root / d / "single" / "1_resident").mkdir(parents=True)
+        (root / d / "single" / "1_resident" / "a.jpg").write_bytes(b"x")
+    (root / "dataset" / "p1").mkdir(parents=True)          # не-дата → игнор
+    (root / "dataset" / "p1" / "z.jpg").write_bytes(b"x")
+    assert ps._is_inference_images(root) is True
+    out = ps.dir_state_by_date(root)
+    assert "20260718: 1" in out
+    assert "20260719: 1" in out
+    assert "ИТОГО: 2 (2 дат)" in out
+    assert "не-даты пропущены: 1" in out                   # dataset/ исключён
+    assert "dataset" not in out.replace("не-даты", "")     # сама папка не в списке
+
+
+def test_dir_state_by_date_dispatch(tmp_path):
+    # не-инференс каталог → плоский счётчик (со словом «кат.»), инференс → по датам
+    flat = tmp_path / "2_yolo_boxes_files" / "images"
+    (flat / "run_x").mkdir(parents=True)
+    (flat / "run_x" / "a.jpg").write_bytes(b"x")
+    assert ps._is_inference_images(flat) is False
+    assert "кат." in ps.state_for(flat)
 
 
 def test_fmt_stats_zero():

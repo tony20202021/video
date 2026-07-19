@@ -122,6 +122,48 @@ def dir_state(directory: Path | None) -> str:
     return f"{files} файл. · {dirs} кат.\n{t}"
 
 
+_DATE_RE = re.compile(r"^\d{8}$")
+
+
+def _is_inference_images(directory: Path | None) -> bool:
+    """Каталог вида …/inference/images — там данные разложены по датам YYYYMMDD/."""
+    return (directory is not None and directory.name == "images"
+            and directory.parent.name == "inference")
+
+
+def dir_state_by_date(directory: Path | None) -> str:
+    """Разбивка *.jpg по папкам-датам YYYYMMDD/ + итог. Не-даты (dataset/ и т.п.) игнорируются —
+    для пайплайна важен только инференс. Полный список: видно накопление к след. обучению.
+    '—' если дат нет/каталог отсутствует."""
+    if directory is None or not directory.is_dir():
+        return "—"
+    dated: list[tuple[str, int]] = []
+    skipped = 0
+    try:
+        for d in sorted(directory.iterdir()):
+            if not d.is_dir():
+                continue
+            if _DATE_RE.match(d.name):
+                dated.append((d.name, sum(1 for _ in d.rglob("*.jpg"))))
+            else:
+                skipped += 1
+    except OSError:
+        return "—"
+    if not dated:
+        return "—"
+    total = sum(n for _, n in dated)
+    lines = [f"{name}: {n}" for name, n in dated]
+    lines.append(f"ИТОГО: {total} ({len(dated)} дат)")
+    if skipped:
+        lines.append(f"(не-даты пропущены: {skipped})")
+    return "\n".join(lines)
+
+
+def state_for(directory: Path | None) -> str:
+    """Инференс-каталоги (…/inference/images) — разбивка по датам; прочие — плоский счётчик."""
+    return dir_state_by_date(directory) if _is_inference_images(directory) else dir_state(directory)
+
+
 def _env_val(key: str, default: str = "") -> str:
     """Значение из os.environ без инлайн-комментария и хвостовых пробелов."""
     v = os.environ.get(key, "")
@@ -405,9 +447,9 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None,
     lines = [head]
     if has_timing and st["avg"] is not None:
         mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
-        lines.append(f"{time_unit} {mn}с/{avg}с/{mx}с/{lst}с")
+        lines.append(f"{mn}с/{avg}с/{mx}с/{lst}с (на {time_unit})")
     if cpu_line is not None:
-        lines.append(cpu_line)
+        lines.append(f"{cpu_line} (цпу)")
     return "\n".join(lines)
 
 
@@ -417,8 +459,8 @@ def collect() -> list[dict]:
     rows = []
     for s in SERVICES:
         state     = svc_state(s["name"])
-        in_state  = dir_state(s["in_dir"])
-        out_state = dir_state(s["out_dir"])
+        in_state  = state_for(s["in_dir"])
+        out_state = state_for(s["out_dir"])
         in_label  = transfer_in_label() if s["name"] == "video-transfer" else s["in_label"]
         st        = service_stats(s["name"], s["stats_pat"], s["has_timing"])
         cpu_line  = service_cpu(s["name"], st.get("window", WINDOW_MIN)) if state == "active" else None
