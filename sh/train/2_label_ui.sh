@@ -24,10 +24,10 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 # groups (v4 multi-label: dataset = single/<class>/ + multi/ + labels.json)
-INPUT="$REPO/.data/groups/v3/inference/images/20260715"
-LABELS="$REPO/.data/groups/v3/inference/images/20260715/labels.json"
+INPUT="$REPO/.data/groups/v3/inference/images/20260716"
+LABELS="$REPO/.data/groups/v3/inference/images/20260716/labels.json"
 DATASET="$REPO/.data/groups/v3/dataset"
-PROBS_CSV="$REPO/.data/groups/v3/inference/images/20260715/classifications.csv"
+PROBS_CSV="$REPO/.data/groups/v3/inference/images/20260716/classifications.csv"
 
 # # residents
 # INPUT="$REPO/.data/residents/v1/inference/images/20260714"

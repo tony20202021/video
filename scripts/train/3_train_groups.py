@@ -38,7 +38,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from common.utils.classes import GROUP_CLASSES as CLASSES
+from common.utils.classes import GROUP_CLASSES as CLASSES, EXTRA_DATASET_DIRS
 from common.utils import multilabel as ml
 from ml.versions import (
     classify_model_path,
@@ -106,8 +106,10 @@ def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
 
     lab_map = ml.load_labels(labels_file)          # {img: [classes]}, старый v1 → [class]
     base = _detect_base(lab_map, [base_default, REPO_ROOT])
+    _extra = set(EXTRA_DATASET_DIRS)               # skip/unknown/new — исключаем из обучения
     labels = [{"image": img, "classes": [c for c in cls if c in CLASS_TO_IDX]}
-              for img, cls in lab_map.items()]
+              for img, cls in lab_map.items()
+              if not any(c in _extra for c in cls)]
     return base, labels
 
 

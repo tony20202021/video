@@ -141,6 +141,29 @@ def test_load_dataset_legacy_single(tmp_path):
     assert labels == [{"image": "1_resident/a.jpg", "classes": ["1_resident"]}]
 
 
+def test_load_dataset_excludes_skip(tmp_path):
+    """Кропы, помеченные skip/unknown/new, исключаются из обучения."""
+    ds = tmp_path / "dataset"
+    (ds / "single" / "1_resident").mkdir(parents=True)
+    (ds / "skip").mkdir()
+    (ds / "single" / "1_resident" / "a.jpg").write_bytes(b"x")
+    (ds / "skip" / "b.jpg").write_bytes(b"x")
+    (ds / "labels.json").write_text(json.dumps({"version": 2, "labels": {
+        "single/1_resident/a.jpg": ["1_resident"],
+        "skip/b.jpg": ["skip"],
+    }}), encoding="utf-8")
+    base, labels = TRAIN._load_dataset(ds)
+    assert {lb["image"].split("/")[-1] for lb in labels} == {"a.jpg"}   # skip исключён
+
+
+def test_labelui_target_dir_skip(tmp_path):
+    ds = tmp_path / "dataset"
+    assert LABELUI._v4_target_dir(ds, ["skip"]) == ds / "skip"
+    assert LABELUI._v4_target_dir(ds, []) == ds / "skip"
+    assert LABELUI._v4_target_dir(ds, ["1_resident"]) == ds / "single" / "1_resident"
+    assert LABELUI._v4_target_dir(ds, ["1_resident", "2_delivery"]) == ds / "multi"
+
+
 # ─── 4_identify_residents: v4-маршрутизация ───────────────────────────────────
 
 def test_v4_identify_routing(tmp_path):

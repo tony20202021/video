@@ -203,8 +203,8 @@ function toggleClass(cls) {
 }
 
 async function skipNext() {
-  // очистить классы («размечено ни одного») и вперёд
-  await saveClasses([]);
+  // пропустить (skip — отложить, исключается из обучения) и вперёд
+  await saveClasses(['skip']);
   navigate(1);
 }
 
@@ -249,9 +249,9 @@ function render() {
           <button class="btn-nav" onclick="navigate(-1)">← Назад</button>
           <button class="btn-nav" onclick="navigate(1)">Готово / Вперёд →</button>
         </div>
-        <button class="btn-skip" onclick="skipNext()">Очистить + вперёд (U)</button>
+        <button class="btn-skip" onclick="skipNext()">Пропустить (U)</button>
         <div class="shortcuts">
-          ${shortcuts} (тоггл)<br>← → = навигация · Space/Enter = вперёд<br>U = очистить + вперёд
+          ${shortcuts} (тоггл)<br>← → = навигация · Space/Enter = вперёд<br>U = пропустить (skip)
         </div>
       </div>
       <div class="drag-handle" id="drag-handle"></div>
@@ -435,6 +435,7 @@ function probBars(filename) {
 
 function comboKey(arr) { return (arr && arr.length) ? [...arr].sort().join(' + ') : '—'; }
 function comboColor(key) {
+  if (key === 'skip') return '#888';           // отложенные (skip) — серым
   const ci = classes.indexOf(key);
   if (ci >= 0) return CLASS_COLORS[ci];        // одиночный класс
   if (key === '—') return '#444';              // без метки
@@ -572,7 +573,8 @@ function renderBulkChecks() {
       return `<button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
         style="${stl}">${box} ${cls}${badge}</button>`;
     }).join('') +
-    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'clear')">Очистить всё</button>`;
+    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')">Пропустить</button>` +
+    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>`;
 }
 
 function toggleBulkClass(cls) {
@@ -727,6 +729,8 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
+  .btn-bulk-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
   .btn-bulk-desel:hover { color: #eee; }
   #gallery { padding-bottom: 0; }
@@ -791,6 +795,7 @@ async function loadState() {
 
 function comboKey(arr) { return (arr && arr.length) ? [...arr].sort().join(' + ') : '—'; }
 function comboColor(key) {
+  if (key === 'skip') return '#888';           // отложенные (skip) — серым
   const ci = classes.indexOf(key);
   if (ci >= 0) return CLASS_COLORS[ci];
   if (key === '—') return '#444';
@@ -951,7 +956,8 @@ function renderBulkChecks() {
       return `<button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
         style="${stl}">${box} ${cls}${badge}</button>`;
     }).join('') +
-    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>`;
+    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')" style="margin-left:0">Пропустить</button>` +
+    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')">Очистить всё</button>`;
 }
 
 function toggleBulkClass(cls) {
@@ -1140,10 +1146,12 @@ def _dataset_files(dataset_dir: Path, image_exts: set[str]) -> tuple[list[dict],
 
 
 def _v4_target_dir(dataset_dir: Path, classes: list[str]) -> Path:
-    """Каталог размещения по числу классов: 1→single/<class>/, ≥2→multi/, 0→skip/."""
-    if len(classes) == 1:
-        return dataset_dir / "single" / classes[0]
-    if len(classes) >= 2:
+    """Каталог размещения по НАСТОЯЩИМ классам: ровно 1 → single/<class>/, ≥2 → multi/,
+    иначе (пусто, 'skip'/'unknown' и т.п.) → skip/."""
+    real = [c for c in classes if c in GROUP_CLASSES]
+    if len(real) == 1 and len(classes) == 1:
+        return dataset_dir / "single" / real[0]
+    if len(real) >= 2:
         return dataset_dir / "multi"
     return dataset_dir / "skip"
 
@@ -1282,7 +1290,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
             return jsonify({"error": "no dataset"}), 404
         data = request.get_json()
         files = data.get("files", [])
-        action = data.get("action", "add")     # add | remove | clear
+        action = data.get("action", "add")     # add | remove | clear | skip
         cls = data.get("class")
         dmap = _ml.load_labels(_dataset_labels_path())
         n = 0
@@ -1296,6 +1304,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                     cur = {parts[1]}
             if action == "clear":
                 cur = set()
+            elif action == "skip":
+                cur = {"skip"}
             elif action == "remove" and cls:
                 cur.discard(cls)
             elif cls:
@@ -1357,7 +1367,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
 
     @app.route("/api/label/bulk", methods=["POST"])
     def label_bulk():
-        """Батч над выбранными кропами. action: add (доб. класс) | remove | clear (очистить)."""
+        """Батч над выбранными кропами. action: add (доб. класс) | remove | clear (очистить) |
+        skip (пометить 'skip' — отложить, исключается из обучения)."""
         data = request.get_json()
         files = data.get("files", [])
         action = data.get("action", "add")
@@ -1370,6 +1381,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                 cur = set(_ml.normalize_label(labels.get(f, [])))
                 if action == "clear":
                     cur = set()
+                elif action == "skip":
+                    cur = {"skip"}
                 elif action == "remove" and cls:
                     cur.discard(cls)
                 elif cls:                       # add
