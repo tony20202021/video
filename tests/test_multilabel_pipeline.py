@@ -32,6 +32,7 @@ def _load(path: Path, name: str):
 TRAIN = _load(REPO_ROOT / "scripts" / "train" / "3_train_groups.py", "t3_train")
 IDENT = _load(REPO_ROOT / "scripts" / "pipeline" / "4_identify_residents.py", "p4_ident")
 LABELUI = _load(REPO_ROOT / "scripts" / "train" / "2_label_ui.py", "p2_labelui")
+BUILD4 = _load(REPO_ROOT / "scripts" / "train" / "build_groups_v4.py", "build_v4")
 
 CLASSES = list(TRAIN.CLASSES)
 
@@ -162,6 +163,34 @@ def test_labelui_target_dir_skip(tmp_path):
     assert LABELUI._v4_target_dir(ds, []) == ds / "skip"
     assert LABELUI._v4_target_dir(ds, ["1_resident"]) == ds / "single" / "1_resident"
     assert LABELUI._v4_target_dir(ds, ["1_resident", "2_delivery"]) == ds / "multi"
+
+
+def test_build4_parse_and_clean():
+    cam, date, sod = BUILD4._parse_name("cam_01_9_d_20260628_143742_559207_msk_diff5.1.jpg")
+    assert (cam, date) == ("cam_01_9_d", "20260628")
+    assert sod == 14 * 3600 + 37 * 60 + 42
+    assert BUILD4._parse_name("мусор.jpg") is None
+    assert BUILD4._clean_classes(["1_resident", "uncertain"]) == ["1_resident"]  # псевдо убрано
+    assert BUILD4._clean_classes(["skip"]) == []
+    assert BUILD4._clean_classes(["4_guest", "1_resident"]) == ["1_resident", "4_guest"]
+
+
+def test_build4_farthest_point(tmp_path):
+    import cv2
+    # 4 кропа: c0==c1 (одинаковые), c2/c3 разные → FPS должен взять разнообразные, дубль отбросить
+    items = {}
+    names = []
+    for i, v in enumerate((0, 0, 128, 255)):
+        p = tmp_path / f"c{i}.jpg"
+        cv2.imwrite(str(p), np.full((48, 48, 3), v, np.uint8))
+        names.append(f"c{i}.jpg")
+        items[f"c{i}.jpg"] = {"path": p}
+    sel = BUILD4._farthest_point(names, items, 3)
+    assert len(sel) == 3
+    assert "c2.jpg" in sel and "c3.jpg" in sel        # разные — взяты
+    assert not ("c0.jpg" in sel and "c1.jpg" in sel)  # оба идентичных — нет
+    # k >= размера → все
+    assert set(BUILD4._farthest_point(names, items, 9)) == set(names)
 
 
 def test_labelui_clean_label_set():
