@@ -1,21 +1,27 @@
 """Обучение классификатора группы (Модель 1 — MobileNetV3-Small → ONNX).
 
-Входные данные:
-  - Директория images/ с кропами людей
-  - labels.json с разметкой (формат из /training/export)
+MULTI-LABEL: кроп YOLO (bbox+паддинг) часто содержит несколько людей РАЗНЫХ классов,
+поэтому цель — мультихот-вектор (0/1 на каждый класс), функция потерь BCEWithLogitsLoss,
+вывод sigmoid + порог на каждый класс. Старые single-label датасеты тоже читаются
+(1 класс → 1-элементный мультихот), но обученная модель уже multi-label (манифест multi_label=true).
+
+Входные данные (любой из форматов):
+  - v4 датасет: dataset/ с single/<class>/img.jpg + multi/img.jpg + labels.json ({img:[classes]})
+  - labels.json из 2_label_ui (пути относительно REPO_ROOT), формат v1 {img:'class'} или v2 {img:[classes]}
+  - folder-based (старое): подпапки по классам 1_resident/… (каждый файл = 1 класс)
 
 Выходные данные:
-  - .models/classify/v1_1.onnx   — ONNX (датасет v1, 1-й прогон)
-  - .models/classify/v1_1.json   — манифест с dataset_version
+  - .models/classify/v4_1.onnx   — ONNX (датасет v4, 1-й прогон)
+  - .models/classify/v4_1.json   — манифест: multi_label=true + пороги по классам (подобраны на валидации)
   - .models/classify/backbone.pt — веса backbone для инициализации Модели 2
-  - training_results.json        — метрики
+  - training_results.json        — метрики (per-class precision/recall/F1/AP, mAP)
 
 Требования:
   pip install torch torchvision
 
 Usage:
-    python scripts/train/2_train_groups.py --data .output/training/export_classify_*.zip
-    python scripts/train/2_train_groups.py --data /path/to/export_dir --epochs 30
+    python scripts/train/3_train_groups.py --data .data/groups/v4/dataset --epochs 30
+    python scripts/train/3_train_groups.py --data /path/to/labels.json
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from common.utils.classes import GROUP_CLASSES as CLASSES
+from common.utils import multilabel as ml
 from ml.versions import (
     classify_model_path,
     models_dir,
@@ -45,18 +52,25 @@ CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
+_THR_GRID = np.round(np.arange(0.05, 0.96, 0.05), 2)
+
+
+def _detect_base(lab_map: dict, candidates: list[Path]) -> Path:
+    """Из каких базовых директорий пути в labels.json резолвятся в файлы (v4 dir vs REPO_ROOT)."""
+    keys = list(lab_map.keys())[:20]
+    best, best_hits = candidates[0], -1
+    for base in candidates:
+        hits = sum(1 for k in keys if (base / k).is_file())
+        if hits > best_hits:
+            best, best_hits = base, hits
+    return best
 
 
 def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
-    """Распаковывает zip если нужно, возвращает (images_dir, labels).
+    """Распаковывает zip если нужно, возвращает (base_dir, labels).
 
-    Форматы:
-      1. Folder-based (папки = классы, рекомендуется):
-           data_path/1_resident/img.jpg  →  class = "1_resident"
-      2. Стандартный labels.json (из 1_export_data):
-           {"labels": [{"image": "img.jpg", "class": "resident"}]}
-      3. Формат 2_label_ui:
-           {"labels": {"relative/path.jpg": "class"}}
+    labels — список {"image": rel_path, "classes": [список классов]} (мультихот-совместимый).
+    Старые форматы (folder-based, single-label labels.json) → 1-элементный список классов.
     """
     if data_path.suffix == ".zip":
         extract_dir = data_path.parent / data_path.stem
@@ -64,39 +78,37 @@ def _load_dataset(data_path: Path) -> tuple[Path, list[dict]]:
             zf.extractall(extract_dir)
         data_path = extract_dir
 
-    # Folder-based: если есть хотя бы одна подпапка с именем из CLASSES
+    # Folder-based (старое): подпапки по классам, БЕЗ labels.json.
+    # v4 (single/<class>/ + multi/) сюда НЕ попадает — верхние папки 'single'/'multi', не классы.
     if data_path.is_dir():
         class_dirs = [d for d in data_path.iterdir()
                       if d.is_dir() and d.name in CLASS_TO_IDX]
-        if class_dirs:
+        if class_dirs and not (data_path / "labels.json").is_file():
             labels = []
             for cls_dir in sorted(class_dirs):
                 for f in sorted(cls_dir.iterdir()):
                     if f.is_file() and f.suffix.lower() in IMAGE_EXTS:
-                        labels.append({"image": str(f.relative_to(data_path)), "class": cls_dir.name})
+                        labels.append({"image": str(f.relative_to(data_path)),
+                                       "classes": [cls_dir.name]})
             return data_path, labels
 
+    # labels.json (v4 или 2_label_ui; формат v1/v2 — через multilabel.load_labels)
     if data_path.is_file() and data_path.name == "labels.json":
-        labels_file = data_path
+        labels_file, base_default = data_path, data_path.parent
     else:
-        labels_file = data_path / "labels.json"
+        labels_file, base_default = data_path / "labels.json", data_path
     if not labels_file.is_file():
         raise FileNotFoundError(
             f"labels.json не найден в {data_path}. "
-            f"Передайте папку с подпапками по классам ({', '.join(CLASSES)})"
+            f"Передайте v4-датасет (single/+multi/+labels.json) или папку с подпапками "
+            f"по классам ({', '.join(CLASSES)})"
         )
 
-    raw = json.loads(labels_file.read_text(encoding="utf-8"))
-    raw_labels = raw["labels"]
-
-    if isinstance(raw_labels, dict):
-        # Формат 2_label_ui: ключ — путь относительно REPO_ROOT
-        labels = [{"image": path, "class": cls}
-                  for path, cls in raw_labels.items()]
-        return REPO_ROOT, labels
-    else:
-        # Стандартный список: images/ + имена файлов
-        return data_path / "images", raw_labels
+    lab_map = ml.load_labels(labels_file)          # {img: [classes]}, старый v1 → [class]
+    base = _detect_base(lab_map, [base_default, REPO_ROOT])
+    labels = [{"image": img, "classes": [c for c in cls if c in CLASS_TO_IDX]}
+              for img, cls in lab_map.items()]
+    return base, labels
 
 
 def _build_model(num_classes: int, pretrained: bool = True):
@@ -115,71 +127,109 @@ def _build_model(num_classes: int, pretrained: bool = True):
     return model
 
 
-def _eval_dataset(
-    model, items: list[dict], images_dir: Path, device, batch_size: int, transform
-) -> tuple[list[int], list[int]]:
-    """Инференс без аугментации. Возвращает (y_true, y_pred) как списки индексов классов."""
+def _collect_scores(model, loader, device) -> tuple[np.ndarray, np.ndarray]:
+    """Инференс по loader. Возвращает (y_true, y_score) — массивы N×C (sigmoid-вероятности)."""
     import torch
-    from torch.utils.data import DataLoader, Dataset
-    from PIL import Image
-
-    class _DS(Dataset):
-        def __init__(self, items, tf):
-            self.items, self.tf = items, tf
-        def __len__(self): return len(self.items)
-        def __getitem__(self, i):
-            it = self.items[i]
-            return self.tf(Image.open(images_dir / it["image"]).convert("RGB")), CLASS_TO_IDX[it["class"]]
-
-    y_true: list[int] = []
-    y_pred: list[int] = []
+    ys, ss = [], []
     model.eval()
     with torch.no_grad():
-        for imgs, targets in DataLoader(_DS(items, transform), batch_size=batch_size):
-            y_pred.extend(model(imgs.to(device)).argmax(1).cpu().tolist())
-            y_true.extend(targets.tolist())
-    return y_true, y_pred
+        for imgs, targets in loader:
+            out = torch.sigmoid(model(imgs.to(device)))
+            ss.append(out.cpu().numpy())
+            ys.append(targets.numpy())
+    if not ys:
+        return np.zeros((0, NUM_CLASSES)), np.zeros((0, NUM_CLASSES))
+    return np.concatenate(ys), np.concatenate(ss)
 
 
-def _compute_eval_metrics(y_true: list[int], y_pred: list[int]) -> dict:
-    """Confusion matrix, per-class accuracy/precision/recall/F1, macro/weighted F1."""
-    n = len(CLASSES)
-    cm = [[0] * n for _ in range(n)]
-    for t, p in zip(y_true, y_pred):
-        cm[t][p] += 1
+def _average_precision(y_true_col: np.ndarray, y_score_col: np.ndarray) -> float:
+    """Average Precision (площадь под PR-кривой) для одного класса, без sklearn."""
+    pos = float(y_true_col.sum())
+    if pos == 0:
+        return 0.0
+    order = np.argsort(-y_score_col)
+    yt = y_true_col[order]
+    tp = np.cumsum(yt)
+    fp = np.cumsum(1.0 - yt)
+    precision = tp / np.maximum(tp + fp, 1e-9)
+    recall = tp / pos
+    ap, prev_r = 0.0, 0.0
+    for p, r in zip(precision, recall):
+        ap += (r - prev_r) * p
+        prev_r = r
+    return float(ap)
 
+
+def _prf(pred: np.ndarray, truth: np.ndarray) -> tuple[float, float, float, int, int, int]:
+    """precision, recall, f1, tp, fp, fn для булевых массивов pred/truth."""
+    tp = int((pred & truth).sum())
+    fp = int((pred & ~truth).sum())
+    fn = int((~pred & truth).sum())
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return precision, recall, f1, tp, fp, fn
+
+
+def _tune_thresholds(y_true: np.ndarray, y_score: np.ndarray) -> dict[str, float]:
+    """Подбор порога на КАЖДЫЙ класс по максимуму F1 на валидации. Класс без позитивов → 0.5."""
+    thr: dict[str, float] = {}
+    for i, cls in enumerate(CLASSES):
+        truth = y_true[:, i] == 1
+        if truth.sum() == 0:
+            thr[cls] = ml.DEFAULT_THRESHOLD
+            continue
+        best_t, best_f1 = ml.DEFAULT_THRESHOLD, -1.0
+        for t in _THR_GRID:
+            _, _, f1, *_ = _prf(y_score[:, i] >= t, truth)
+            if f1 > best_f1:
+                best_f1, best_t = f1, float(t)
+        thr[cls] = best_t
+    return thr
+
+
+def _multilabel_metrics(y_true: np.ndarray, y_score: np.ndarray,
+                        thresholds: dict[str, float]) -> dict:
+    """Per-class precision/recall/F1/AP при заданных порогах + macro/micro F1, mAP, subset-accuracy."""
     by_class: dict[str, dict] = {}
-    correct_total = 0
     macro_f1 = 0.0
-    weighted_f1 = 0.0
-    support_total = 0
+    map_sum = 0.0
+    micro_tp = micro_fp = micro_fn = 0
+    pred_all = np.zeros_like(y_true, dtype=bool)
 
     for i, cls in enumerate(CLASSES):
-        support = sum(cm[i])
-        tp = cm[i][i]
-        fp = sum(cm[r][i] for r in range(n)) - tp
-        precision = tp / (tp + fp) if tp + fp else 0.0
-        recall    = tp / support   if support  else 0.0
-        f1        = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        t = float(thresholds.get(cls, ml.DEFAULT_THRESHOLD))
+        truth = y_true[:, i] == 1
+        pred = y_score[:, i] >= t
+        pred_all[:, i] = pred
+        precision, recall, f1, tp, fp, fn = _prf(pred, truth)
+        ap = _average_precision(y_true[:, i], y_score[:, i])
         by_class[cls] = {
-            "accuracy":  round(tp / support if support else 0.0, 4),
             "precision": round(precision, 4),
-            "recall":    round(recall, 4),
-            "f1":        round(f1, 4),
-            "support":   support,
+            "recall": round(recall, 4),
+            "f1": round(f1, 4),
+            "ap": round(ap, 4),
+            "threshold": round(t, 2),
+            "support": int(truth.sum()),
+            "tp": tp, "fp": fp, "fn": fn,
         }
-        correct_total  += tp
-        macro_f1       += f1
-        weighted_f1    += f1 * support
-        support_total  += support
+        macro_f1 += f1
+        map_sum += ap
+        micro_tp += tp; micro_fp += fp; micro_fn += fn
+
+    micro_p = micro_tp / (micro_tp + micro_fp) if micro_tp + micro_fp else 0.0
+    micro_r = micro_tp / (micro_tp + micro_fn) if micro_tp + micro_fn else 0.0
+    micro_f1 = 2 * micro_p * micro_r / (micro_p + micro_r) if micro_p + micro_r else 0.0
+    n = len(y_true)
+    subset_acc = float((pred_all == (y_true == 1)).all(axis=1).mean()) if n else 0.0
 
     return {
-        "total_samples": support_total,
-        "accuracy":      round(correct_total / support_total, 4) if support_total else 0.0,
-        "macro_f1":      round(macro_f1 / n, 4),
-        "weighted_f1":   round(weighted_f1 / support_total, 4) if support_total else 0.0,
-        "by_class":      by_class,
-        "confusion_matrix": {"classes": list(CLASSES), "matrix": cm},
+        "total_samples": n,
+        "macro_f1": round(macro_f1 / NUM_CLASSES, 4),
+        "micro_f1": round(micro_f1, 4),
+        "mAP": round(map_sum / NUM_CLASSES, 4),
+        "subset_accuracy": round(subset_acc, 4),
+        "by_class": by_class,
     }
 
 
@@ -207,7 +257,7 @@ def train(
     batch_size: int = 32,
     lr: float = 1e-3,
     val_split: float = 0.2,
-    class_weights: bool = False,
+    class_weights: bool = True,
     weighted_sampling: bool = False,
     output_dir: Path,
 ) -> dict:
@@ -222,7 +272,7 @@ def train(
         print("Нужен PyTorch: pip install torch torchvision pillow", file=sys.stderr)
         return {}
 
-    images_dir, labels = _load_dataset(data_path)
+    base_dir, labels = _load_dataset(data_path)
     dataset_version, _dataset_dir = resolve_dataset_version(data_path)
     try:
         dataset_path_rel = str(data_path.resolve().relative_to(REPO_ROOT))
@@ -231,29 +281,24 @@ def train(
     model_tag = next_classify_model_tag(dataset_version)
     onnx_path = classify_model_path(model_tag)
     progress_path = onnx_path.with_name(f"{model_tag}_progress.json")
-    if dataset_version:
-        print(f"Датасет: {dataset_version}  →  модель: {model_tag}", flush=True)
-    else:
-        print(f"Датасет: (без версии)  →  модель: {model_tag}", flush=True)
+    print(f"Датасет: {dataset_version or '(без версии)'}  →  модель: {model_tag}", flush=True)
 
-    valid = [
-        lb for lb in labels
-        if (images_dir / lb["image"]).is_file()
-        and lb["class"] in CLASS_TO_IDX
-    ]
+    # Валидные: файл существует (метки-классы уже отфильтрованы по CLASS_TO_IDX в _load_dataset).
+    # Пустой список классов = размечено «ни одного» → all-negative пример (оставляем).
+    valid = [lb for lb in labels if (base_dir / lb["image"]).is_file()]
     if not valid:
         print("Нет валидных изображений.", file=sys.stderr)
         return {}
 
-    print(f"Изображений: {len(valid)}", flush=True)
-    class_counts = {}
+    n_multi = sum(1 for lb in valid if len(lb["classes"]) > 1)
+    n_empty = sum(1 for lb in valid if len(lb["classes"]) == 0)
+    print(f"Изображений: {len(valid)}  (мульти-класс: {n_multi}, без класса: {n_empty})", flush=True)
+    class_counts = {c: 0 for c in CLASSES}
     for lb in valid:
-        class_counts[lb["class"]] = class_counts.get(lb["class"], 0) + 1
-    for cls, cnt in sorted(class_counts.items()):
-        print(f"  {cls}: {cnt}", flush=True)
-
-    counts_arr = np.array([class_counts.get(c, 0) for c in CLASSES], dtype=np.float32)
-    total = counts_arr.sum()
+        for c in lb["classes"]:
+            class_counts[c] += 1
+    for cls in CLASSES:
+        print(f"  {cls}: {class_counts[cls]}", flush=True)
 
     _train_tf = transforms.Compose([
         transforms.Resize(256),
@@ -283,38 +328,48 @@ def train(
 
         def __getitem__(self, idx):
             item = self.items[idx]
-            img = Image.open(images_dir / item["image"]).convert("RGB")
-            return self.transform(img), CLASS_TO_IDX[item["class"]]
+            img = Image.open(base_dir / item["image"]).convert("RGB")
+            target = torch.zeros(NUM_CLASSES, dtype=torch.float32)
+            for c in item["classes"]:
+                target[CLASS_TO_IDX[c]] = 1.0
+            return self.transform(img), target
 
-    # Стратифицированное разбиение: val_split % от каждого класса (с шаффлом)
+    # Стратифицированное разбиение по КОМБИНАЦИИ классов (мульти-комбо представлены в train и val)
     import random as _random
-    by_class: dict[str, list] = {}
+    by_combo: dict[tuple, list] = {}
     for lb in valid:
-        by_class.setdefault(lb["class"], []).append(lb)
+        by_combo.setdefault(tuple(sorted(lb["classes"])), []).append(lb)
     train_items, val_items = [], []
-    for cls, items in by_class.items():
+    for combo, items in by_combo.items():
         shuffled = items[:]
         _random.shuffle(shuffled)
-        n_v = max(1, int(len(shuffled) * val_split))
+        n_v = max(1, int(len(shuffled) * val_split)) if len(shuffled) > 1 else 0
         val_items.extend(shuffled[:n_v])
         train_items.extend(shuffled[n_v:])
     n_train, n_val = len(train_items), len(val_items)
 
+    # Позитивы по классам В TRAIN (для pos_weight) — баланс мультихот
+    train_counts = np.zeros(NUM_CLASSES, dtype=np.float32)
+    for lb in train_items:
+        for c in lb["classes"]:
+            train_counts[CLASS_TO_IDX[c]] += 1
+
     train_ds = CropDataset(train_items, _train_tf)
 
     if weighted_sampling:
-        # каждый класс представлен равномерно в каждом батче
-        w_per_class = total / (NUM_CLASSES * np.where(counts_arr > 0, counts_arr, 1))
-        sample_weights = [float(w_per_class[CLASS_TO_IDX[lb["class"]]]) for lb in train_items]
+        # вес примера = макс. инв.частота среди его классов (upweight редких комбинаций)
+        w_per_class = n_train / (NUM_CLASSES * np.where(train_counts > 0, train_counts, 1))
+        sample_weights = []
+        for lb in train_items:
+            idxs = [CLASS_TO_IDX[c] for c in lb["classes"]]
+            sample_weights.append(float(max((w_per_class[i] for i in idxs), default=1.0)))
         sampler = WeightedRandomSampler(sample_weights, num_samples=len(train_items), replacement=True)
-        print(f"WeightedRandomSampler включён", flush=True)
+        print("WeightedRandomSampler включён", flush=True)
         train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=sampler)
     else:
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
 
-    val_loader = DataLoader(
-        CropDataset(val_items, _val_tf), batch_size=batch_size
-    )
+    val_loader = DataLoader(CropDataset(val_items, _val_tf), batch_size=batch_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Устройство: {device}", flush=True)
@@ -331,15 +386,17 @@ def train(
     optimizer = optim.Adam(model.classifier.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 
+    # BCEWithLogitsLoss (мультихот) + pos_weight = neg/pos на класс (при дисбалансе)
     if class_weights:
-        w = torch.tensor(total / (NUM_CLASSES * np.where(counts_arr > 0, counts_arr, 1)),
-                         dtype=torch.float32, device=device)
-        print(f"class_weights: { {c: round(float(w[i]), 2) for i, c in enumerate(CLASSES)} }", flush=True)
-        criterion = nn.CrossEntropyLoss(weight=w)
+        pos = np.where(train_counts > 0, train_counts, 1)
+        pos_weight = np.clip((n_train - pos) / pos, 1.0, 20.0)
+        pw = torch.tensor(pos_weight, dtype=torch.float32, device=device)
+        print(f"pos_weight: { {c: round(float(pw[i]), 2) for i, c in enumerate(CLASSES)} }", flush=True)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pw)
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.BCEWithLogitsLoss()
 
-    best_val_acc = 0.0
+    best_macro_f1 = -1.0
     history = []
 
     for epoch in range(1, epochs + 1):
@@ -351,7 +408,7 @@ def train(
             print(f"  epoch {epoch}: разморозка всех весов", flush=True)
 
         model.train()
-        train_loss, train_correct, train_total = 0.0, 0, 0
+        train_loss, train_total = 0.0, 0
         for imgs, targets in train_loader:
             imgs, targets = imgs.to(device), targets.to(device)
             optimizer.zero_grad()
@@ -360,47 +417,42 @@ def train(
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * len(imgs)
-            train_correct += (out.argmax(1) == targets).sum().item()
             train_total += len(imgs)
 
-        model.eval()
-        val_correct, val_total = 0, 0
-        with torch.no_grad():
-            for imgs, targets in val_loader:
-                imgs, targets = imgs.to(device), targets.to(device)
-                out = model(imgs)
-                val_correct += (out.argmax(1) == targets).sum().item()
-                val_total += len(imgs)
-
-        train_acc = train_correct / train_total if train_total else 0
-        val_acc = val_correct / val_total if val_total else 0
+        # Валидация: macro-F1 при пороге 0.5 (для выбора лучшей модели)
+        yv_true, yv_score = _collect_scores(model, val_loader, device)
+        val_metrics = _multilabel_metrics(yv_true, yv_score,
+                                          {c: ml.DEFAULT_THRESHOLD for c in CLASSES})
+        val_f1 = val_metrics["macro_f1"]
+        val_map = val_metrics["mAP"]
+        train_loss_avg = train_loss / train_total if train_total else 0.0
         scheduler.step()
 
-        history.append({"epoch": epoch, "train_acc": round(train_acc, 4), "val_acc": round(val_acc, 4)})
+        history.append({"epoch": epoch, "train_loss": round(train_loss_avg, 4),
+                        "val_macro_f1": val_f1, "val_mAP": val_map})
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if val_f1 > best_macro_f1:
+            best_macro_f1 = val_f1
             torch.save(model.state_dict(), output_dir / "best.pt")
             _export_onnx(model, onnx_path, device)
-            print(f"  epoch {epoch:3d}/{epochs}  train_acc={train_acc:.3f}  val_acc={val_acc:.3f}  ← best → {onnx_path.name}", flush=True)
+            print(f"  epoch {epoch:3d}/{epochs}  loss={train_loss_avg:.4f}  val_F1={val_f1:.3f}  mAP={val_map:.3f}  ← best → {onnx_path.name}", flush=True)
         else:
-            print(f"  epoch {epoch:3d}/{epochs}  train_acc={train_acc:.3f}  val_acc={val_acc:.3f}", flush=True)
+            print(f"  epoch {epoch:3d}/{epochs}  loss={train_loss_avg:.4f}  val_F1={val_f1:.3f}  mAP={val_map:.3f}", flush=True)
 
-        # progress.json после каждой эпохи
         progress_path.write_text(json.dumps({
             "model_tag": model_tag,
             "epoch": epoch,
             "epochs": epochs,
-            "best_val_acc": round(best_val_acc, 4),
+            "best_val_macro_f1": round(best_macro_f1, 4),
             "history": history,
         }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # Загружаем лучшие веса и делаем финальный экспорт
+    # Лучшие веса → финальный экспорт
     model.load_state_dict(torch.load(output_dir / "best.pt", map_location=device))
     model.eval()
     _export_onnx(model, onnx_path, device)
 
-    # Сохраняем backbone для инициализации Модели 2 (5_train_residents.py)
+    # Backbone для инициализации Модели 2 (5_train_residents.py)
     backbone_path = models_dir() / "backbone.pt"
     backbone_state = {k: v for k, v in model.state_dict().items()
                       if k.startswith("features.")}
@@ -409,27 +461,35 @@ def train(
 
     (output_dir / "best.pt").unlink(missing_ok=True)
 
-    # Полный инференс по датасету после обучения
-    print("\nИнференс по датасету…", flush=True)
-    y_true_full, y_pred_full = _eval_dataset(model, valid, images_dir, device, batch_size, _val_tf)
-    y_true_val,  y_pred_val  = _eval_dataset(model, val_items, images_dir, device, batch_size, _val_tf)
-    eval_full = _compute_eval_metrics(y_true_full, y_pred_full)
-    eval_val  = _compute_eval_metrics(y_true_val,  y_pred_val)
-    print(f"  full:  accuracy={eval_full['accuracy']:.3f}  macro_f1={eval_full['macro_f1']:.3f}", flush=True)
-    print(f"  val:   accuracy={eval_val['accuracy']:.3f}   macro_f1={eval_val['macro_f1']:.3f}", flush=True)
+    # Подбор порогов по КЛАССАМ на валидации → метрики на val и по всему датасету
+    print("\nПодбор порогов по классам (валидация)…", flush=True)
+    yv_true, yv_score = _collect_scores(model, val_loader, device)
+    thresholds = _tune_thresholds(yv_true, yv_score)
+    print(f"  пороги: { {c: thresholds[c] for c in CLASSES} }", flush=True)
+
+    full_loader = DataLoader(CropDataset(valid, _val_tf), batch_size=batch_size)
+    yf_true, yf_score = _collect_scores(model, full_loader, device)
+    eval_full = _multilabel_metrics(yf_true, yf_score, thresholds)
+    eval_val = _multilabel_metrics(yv_true, yv_score, thresholds)
+    print(f"  full:  macro_F1={eval_full['macro_f1']:.3f}  mAP={eval_full['mAP']:.3f}  subset_acc={eval_full['subset_accuracy']:.3f}", flush=True)
+    print(f"  val:   macro_F1={eval_val['macro_f1']:.3f}   mAP={eval_val['mAP']:.3f}   subset_acc={eval_val['subset_accuracy']:.3f}", flush=True)
     for cls in CLASSES:
         mf, mv = eval_full["by_class"][cls], eval_val["by_class"][cls]
-        print(f"  {cls}: full acc={mf['accuracy']:.3f} f1={mf['f1']:.3f} | val acc={mv['accuracy']:.3f} f1={mv['f1']:.3f} (n={mv['support']})", flush=True)
+        print(f"  {cls}: thr={mv['threshold']:.2f} | full P={mf['precision']:.3f} R={mf['recall']:.3f} F1={mf['f1']:.3f} AP={mf['ap']:.3f}"
+              f" | val F1={mv['f1']:.3f} AP={mv['ap']:.3f} (n={mv['support']})", flush=True)
 
     metrics = {
         "model_tag": model_tag,
+        "multi_label": True,
         "dataset_version": dataset_version,
         "dataset_path": dataset_path_rel,
-        "best_val_acc": round(best_val_acc, 4),
+        "best_val_macro_f1": round(best_macro_f1, 4),
         "epochs": epochs,
         "train_samples": n_train,
         "val_samples": n_val,
+        "multi_class_samples": n_multi,
         "class_counts": class_counts,
+        "thresholds": thresholds,
         "history": history,
         "model_path": str(onnx_path.relative_to(REPO_ROOT)),
         "backbone_path": str(backbone_path.relative_to(REPO_ROOT)),
@@ -440,25 +500,27 @@ def train(
         metrics=metrics,
         dataset_version=dataset_version,
         dataset_path=dataset_path_rel,
+        multi_label=True,
+        thresholds=thresholds,
     )
-    print(f"\nЛучший val_acc: {best_val_acc:.3f}")
+    print(f"\nЛучший val macro-F1: {best_macro_f1:.3f}")
     print(f"Модель: {onnx_path}")
     print(f"Результаты: {manifest_path}")
     return metrics
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Обучение классификатора группы (Модель 1)")
+    ap = argparse.ArgumentParser(description="Обучение классификатора группы (Модель 1, multi-label)")
     ap.add_argument("--data", type=Path, required=True,
-                    help="Путь к zip-архиву или директории с images/ и labels.json")
+                    help="v4-датасет (single/+multi/+labels.json), labels.json или папка-по-классам")
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--val-split", type=float, default=0.2)
-    ap.add_argument("--class-weights", action="store_true",
-                    help="Взвешенная функция потерь (рекомендуется при дисбалансе классов)")
+    ap.add_argument("--no-class-weights", dest="class_weights", action="store_false",
+                    help="Отключить pos_weight (по умолчанию включён для баланса мультихота)")
     ap.add_argument("--weighted-sampling", action="store_true",
-                    help="WeightedRandomSampler: равномерная выборка классов в каждом батче")
+                    help="WeightedRandomSampler: upweight примеров с редкими классами")
     ap.add_argument("--output", type=Path,
                     default=REPO_ROOT / ".output" / "train" / "3_train_groups" / "run")
     args = ap.parse_args()
