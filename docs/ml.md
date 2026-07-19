@@ -44,6 +44,71 @@ LEGACY_CLASS_MIGRATIONS  # resident → 1_resident, courier → unknown, …
 
 ---
 
+## Multi-label Модели 1 (датасет v4)
+
+**Проблема single-label.** YOLO кропает человека с паддингом 0.40 — в кроп часто попадает
+несколько людей РАЗНЫХ классов (житель + курьер и т.п.), но метка одна (softmax + argmax).
+Модель учится на «шумной» метке и теряет со-встречающиеся классы.
+
+**Решение (multi-label, начиная с датасета v4).** Кроп остаётся per-person (bbox YOLO),
+но размечается и предсказывается **НАБОРОМ классов**: sigmoid + порог на каждый класс
+(вместо softmax + argmax). Меняется только Модель 1 (группы); Модель 2 (жители) не меняется,
+но получает вход уже из новой Модели 1.
+
+**Формат меток** (`src/common/utils/multilabel.py`, `labels.json`):
+
+```
+v2 (multi): {"version": 2, "task": "...", "labels": {img: ["class1", "class2"]}}
+v1 (old):   {"version": 1, "labels": {img: "class"}}      ← читается как {img: ["class"]}
+```
+
+Пустой список `[]` = размечено «ни одного класса»; отсутствие ключа = ещё не размечено.
+`multilabel.load_labels()` читает оба формата (подхват старой разметки), `save_labels()`
+пишет v2. `classes_from_probs(prob_map, thresholds)` → набор классов ≥ порога.
+
+**Структура датасета v4** (каталоги — для просмотра глазами; ИСТИНА = `labels.json`):
+
+```
+.data/groups/v4/dataset/
+  single/<class>/img.jpg   — кропы с ОДНИМ классом (по подкаталогам)
+  multi/img.jpg            — кропы с НЕСКОЛЬКИМИ классами (плоско)
+  labels.json              — ОБЩИЙ, {img: [classes]} (пути относительно каталога датасета)
+  sources.csv              — аудит
+```
+
+Старые v1/v2/v3 — single-label, НЕ мигрируются (в них лежит маркер `_FORMAT_single-label.txt`).
+
+**Обучение** (`3_train_groups.py`): `BCEWithLogitsLoss` по мультихот-таргетам, `pos_weight`
+= neg/pos на класс (баланс), стратификация по КОМБИНАЦИИ классов. Метрики: per-class
+precision/recall/F1/AP + macro/micro-F1 + mAP + subset-accuracy. Порог на КАЖДЫЙ класс
+подбирается по F1 на валидации → в манифест. Старые single-label датасеты тоже читаются
+(1 класс → 1-hot). Читает и v4 (`single/`+`multi/`+`labels.json`), и папки-классы, и `labels.json`.
+
+**Инференс модель-зависимый** (`src/ml/classify.py`): манифест модели (`<tag>.json`) хранит
+`multi_label` + `thresholds`. Если `multi_label=true` → sigmoid + пороги на класс →
+`predict_classes()` возвращает НАБОР; иначе (старые модели) softmax + argmax как раньше.
+Логиты старой модели обучены под single-label, поэтому sigmoid на них смысла не имеет —
+реальный multi-label только после переобучения (BCE).
+
+**Пайплайн** (`3_classify_groups.py`) раскладывает кроп по числа предсказанных классов:
+`single/<class>/` (1), `multi/` (≥2), `uncertain/` (0), `unknown/` (модель не загружена);
+ведёт общий `labels.json` (v2) и `classifications.csv` (+ колонки `classes`, `n_classes`,
+`to_identify`). В `identify` (Модель 2) идут кропы, чей набор содержит `1_resident`/`4_guest`:
+`single/1_resident/`, `single/4_guest/` и `multi/` (отфильтрованные по `labels.json`).
+
+**Разметчик** (`2_label_ui.py`) — мультивыбор во всех 3 режимах (тогглы классов ☑/☐,
+группировка плиток по комбинации, батч +/− класс). Подхватывает старую single-метку как
+1-элементную. Каталог датасета: правка набора классов перекладывает файл `single`↔`multi`↔`skip`
+и обновляет `labels.json`.
+
+**Минимальный поток v4:** разметить прямо в каталоге датасета
+(`2_label_ui --dataset .data/groups/v4/dataset`) → обучить (`3_train_groups --data .data/groups/v4/dataset`).
+Инструменты накопления датасета `dataset_groups.py` (build/apply) и активного отбора
+`dataset_v2_from_inference.py` пока single-label — на v2-метках они выводят подсказку и
+не запускаются (миграция под multi-label отложена).
+
+---
+
 ## Почему две модели с одной архитектурой
 
 | | Модель 1 (группы) | Модель 2 (жители) |

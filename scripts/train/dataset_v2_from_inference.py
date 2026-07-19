@@ -73,6 +73,19 @@ def _load_labels(labels_path: Path) -> dict[str, str]:
     return data.get("labels", {})
 
 
+def _is_multilabel(labels_path: Path) -> bool:
+    """labels.json — формат multi-label (v2 {img:[classes]})? Тогда стратегии здесь неприменимы."""
+    if not labels_path.is_file():
+        return False
+    try:
+        data = json.loads(labels_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    labels = data.get("labels", data)
+    return data.get("version") == 2 or (
+        isinstance(labels, dict) and any(isinstance(v, list) for v in labels.values()))
+
+
 def _load_csv(csv_path: Path) -> list[dict]:
     if not csv_path.is_file():
         return []
@@ -398,6 +411,16 @@ def main() -> int:
 
     labels_path = args.labels or (date_dir / "labels.json")
     csv_path    = args.csv    or _auto_find_csv(date_dir)
+
+    # Стратегии отбора (ошибка = класс≠подкаталог, псевдо-метки и т.п.) — single-label.
+    # На multi-label данных (v4) они неприменимы: класс не выводится из одного подкаталога.
+    if _is_multilabel(labels_path):
+        logger.error(
+            "labels.json — multi-label (v2). Стратегии отбора этого скрипта пока single-label.\n"
+            "  Для v4 обучайте прямо на размеченном каталоге "
+            "(single/<class>/ + multi/ + labels.json): 3_train_groups --data <dataset|inference-date>."
+        )
+        return 2
 
     labels   = _load_labels(labels_path)
     csv_rows = _load_csv(csv_path) if csv_path else []

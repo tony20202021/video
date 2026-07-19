@@ -45,6 +45,8 @@ EXTRA_ARGS=()
 # ── Входные каталоги ──────────────────────────────────────────────────────────
 # Добавлять/убирать по мере накопления новых дат.
 # Формат: --src <путь>  (по одному на каждый class-каталог)
+# ВНИМАНИЕ: v1/v2 — старая single-label раскладка (<class>/). Для v4 (multi-label) путь иной:
+#   --src ".../groups/v4/inference/images/<date>/single/1_resident"  (и single/4_guest, multi/)
 SOURCES=(
     # датасет v1
     --src "$REPO/.data/groups/v1/dataset/1_resident"        # 3927

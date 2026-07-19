@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
-# Автоматическое создание labels.json по результатам инференса (3_classify_groups).
+# Досев labels.json по результатам инференса (3_classify_groups) — multi-label (v4).
 #
-# Следит за .data/groups/v2/inference/images/ — для каждого каталога с датой
-# создаёт/обновляет labels.json внутри него на основе структуры подкаталогов-классов:
+# ВНИМАНИЕ: обычно НЕ нужен — 3_classify_groups.py уже пишет labels.json (v2) при инференсе,
+# а 2_label_ui ведёт его при ручной разметке. Скрипт лишь ДОСЕВАЕТ одиночные метки из
+# single/<class>/ для файлов, которых ещё нет в labels.json, и СОХРАНЯЕТ существующие
+# (в т.ч. multi/) — формат v2 {img: [classes]}, ключи относительно images/<date>/.
 #
 #   inference/images/YYYYMMDD/
-#     1_resident/crop1.jpg   →  labels["…/crop1.jpg"] = "1_resident"
-#     2_delivery/crop2.jpg   →  labels["…/crop2.jpg"] = "2_delivery"
-#     unknown/crop3.jpg      →  labels["…/crop3.jpg"] = "unknown"
-#     labels.json            ← создаётся/обновляется этим скриптом
-#
-# Формат labels.json идентичен выводу 2_label_ui и совместим с:
-#   ./sh/train/groups/1_dataset_groups.sh apply --labels inference/images/YYYYMMDD/labels.json
+#     single/1_resident/crop1.jpg  →  labels["single/1_resident/crop1.jpg"] = ["1_resident"]
+#     multi/crop2.jpg              →  сохраняется как есть из labels.json (набор классов)
+#     labels.json (v2)             ← создаётся/дополняется этим скриптом
 #
 # Usage:
 #   ./sh/train/groups/1_3_dataset_groups_inference_labels.sh
@@ -45,43 +43,40 @@ done
 _ts() { date '+%H:%M:%S'; }
 SCRIPT_NAME="$(basename "$0" .sh)"
 
-# ── Обновление labels.json для одного каталога с датой ────────────────────────
+# ── Досев labels.json для одного каталога с датой (v4 multi-label) ────────────
 #
-# Сканирует все *.jpg в подкаталогах первого уровня (имя подкаталога = класс),
-# строит {абс_путь: класс} и записывает labels.json.
-# Пропускает, если содержимое не изменилось.
+# Читает существующий labels.json (v2, сохраняет multi/), досеивает одиночные метки
+# из single/<class>/ для незнакомых файлов, пишет v2. Пропускает, если не изменилось.
 #
 _update_date_dir() {
     local date_dir="$1"
-    "$PYTHON" - "$date_dir" <<'PYEOF'
-import json, sys
+    "$PYTHON" - "$date_dir" "$REPO" <<'PYEOF'
+import sys
 from pathlib import Path
 
 date_dir = Path(sys.argv[1]).resolve()
-labels: dict[str, str] = {}
-
-for jpg in sorted(date_dir.rglob("*.jpg")):
-    rel = jpg.relative_to(date_dir)
-    parts = rel.parts
-    if len(parts) >= 2:          # class_dir/filename.jpg
-        cls = parts[0]
-        labels[str(jpg)] = cls
+repo = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(repo / "src"))
+from common.utils import multilabel as ml
+from common.utils.classes import GROUP_CLASSES
 
 labels_path = date_dir / "labels.json"
+labels = ml.load_labels(labels_path)          # {rel: [classes]} — сохраняем существующее (incl. multi/)
 
-if labels_path.is_file():
-    try:
-        existing = json.loads(labels_path.read_text(encoding="utf-8"))
-        if existing.get("labels") == labels:
-            sys.exit(0)          # нет изменений
-    except (json.JSONDecodeError, KeyError):
-        pass                     # повреждённый JSON — перезапишем
+single_root = date_dir / "single"
+if single_root.is_dir():
+    for cls_dir in sorted(single_root.iterdir()):
+        if not cls_dir.is_dir() or cls_dir.name not in GROUP_CLASSES:
+            continue
+        for f in sorted(cls_dir.glob("*.jpg")):
+            rel = f.relative_to(date_dir).as_posix()
+            labels.setdefault(rel, [cls_dir.name])
 
-labels_path.write_text(
-    json.dumps({"version": 1, "labels": labels}, ensure_ascii=False, indent=2),
-    encoding="utf-8",
-)
-print(f"labels.json: {len(labels)} записей → {labels_path}")
+before = labels_path.read_text(encoding="utf-8") if labels_path.is_file() else ""
+ml.save_labels(labels_path, labels, task="classify")
+after = labels_path.read_text(encoding="utf-8")
+if after != before:
+    print(f"labels.json: {len(labels)} записей → {labels_path}")
 PYEOF
 }
 

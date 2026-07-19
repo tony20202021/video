@@ -62,7 +62,7 @@ SERVICES = [
         "name":       "video-classify",
         "in_label":   ".output/pipeline/  2_yolo_boxes_files/images/",
         "in_dir":     REPO / ".output/pipeline/2_yolo_boxes_files/images",
-        "out_label":  f".data/groups/{GROUPS_VER}/inference/  images/",
+        "out_label":  f".data/groups/{GROUPS_VER}/inference/  images/  (single/ multi/)",
         "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/images",
         "log_work":   r"Готово|Найдено кропов",
         "log_wait":   r"ожидание|Кропов нет",
@@ -71,7 +71,7 @@ SERVICES = [
     },
     {
         "name":       "video-identify",
-        "in_label":   f"groups/{GROUPS_VER}/inference/  1_resident/  4_guest/",
+        "in_label":   f"groups/{GROUPS_VER}/  single/1_resident  single/4_guest  multi/",
         "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
         "out_label":  f".data/residents/{RESIDENTS_VER}/inference/  images/",
         "out_dir":    REPO / f".data/residents/{RESIDENTS_VER}/inference/images",

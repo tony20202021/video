@@ -59,6 +59,30 @@ from common.utils.classes import (
     LEGACY_CLASS_MIGRATIONS,
 )
 
+
+def _guard_single_label(raw: dict) -> bool:
+    """True + печать подсказки, если labels.json — multi-label (v2). build/apply пока single-label.
+
+    Для датасета v4 (multi-label) размечайте прямо в каталоге датасета:
+      2_label_ui --dataset .data/groups/v4/dataset — разметчик сам ведёт single/<class>/ + multi/
+      + labels.json (v2), а обучение (3_train_groups) читает эту раскладку напрямую.
+    """
+    labels = raw.get("labels", raw)
+    is_multi = raw.get("version") == 2 or (
+        isinstance(labels, dict) and any(isinstance(v, list) for v in labels.values()))
+    if is_multi:
+        print(
+            "[!] labels.json — формат multi-label (v2 {img:[classes]}). "
+            "dataset_groups build/apply пока single-label и НЕ поддерживает мульти-раскладку.\n"
+            "    Для v4 размечайте прямо в каталоге датасета: "
+            "2_label_ui --dataset .data/groups/v4/dataset\n"
+            "    (разметчик ведёт single/<class>/ + multi/ + labels.json; "
+            "3_train_groups читает их напрямую).",
+            file=sys.stderr,
+        )
+    return is_multi
+
+
 DEFAULT_DATA = REPO_ROOT / ".data" / "groups"
 DEFAULT_LABELS = REPO_ROOT / ".output" / "train" / "2_label_ui" / "labels.json"
 MSK = timezone(timedelta(hours=3))
@@ -122,6 +146,8 @@ def cmd_build(args) -> int:
         return 1
 
     raw = json.loads(labels_path.read_text(encoding="utf-8"))
+    if _guard_single_label(raw):
+        return 2
     labels: dict[str, str] = raw.get("labels", {})
 
     # Определяем выходной каталог
@@ -200,6 +226,8 @@ def cmd_apply(args) -> int:
         return 1
 
     raw = json.loads(labels_path.read_text(encoding="utf-8"))
+    if _guard_single_label(raw):
+        return 2
     labels: dict[str, str] = raw.get("labels", {})
 
     for cls in ALL_CLASSES:
