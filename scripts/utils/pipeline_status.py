@@ -259,24 +259,29 @@ def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
 def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
     """Разбор строк журнала (чистая функция — тестируема без journalctl):
       count   — число совпавших событий (прогонов/приёмов);
-      times   — тайминги из 'Время: N с' (min/avg/max/last);
+      times   — тайминги НА 1 КАДР/ФАЙЛ: 'Время: N с' делится на «X кадров» в той же строке
+                (батч-сервисы), либо N как есть (1 файл на строку — transfer). Так видно степень
+                адаптивного замедления (сон лимитера на кроп). min/avg/max/last;
       frames  — сумма «X кадров» из '1 батч (X кадров)' (батч-сервисы);
       bursts  — число всплесков (группы событий, разделённые паузой > BURST_GAP_SEC).
     """
     count = 0
-    times: list[float] = []
+    times: list[float] = []   # секунд на 1 кадр/файл
     frames = 0
     ts_secs: list[int] = []
     for line in lines:
         if re.search(stats_pat, line):
             count += 1
+            fm = re.search(r"(\d+)\s*кадров", line)
+            items = int(fm.group(1)) if fm else 0
+            if fm:
+                frames += items
             if has_timing:
                 m = re.search(r"Время:\s*([\d.,]+)\s*с", line)
                 if m:
-                    times.append(float(m.group(1).replace(",", ".")))
-            fm = re.search(r"(\d+)\s*кадров", line)
-            if fm:
-                frames += int(fm.group(1))
+                    dur = float(m.group(1).replace(",", "."))
+                    # на 1 кадр (батч) или на 1 файл (transfer: строка = 1 файл, кадры не логируются)
+                    times.append(dur / items if items > 0 else dur)
             tm = re.search(r"\b(\d{2}):(\d{2}):(\d{2})\b", line)
             if tm:
                 ts_secs.append(int(tm.group(1)) * 3600 + int(tm.group(2)) * 60 + int(tm.group(3)))
@@ -288,10 +293,10 @@ def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
                 bursts += 1
     return dict(
         count=count, frames=frames, bursts=bursts,
-        min=round(min(times), 1) if times else None,
-        avg=round(sum(times) / len(times), 1) if times else None,
-        max=round(max(times), 1) if times else None,
-        last=round(times[-1], 1) if times else None,
+        min=round(min(times), 2) if times else None,
+        avg=round(sum(times) / len(times), 2) if times else None,
+        max=round(max(times), 2) if times else None,
+        last=round(times[-1], 2) if times else None,
     )
 
 
@@ -438,13 +443,13 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None,
         x = st["count"]
         head = (f"{n} {_plural(n, 'прогон', 'прогона', 'прогонов')}{suffix} "
                 f"({x} {_plural(x, 'файл', 'файла', 'файлов')})")
-        time_unit = "1кадр"
+        time_unit = "1файл"     # тайминг делится на файлы (1 строка = 1 файл)
     else:  # batch
         n = st["count"]
         x = st.get("frames", 0)
         head = (f"{n} {_plural(n, 'прогон', 'прогона', 'прогонов')}{suffix} "
                 f"({x} {_plural(x, 'кадр', 'кадра', 'кадров')})")
-        time_unit = "1прогон"
+        time_unit = "1кадр"     # тайминг делится на кадры → видно адаптивное замедление
     lines = [head]
     if has_timing and st["avg"] is not None:
         mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
