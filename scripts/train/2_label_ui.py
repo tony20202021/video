@@ -456,20 +456,7 @@ function render() {
   document.getElementById('stats').textContent =
     `${crops.length} кропов · размечено ${labeled}`;
 
-  // Батч: добавить класс всем выбранным (+ очистить). Мульти-лейбл — добавление, не замена.
-  document.getElementById('bulk-btns').innerHTML =
-    '<span style="color:#666;font-size:11px;align-self:center">+класс:</span>' +
-    classes.map((cls, i) => {
-      const color = CLASS_COLORS[i] || '#888';
-      return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','add')"
-        style="border-left-color:${color}">+ ${cls}</button>`;
-    }).join('') +
-    classes.map((cls, i) => {
-      const color = CLASS_COLORS[i] || '#888';
-      return `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','remove')"
-        style="border-left-color:${color};opacity:.7">− ${cls}</button>`;
-    }).join('') +
-    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'clear')">Очистить</button>`;
+  // Батч-чекбоксы строит updateBulkBar() — их состояние зависит от текущего выделения.
 
   // Группируем по КОМБИНАЦИИ классов (мульти-кроп — в своей группе-комбо)
   const groups = {};
@@ -558,9 +545,46 @@ function _syncGalleryPadding() {
 }
 new ResizeObserver(_syncGalleryPadding).observe(document.getElementById('bulk-bar'));
 
+// Трёхпозиционные чек-боксы классов для выделения:
+//   ☑ — класс есть у ВСЕХ выбранных; ☐ — ни у кого; ◪ N/M — частично (у N из M).
+//   Клик: если у всех → снять у всех; иначе (пусто/частично) → включить всем.
+function _bulkClassCount(cls) {
+  let cnt = 0;
+  selected.forEach(idx => { if ((labels[crops[idx]] || []).includes(cls)) cnt++; });
+  return cnt;
+}
+
+function renderBulkChecks() {
+  const total = selected.size;
+  document.getElementById('bulk-btns').innerHTML =
+    '<span style="color:#666;font-size:11px;align-self:center">классы:</span>' +
+    classes.map((cls, i) => {
+      const color = CLASS_COLORS[i] || '#888';
+      const cnt = _bulkClassCount(cls);
+      const state = (total && cnt === total) ? 'full' : (cnt === 0 ? 'empty' : 'partial');
+      const box = state === 'full' ? '☑' : (state === 'partial' ? '◪' : '☐');
+      const stl = state === 'full'
+        ? `background:${color}33;color:${color};border-left-color:${color}`
+        : (state === 'partial'
+            ? `background:#3a2f10;color:#f9ca24;border-left-color:#f9ca24`
+            : `border-left-color:${color};opacity:.65`);
+      const badge = state === 'partial' ? ` <span style="opacity:.75">${cnt}/${total}</span>` : '';
+      return `<button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
+        style="${stl}">${box} ${cls}${badge}</button>`;
+    }).join('') +
+    `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'clear')">Очистить всё</button>`;
+}
+
+function toggleBulkClass(cls) {
+  if (!selected.size) return;
+  // у всех включён → снять у всех; иначе (пусто/частично) → включить всем
+  applyBulk(cls, _bulkClassCount(cls) === selected.size ? 'remove' : 'add');
+}
+
 function updateBulkBar() {
   document.getElementById('bulk-count').textContent = 'Выбрано: ' + selected.size;
   document.getElementById('bulk-bar').classList.toggle('show', selected.size > 0);
+  if (selected.size) renderBulkChecks();
   requestAnimationFrame(_syncGalleryPadding);
 }
 
@@ -574,9 +598,7 @@ async function applyBulk(cls, action) {
   });
   const d = await (await fetch('/api/state')).json();
   labels = d.labels;
-  selected.clear();
-  lastToggleIdx = -1;
-  render();
+  render();   // выделение НЕ сбрасываем — можно отмечать несколько классов подряд
 }
 
 function openModal(i) {
@@ -807,16 +829,9 @@ function render() {
   document.getElementById('stats').textContent =
     `${files.length} файлов · ${layout === 'v4' ? 'multi-label' : 'single-label'}`;
 
-  // Батч: v4 — добавить/убрать класс; legacy — переместить в класс
-  if (layout === 'v4') {
-    document.getElementById('bulk-btns').innerHTML =
-      '<span style="color:#666;font-size:11px;align-self:center">+класс:</span>' +
-      classes.map((cls, i) => `<button class="btn-bulk btn-bulk-cls"
-        onclick="applyBulk('${cls}','add')" style="border-left-color:${CLASS_COLORS[i]||'#888'}">+ ${cls}</button>`).join('') +
-      classes.map((cls, i) => `<button class="btn-bulk btn-bulk-cls"
-        onclick="applyBulk('${cls}','remove')" style="border-left-color:${CLASS_COLORS[i]||'#888'};opacity:.7">− ${cls}</button>`).join('') +
-      `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить</button>`;
-  } else {
+  // Батч: v4 — чек-боксы классов (строит updateBulkBar, зависят от выделения);
+  //        legacy (single-label) — переместить в класс
+  if (layout !== 'v4') {
     document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) =>
       `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','move')"
         style="border-left-color:${CLASS_COLORS[i]||'#888'}">${cls}</button>`).join('');
@@ -909,9 +924,45 @@ function _syncGalleryPadding() {
 }
 new ResizeObserver(_syncGalleryPadding).observe(document.getElementById('bulk-bar'));
 
+// Трёхпозиционные чек-боксы классов (v4): ☑ у всех · ☐ ни у кого · ◪ N/M частично.
+// Клик: у всех → снять у всех; иначе → включить всем. (Файлы перекладываются single↔multi↔skip,
+// поэтому после применения выделение сбрасывается.)
+function _bulkClassCount(cls) {
+  let cnt = 0;
+  selected.forEach(i => { const r = allFiles[i]; if (r && (r.classes || []).includes(cls)) cnt++; });
+  return cnt;
+}
+
+function renderBulkChecks() {
+  const total = selected.size;
+  document.getElementById('bulk-btns').innerHTML =
+    '<span style="color:#666;font-size:11px;align-self:center">классы:</span>' +
+    classes.map((cls, i) => {
+      const color = CLASS_COLORS[i] || '#888';
+      const cnt = _bulkClassCount(cls);
+      const state = (total && cnt === total) ? 'full' : (cnt === 0 ? 'empty' : 'partial');
+      const box = state === 'full' ? '☑' : (state === 'partial' ? '◪' : '☐');
+      const stl = state === 'full'
+        ? `background:${color}33;color:${color};border-left-color:${color}`
+        : (state === 'partial'
+            ? `background:#3a2f10;color:#f9ca24;border-left-color:#f9ca24`
+            : `border-left-color:${color};opacity:.65`);
+      const badge = state === 'partial' ? ` <span style="opacity:.75">${cnt}/${total}</span>` : '';
+      return `<button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
+        style="${stl}">${box} ${cls}${badge}</button>`;
+    }).join('') +
+    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>`;
+}
+
+function toggleBulkClass(cls) {
+  if (!selected.size) return;
+  applyBulk(cls, _bulkClassCount(cls) === selected.size ? 'remove' : 'add');
+}
+
 function updateBulkBar() {
   document.getElementById('bulk-count').textContent = 'Выбрано: ' + selected.size;
   document.getElementById('bulk-bar').classList.toggle('show', selected.size > 0);
+  if (selected.size && layout === 'v4') renderBulkChecks();
   requestAnimationFrame(_syncGalleryPadding);
 }
 
