@@ -9,21 +9,15 @@
   - Родительский каталог:  .output/cameras/5_2_yolo_boxes_files/  (все run_*)
   Можно смешивать.
 
-Выход:
-  .output/cameras/6_2_classify_groups_files/run_<ts>/
-    <parent_stem>/
-      <5_2_run_name>/
-        <sub_run>/
-          <cam>/
-            classified/
-              resident/
-              courier/
-              delivery/
-              utilities/
-              other/
-              uncertain/     — уверенность ниже classify_conf
-              unknown/       — модель не загружена
+Выход (multi-label, парадигма каталогов совместима с датасетом v4):
+  images/<date>/
+    single/<class>/    — кроп с ОДНИМ классом (1_resident/2_delivery/3_utilities/4_guest)
+    multi/             — кроп с НЕСКОЛЬКИМИ классами (плоско)
+    uncertain/         — ни один класс не прошёл порог (single: conf<classify_conf; multi: <порогов)
+    unknown/           — модель не загружена
+    labels.json        — ОБЩИЙ, формат v2 {img: [classes]} (пути относительно images/<date>/)
     classifications.csv
+  meta/<date>/<run_ts>/
     timeline_chart.png
     cpu_chart.png
     run_stats.json
@@ -54,7 +48,8 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from common.utils.atomic import copy as _copy
-from common.utils.classes import GROUP_CLASS_COLORS, GROUP_CLASSES
+from common.utils.classes import GROUP_CLASS_COLORS, GROUP_CLASSES, RESIDENT_CLASS
+from common.utils import multilabel as _ml
 from common.utils.camera_run import (
     CpuMonitor as _CpuMonitor,
     save_cpu_csv as _save_cpu_csv,
@@ -69,9 +64,59 @@ logger = logging.getLogger(__name__)
 
 MSK = timezone(timedelta(hours=3))
 
-DEFAULT_OUTPUT = REPO_ROOT / ".data" / "groups" / "v1" / "inference"
+DEFAULT_OUTPUT = REPO_ROOT / ".data" / "groups" / "v4" / "inference"
 
 _CLASS_COLORS = GROUP_CLASS_COLORS
+
+GUEST_CLASS = "4_guest"
+# Классы, кропы которых отправляются на идентификацию (Модель 2)
+IDENTIFY_CLASSES = {RESIDENT_CLASS, GUEST_CLASS}
+
+
+def _placement(classes: list[str], model_ready: bool) -> tuple[str, Path]:
+    """(метка out_class, путь подкаталога относительно images/<date>/) по набору классов.
+
+    модель не готова → unknown/;  пустой набор → uncertain/;
+    1 класс → single/<class>/;  несколько → multi/ (плоско).
+    """
+    if not model_ready:
+        return "unknown", Path("unknown")
+    if not classes:
+        return "uncertain", Path("uncertain")
+    if len(classes) == 1:
+        return classes[0], Path("single") / classes[0]
+    return "multi", Path("multi")
+
+
+_CSV_FIELDS = [
+    "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
+    "group", "group_conf", "conf_2nd", "margin",
+    *[f"p_{cls}" for cls in GROUP_CLASSES],
+    "classes", "n_classes", "to_identify", "out_class",
+]
+
+
+def _make_row(res: dict, out_class: str, *, mono_s, ts_epoch,
+              run_name, sub_run, cam, crop) -> dict:
+    """Строка classifications.csv из результата _classify + метки размещения."""
+    classes = res["classes"]
+    return {
+        "mono_s":     mono_s,
+        "ts_epoch":   ts_epoch,
+        "run_name":   run_name,
+        "sub_run":    sub_run,
+        "cam":        cam,
+        "crop":       crop,
+        "group":      res["group"],
+        "group_conf": round(res["group_conf"], 3),
+        "conf_2nd":   round(res["conf_2nd"], 3),
+        "margin":     round(res["group_conf"] - res["conf_2nd"], 3),
+        **{f"p_{cls}": round(res["prob_map"].get(cls, 0.0), 3) for cls in GROUP_CLASSES},
+        "classes":     "|".join(classes),
+        "n_classes":   len(classes),
+        "to_identify": any(c in IDENTIFY_CLASSES for c in classes),
+        "out_class":   out_class,
+    }
 
 
 
@@ -134,21 +179,29 @@ def _load_classifier():
         return None, None
 
 
-def _classify(clf, bgr_crop, *, classify_conf: float):
-    """Возвращает (group_class, group_conf, out_class, conf_2nd, prob_map).
-
-    out_class — имя подкаталога: group_class если уверенность >= classify_conf,
-    иначе 'uncertain'.
-    conf_2nd  — вторая по величине вероятность (для margin = group_conf − conf_2nd).
-    prob_map  — {class: probability} для всех классов.
+def _classify(clf, bgr_crop, *, classify_conf: float) -> dict:
+    """Multi-label классификация кропа. Возвращает dict:
+      classes    — НАБОР классов (список). multi-модель: sigmoid ≥ порогов; single-модель:
+                   [argmax] если conf ≥ classify_conf, иначе [] (uncertain).
+      group      — лучший класс (для CSV/аудита), group_conf — его вероятность.
+      conf_2nd   — вторая по величине вероятность (margin = group_conf − conf_2nd).
+      prob_map   — {class: probability} по всем классам.
     """
-    if clf is None:
-        return "unknown", 0.0, "unknown", 0.0, {}
-    group_class, group_conf, prob_map = clf.classify(bgr_crop)
-    out_class = group_class if group_conf >= classify_conf else "uncertain"
-    sorted_probs = sorted(prob_map.values(), reverse=True)
-    conf_2nd = sorted_probs[1] if len(sorted_probs) > 1 else 0.0
-    return group_class, group_conf, out_class, conf_2nd, prob_map
+    if clf is None or not clf.ready:
+        return {"classes": [], "group": "unknown", "group_conf": 0.0,
+                "conf_2nd": 0.0, "prob_map": {}}
+    pred_classes, prob_map = clf.predict_classes(bgr_crop)
+    ordered = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)
+    group, group_conf = ordered[0] if ordered else ("unknown", 0.0)
+    conf_2nd = ordered[1][1] if len(ordered) > 1 else 0.0
+    # single-модель: predict_classes вернул [argmax] без учёта уверенности → применяем порог тут.
+    # multi-модель: пороги на класс уже применены внутри predict_classes.
+    if not clf.multi_label:
+        classes = list(pred_classes) if group_conf >= classify_conf else []
+    else:
+        classes = list(pred_classes)
+    return {"classes": classes, "group": group, "group_conf": group_conf,
+            "conf_2nd": conf_2nd, "prob_map": prob_map}
 
 
 # ─── Timestamp from crop filename ────────────────────────────────────────────
@@ -170,55 +223,36 @@ def _detect_source(filename: str) -> str:
 
 
 def _rebuild_csv(clf, images_dir: Path, *, classify_conf: float, ext: str = "jpg") -> int:
-    """Перестраивает classifications.csv из файлов в images_dir/<class>/."""
+    """Перестраивает classifications.csv из файлов в images_dir (single/*/ + multi/ + …)."""
     import cv2
 
-    all_files: list[Path] = []
-    for d in sorted(images_dir.iterdir()):
-        if d.is_dir():
-            for f in sorted(d.iterdir()):
-                if f.suffix.lower() == f".{ext}":
-                    all_files.append(f)
-
+    # Пропускаем служебные каталоги meta/, берём все кропы рекурсивно
+    all_files = sorted(f for f in images_dir.rglob(f"*.{ext}")
+                       if f.is_file() and "meta" not in f.relative_to(images_dir).parts)
     if not all_files:
         logger.warning("[rebuild-csv] Файлов не найдено в %s", images_dir)
         return 0
 
     logger.info("[rebuild-csv] %d файлов в %s", len(all_files), images_dir)
-
-    _csv_fields = [
-        "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
-        "group", "group_conf", "conf_2nd", "margin",
-        *[f"p_{cls}" for cls in GROUP_CLASSES],
-        "out_class",
-    ]
+    model_ready = clf is not None and clf.ready
 
     rows = []
     for crop_path in all_files:
         bgr = cv2.imread(str(crop_path))
         if bgr is None:
             continue
-        group, group_conf, out_class, conf_2nd, prob_map = _classify(
-            clf, bgr, classify_conf=classify_conf,
-        )
-        rows.append({
-            "mono_s":     0.0,
-            "ts_epoch":   _crop_ts_epoch(crop_path),
-            "run_name":   "rebuilt",
-            "sub_run":    _detect_subrun(crop_path.name),
-            "cam":        _detect_source(crop_path.name),
-            "crop":       crop_path.name,
-            "group":      group,
-            "group_conf": round(group_conf, 3),
-            "conf_2nd":   round(conf_2nd, 3),
-            "margin":     round(group_conf - conf_2nd, 3),
-            **{f"p_{cls}": round(prob_map.get(cls, 0.0), 3) for cls in GROUP_CLASSES},
-            "out_class":  out_class,
-        })
+        res = _classify(clf, bgr, classify_conf=classify_conf)
+        out_class, _ = _placement(res["classes"], model_ready)
+        rows.append(_make_row(
+            res, out_class,
+            mono_s=0.0, ts_epoch=_crop_ts_epoch(crop_path), run_name="rebuilt",
+            sub_run=_detect_subrun(crop_path.name), cam=_detect_source(crop_path.name),
+            crop=crop_path.name,
+        ))
 
     csv_path = images_dir / "classifications.csv"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=_csv_fields)
+        w = csv.DictWriter(f, fieldnames=_CSV_FIELDS)
         w.writeheader()
         w.writerows(rows)
 
@@ -522,14 +556,13 @@ def main() -> int:
                         continue
 
                     t0 = time.monotonic()
-                    group, group_conf, out_class, conf_2nd, prob_map = _classify(
-                        clf, bgr,
-                        classify_conf=args.classify_conf,
-                    )
+                    res = _classify(clf, bgr, classify_conf=args.classify_conf)
                     classify_ms = (time.monotonic() - t0) * 1000
                     timing_log.append([round(t0 - t_start, 3), round(classify_ms, 1)])
 
-                    dest = images_dir / out_class
+                    _model_ready = clf is not None and clf.ready
+                    out_class, rel_dir = _placement(res["classes"], _model_ready)
+                    dest = images_dir / rel_dir
                     dest.mkdir(parents=True, exist_ok=True)
                     if args.copy:
                         _copy(crop_path, dest / crop_path.name)
@@ -537,21 +570,14 @@ def main() -> int:
                         shutil.move(str(crop_path), dest / crop_path.name)
 
                     ts_ep = _crop_ts_epoch(crop_path)
-                    class_log.append({
-                        "mono_s":     round(t0 - t_start, 3),
-                        "ts_epoch":   ts_ep,
-                        "run_name":   _run_ts,
-                        "sub_run":    sub_run_name,
-                        "cam":        cam_name,
-                        "crop":       crop_path.name,
-                        "group":      group,
-                        "group_conf": round(group_conf, 3),
-                        "conf_2nd":   round(conf_2nd, 3),
-                        "margin":     round(group_conf - conf_2nd, 3),
-                        **{f"p_{cls}": round(prob_map.get(cls, 0.0), 3)
-                           for cls in GROUP_CLASSES},
-                        "out_class":  out_class,
-                    })
+                    row = _make_row(
+                        res, out_class,
+                        mono_s=round(t0 - t_start, 3), ts_epoch=ts_ep, run_name=_run_ts,
+                        sub_run=sub_run_name, cam=cam_name, crop=crop_path.name,
+                    )
+                    # относительный путь в labels.json — совместим со структурой датасета v4
+                    row["_rel"] = str((rel_dir / crop_path.name).as_posix())
+                    class_log.append(row)
                     grand_classified[out_class] += 1
                     n_cam += 1
 
@@ -574,18 +600,11 @@ def main() -> int:
     _periodic_stop.set()
     cpu_log = cpu_monitor.stop()
 
-    _csv_fields = [
-        "mono_s", "ts_epoch", "run_name", "sub_run", "cam", "crop",
-        "group", "group_conf", "conf_2nd", "margin",
-        *[f"p_{cls}" for cls in GROUP_CLASSES],
-        "out_class",
-    ]
-
     if class_log:
-        # per-run CSV
+        # per-run CSV (_rel — служебное поле для labels.json, в CSV не пишем)
         csv_path = meta_dir / "classifications.csv"
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=_csv_fields)
+            w = csv.DictWriter(f, fieldnames=_CSV_FIELDS, extrasaction="ignore")
             w.writeheader()
             w.writerows(class_log)
         logger.info(f"classifications.csv: {len(class_log)} записей → {csv_path}")
@@ -594,30 +613,25 @@ def main() -> int:
         cumulative_csv = images_dir / "classifications.csv"
         write_header = not cumulative_csv.is_file()
         with open(cumulative_csv, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=_csv_fields)
+            w = csv.DictWriter(f, fieldnames=_CSV_FIELDS, extrasaction="ignore")
             if write_header:
                 w.writeheader()
             w.writerows(class_log)
         logger.info(f"classifications.csv (накопит.): +{len(class_log)} → {cumulative_csv}")
 
-        # labels.json рядом с images/YYYYMMDD/ — накопительный, совместим с 2_label_ui
+        # labels.json рядом с images/YYYYMMDD/ — накопительный, формат v2 {img: [classes]},
+        # ключи относительно images/YYYYMMDD/ (совместимо с датасетом v4 и 2_label_ui).
+        # Пре-разметка инференса: пишем только уверенные (с классами); существующие
+        # ключи (ручная правка / прошлый прогон) НЕ перезаписываем. uncertain/unknown → нет ключа.
         labels_json = images_dir / "labels.json"
-        existing_labels: dict[str, str] = {}
-        if labels_json.is_file():
-            try:
-                existing_labels = _json.loads(
-                    labels_json.read_text(encoding="utf-8")
-                ).get("labels", {})
-            except (_json.JSONDecodeError, KeyError):
-                pass
+        labels = _ml.load_labels(labels_json)          # {img: [classes]}, старый формат тоже
+        added = 0
         for row in class_log:
-            dest = (images_dir / row["out_class"] / row["crop"]).resolve()
-            existing_labels[str(dest)] = row["out_class"]
-        labels_json.write_text(
-            _json.dumps({"version": 1, "labels": existing_labels}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        logger.info(f"labels.json: {len(existing_labels)} записей → {labels_json}")
+            if row["classes"] and row["_rel"] not in labels:
+                labels[row["_rel"]] = row["classes"].split("|")
+                added += 1
+        _ml.save_labels(labels_json, labels, task="classify")
+        logger.info(f"labels.json: {len(labels)} записей (+{added}) → {labels_json}")
     else:
         logger.info("Классификаций не найдено.")
 

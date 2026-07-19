@@ -99,52 +99,84 @@ class TestFindCrops:
 
 # ─── 6_2: _classify ──────────────────────────────────────────────────────────
 
+class _FakeSingle:
+    """Single-label модель: predict_classes → [argmax] (порог уверенности применяет _classify)."""
+    ready = True
+    multi_label = False
+    def __init__(self, cls, conf, pm=None):
+        self._cls, self._pm = cls, pm or {cls: conf}
+    def predict_classes(self, bgr):
+        return [self._cls], self._pm
+
+
+class _FakeMulti:
+    """Multi-label модель: predict_classes → НАБОР классов (пороги уже применены)."""
+    ready = True
+    multi_label = True
+    def __init__(self, classes, pm):
+        self._classes, self._pm = classes, pm
+    def predict_classes(self, bgr):
+        return self._classes, self._pm
+
+
 class TestClassify:
     def test_no_classifier_returns_unknown(self, m62):
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        group, conf, out_class, conf_2nd, prob_map = m62._classify(None, crop, classify_conf=0.65)
-        assert group == "unknown"
-        assert conf == 0.0
-        assert out_class == "unknown"
-        assert conf_2nd == 0.0
-        assert prob_map == {}
+        res = m62._classify(None, crop, classify_conf=0.65)
+        assert res["classes"] == []
+        assert res["group"] == "unknown"
+        assert res["group_conf"] == 0.0
+        assert res["prob_map"] == {}
+        # модель не готова → unknown/
+        assert m62._placement(res["classes"], False) == ("unknown", __import__("pathlib").Path("unknown"))
 
-    def test_low_conf_goes_to_uncertain(self, m62):
-        """Если classify() вернул conf ниже порога → uncertain."""
-        class _FakeClfLow:
-            ready = True
-            def classify(self, bgr):
-                return "resident", 0.4, {}  # ниже порога 0.65
-
+    def test_single_low_conf_goes_to_uncertain(self, m62):
+        """single-label: conf ниже порога → пустой набор → uncertain/."""
+        clf = _FakeSingle("1_resident", 0.4, {"1_resident": 0.4, "2_delivery": 0.3})
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        group, conf, out_class, conf_2nd, prob_map = m62._classify(_FakeClfLow(), crop, classify_conf=0.65)
-        assert group == "resident"
-        assert abs(conf - 0.4) < 1e-6
-        assert out_class == "uncertain"
-        assert conf_2nd == 0.0
+        res = m62._classify(clf, crop, classify_conf=0.65)
+        assert res["classes"] == []
+        assert res["group"] == "1_resident"
+        assert m62._placement(res["classes"], True)[0] == "uncertain"
 
-    def test_high_conf_uses_group_class(self, m62):
-        class _FakeClfHigh:
-            ready = True
-            def classify(self, bgr):
-                return "2_delivery", 0.82, {"2_delivery": 0.82, "1_resident": 0.12}
-
+    def test_single_high_conf_uses_group_class(self, m62):
+        clf = _FakeSingle("2_delivery", 0.82, {"2_delivery": 0.82, "1_resident": 0.12})
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        group, conf, out_class, conf_2nd, prob_map = m62._classify(_FakeClfHigh(), crop, classify_conf=0.65)
-        assert group == "2_delivery"
+        res = m62._classify(clf, crop, classify_conf=0.65)
+        assert res["classes"] == ["2_delivery"]
+        assert abs(res["conf_2nd"] - 0.12) < 1e-6
+        # 1 класс → single/<class>/
+        out_class, rel = m62._placement(res["classes"], True)
         assert out_class == "2_delivery"
-        assert abs(conf_2nd - 0.12) < 1e-6
-        assert prob_map["2_delivery"] == 0.82
+        assert rel.as_posix() == "single/2_delivery"
 
-    def test_exact_threshold_passes(self, m62):
-        class _FakeClf:
-            ready = True
-            def classify(self, bgr):
-                return "delivery", 0.65, {}
-
+    def test_single_exact_threshold_passes(self, m62):
+        clf = _FakeSingle("2_delivery", 0.65, {"2_delivery": 0.65})
         crop = np.zeros((64, 64, 3), dtype=np.uint8)
-        _, _, out_class, _, _ = m62._classify(_FakeClf(), crop, classify_conf=0.65)
-        assert out_class == "delivery"
+        res = m62._classify(clf, crop, classify_conf=0.65)
+        assert res["classes"] == ["2_delivery"]
+
+    def test_multi_returns_set_to_multi_dir(self, m62):
+        """multi-label: несколько классов → multi/, to_identify по 1_resident/4_guest."""
+        clf = _FakeMulti(["1_resident", "2_delivery"],
+                         {"1_resident": 0.9, "2_delivery": 0.7, "3_utilities": 0.1, "4_guest": 0.2})
+        crop = np.zeros((64, 64, 3), dtype=np.uint8)
+        res = m62._classify(clf, crop, classify_conf=0.65)
+        assert res["classes"] == ["1_resident", "2_delivery"]
+        assert m62._placement(res["classes"], True)[0] == "multi"
+        row = m62._make_row(res, "multi", mono_s=0, ts_epoch=None,
+                            run_name="r", sub_run="s", cam="c", crop="x.jpg")
+        assert row["classes"] == "1_resident|2_delivery"
+        assert row["n_classes"] == 2
+        assert row["to_identify"] is True
+
+    def test_multi_empty_set_is_uncertain(self, m62):
+        clf = _FakeMulti([], {"1_resident": 0.1, "2_delivery": 0.2,
+                              "3_utilities": 0.1, "4_guest": 0.15})
+        crop = np.zeros((64, 64, 3), dtype=np.uint8)
+        res = m62._classify(clf, crop, classify_conf=0.65)
+        assert res["classes"] == []
+        assert m62._placement(res["classes"], True)[0] == "uncertain"
 
 
 # ─── 6_2: _crop_ts_epoch ─────────────────────────────────────────────────────

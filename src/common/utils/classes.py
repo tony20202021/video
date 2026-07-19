@@ -17,6 +17,7 @@ GROUP_CLASS_COLORS: dict[str, str] = {
     "2_delivery":  "#0055cc",
     "3_utilities": "#770077",
     "4_guest":     "#cc7700",
+    "multi":       "#aa3377",
     "uncertain":   "#dddddd",
     "unknown":     "#aaaaaa",
 }
