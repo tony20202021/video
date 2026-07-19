@@ -259,29 +259,28 @@ def last_log(svc: str, pattern: str, exclude_pat: str | None = None) -> str:
 def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
     """Разбор строк журнала (чистая функция — тестируема без journalctl):
       count   — число совпавших событий (прогонов/приёмов);
-      times   — тайминги НА 1 КАДР/ФАЙЛ: 'Время: N с' делится на «X кадров» в той же строке
-                (батч-сервисы), либо N как есть (1 файл на строку — transfer). Так видно степень
-                адаптивного замедления (сон лимитера на кроп). min/avg/max/last;
+      times   — длительность ПРОГОНА (батча) из 'Время: N с' как есть: min/avg/max/last —
+                это реальные измеренные величины (fastest/slowest батч), делить их на кадры и
+                искать min/max нельзя — получилось бы min/max от средних. Среднее НА КАДР считаем
+                честно = Σ(время)/Σ(кадры) → поле dur_sum (сумма) + frames;
       frames  — сумма «X кадров» из '1 батч (X кадров)' (батч-сервисы);
+      dur_sum — сумма всех 'Время: N с' (для среднего на кадр/файл = dur_sum/frames|count);
       bursts  — число всплесков (группы событий, разделённые паузой > BURST_GAP_SEC).
     """
     count = 0
-    times: list[float] = []   # секунд на 1 кадр/файл
+    times: list[float] = []   # длительность прогона (батча), секунд
     frames = 0
     ts_secs: list[int] = []
     for line in lines:
         if re.search(stats_pat, line):
             count += 1
             fm = re.search(r"(\d+)\s*кадров", line)
-            items = int(fm.group(1)) if fm else 0
             if fm:
-                frames += items
+                frames += int(fm.group(1))
             if has_timing:
                 m = re.search(r"Время:\s*([\d.,]+)\s*с", line)
                 if m:
-                    dur = float(m.group(1).replace(",", "."))
-                    # на 1 кадр (батч) или на 1 файл (transfer: строка = 1 файл, кадры не логируются)
-                    times.append(dur / items if items > 0 else dur)
+                    times.append(float(m.group(1).replace(",", ".")))
             tm = re.search(r"\b(\d{2}):(\d{2}):(\d{2})\b", line)
             if tm:
                 ts_secs.append(int(tm.group(1)) * 3600 + int(tm.group(2)) * 60 + int(tm.group(3)))
@@ -293,10 +292,11 @@ def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
                 bursts += 1
     return dict(
         count=count, frames=frames, bursts=bursts,
-        min=round(min(times), 2) if times else None,
-        avg=round(sum(times) / len(times), 2) if times else None,
-        max=round(max(times), 2) if times else None,
-        last=round(times[-1], 2) if times else None,
+        dur_sum=round(sum(times), 2),
+        min=round(min(times), 1) if times else None,
+        avg=round(sum(times) / len(times), 1) if times else None,
+        max=round(max(times), 1) if times else None,
+        last=round(times[-1], 1) if times else None,
     )
 
 
@@ -314,7 +314,7 @@ def _stats_for_window(svc: str, stats_pat: str, has_timing: bool, window_min: in
 def service_stats(svc: str, stats_pat: str, has_timing: bool) -> dict:
     """Статистика: 10м → 60м → 24ч (первое ненулевое окно)."""
     _empty = dict(count=0, min=None, avg=None, max=None, last=None,
-                  frames=0, bursts=0, window=WINDOW_MIN)
+                  frames=0, dur_sum=0.0, bursts=0, window=WINDOW_MIN)
     try:
         for window in [WINDOW_MIN, 60, 1440]:
             st = _stats_for_window(svc, stats_pat, has_timing, window)
@@ -443,17 +443,22 @@ def fmt_stats(st: dict, has_timing: bool, cpu_line: str | None = None,
         x = st["count"]
         head = (f"{n} {_plural(n, 'прогон', 'прогона', 'прогонов')}{suffix} "
                 f"({x} {_plural(x, 'файл', 'файла', 'файлов')})")
-        time_unit = "1файл"     # тайминг делится на файлы (1 строка = 1 файл)
+        unit = "файл"          # среднее делим на файлы (1 строка = 1 файл)
     else:  # batch
         n = st["count"]
         x = st.get("frames", 0)
         head = (f"{n} {_plural(n, 'прогон', 'прогона', 'прогонов')}{suffix} "
                 f"({x} {_plural(x, 'кадр', 'кадра', 'кадров')})")
-        time_unit = "1кадр"     # тайминг делится на кадры → видно адаптивное замедление
+        unit = "кадр"          # среднее делим на кадры → видно адаптивное замедление
     lines = [head]
     if has_timing and st["avg"] is not None:
         mn, avg, mx, lst = st["min"], st["avg"], st["max"], st["last"]
-        lines.append(f"{mn}с/{avg}с/{mx}с/{lst}с (на {time_unit})")
+        # min/avg/max/last — реальные длительности ПРОГОНОВ; отдельно честное среднее НА КАДР
+        # = Σ(время)/Σ(кадры) (делить каждый прогон и брать min/max нельзя — это min/max средних).
+        denom = st.get("frames", 0) or st.get("count", 0)
+        per = (st.get("dur_sum", 0.0) / denom) if denom else None
+        head_t = f"≈{per:.2f}с/{unit} · " if per is not None else ""
+        lines.append(f"{head_t}прогон {mn}с/{avg}с/{mx}с/{lst}с")
     if cpu_line is not None:
         lines.append(f"{cpu_line} (цпу)")
     return "\n".join(lines)
