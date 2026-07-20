@@ -70,6 +70,17 @@ SERVICES = [
         "has_timing": True,
     },
     {
+        "name":       "video-smooth",
+        "in_label":   f".data/groups/{GROUPS_VER}/inference/  images/  (classifications.csv)",
+        "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
+        "out_label":  f"groups/{GROUPS_VER}/  single/<class>/  (сглажено по времени)",
+        "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/images",
+        "log_work":   r"Готово|сглажено",
+        "log_wait":   r"Изменений нет|ожидание",
+        "stats_pat":  r"Готово\.",
+        "has_timing": False,
+    },
+    {
         "name":       "video-identify",
         "in_label":   f"groups/{GROUPS_VER}/  single/1_resident  single/4_guest  multi/",
         "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",

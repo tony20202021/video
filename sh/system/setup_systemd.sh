@@ -192,10 +192,28 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target"
 
+# ─── video-smooth (темпоральное сглаживание классов, между classify и identify) ──
+_install "video-smooth" "[Unit]
+Description=Video — Темпоральное сглаживание классов Модели 1 (watch-режим)
+After=network.target video-classify.service
+
+[Service]
+Type=simple
+User=$USER_NAME
+WorkingDirectory=$REPO
+ExecStart=/bin/bash $REPO/sh/pipeline/3b_smooth_groups.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target"
+
 # ─── video-identify ───────────────────────────────────────────────────────────
 _install "video-identify" "[Unit]
 Description=Video — Идентификация жителей, Модель 2 (watch-режим)
-After=network.target video-classify.service
+After=network.target video-classify.service video-smooth.service
 
 [Service]
 Type=simple
