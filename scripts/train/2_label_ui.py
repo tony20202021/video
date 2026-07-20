@@ -1230,22 +1230,23 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         if f.is_file() and f.suffix.lower() in _exts:
             crops.append(f.resolve().as_posix())
 
-    # Загружаем существующую разметку (multi-label {img: [classes]}; старый v1 {img:'class'}
-    # читается как 1-элементный список — ПОДХВАТ старой разметки, шаг B1).
-    # Чистим старые смешанные наборы (класс+uncertain/skip) → показываем без псевдо-меток.
-    labels: dict[str, list] = {k: _clean_label_set(v)
-                               for k, v in _ml.load_labels(labels_path).items()}
-
-    # Нормализуем ключи labels к абсолютным путям кропов.
-    # labels.json может хранить: абсолютный путь, basename, или basename с префиксом scene0042_,
-    # либо путь относительно images/<date>/ (v4). Сопоставляем по stripped-basename.
+    # Загружаем разметку и НОРМАЛИЗУЕМ ключи к ОДНОМУ каноническому пути кропа (resolve),
+    # объединяя дубли. labels.json может хранить: абсолютный путь / basename / basename+scene0042_ /
+    # путь относительно каталога (v4). Пайплайн пишет ОТНОСИТЕЛЬНЫЙ ключ, разметчик раньше добавлял
+    # АБСОЛЮТНЫЙ, не убирая относительный → 2 ключа на файл с конфликтом меток (баг). Теперь дедуп:
+    # при конфликте берём значение из абсолютного ключа (туда UI пишет правки). Старые смешанные
+    # наборы (класс+uncertain/skip) чистятся _clean_label_set.
     _re_scene = re.compile(r"^scene\d+_")
     _stripped_to_crop = {_re_scene.sub("", Path(c).name): c for c in crops}
-    for k, v in list(labels.items()):
+    labels: dict[str, list] = {}
+    _key_from_abs: dict[str, bool] = {}
+    for k, v in _ml.load_labels(labels_path).items():
         stripped = _re_scene.sub("", Path(k).name)
-        crop_path = _stripped_to_crop.get(stripped)
-        if crop_path and crop_path not in labels:
-            labels[crop_path] = v
+        key = _stripped_to_crop.get(stripped, k)      # каноним → путь кропа (crops хранят resolve)
+        isabs = Path(k).is_absolute()
+        if key not in labels or (isabs and not _key_from_abs.get(key, False)):
+            labels[key] = _clean_label_set(v)
+            _key_from_abs[key] = isabs
 
     _classes = classes or []
     _valid_set = set(_classes)
@@ -1377,7 +1378,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         else:
             lbl = data.get("label")
             labels[fname] = _clean_label_set([lbl] if lbl else [])
-        _save_labels(labels_path, labels)
+        _save_labels(labels_path, labels, input_dir)
         return jsonify({"labels": labels})
 
     @app.route("/api/label/bulk", methods=["POST"])
@@ -1403,7 +1404,7 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                 elif cls:                       # add
                     cur.add(cls)
                 labels[f] = _clean_label_set(cur)   # выбран класс → снимаем uncertain/skip
-            _save_labels(labels_path, labels)
+            _save_labels(labels_path, labels, input_dir)
         return jsonify({"labels": labels, "updated": len(files)})
 
     @app.route("/image/<path:fname>")
@@ -1433,9 +1434,21 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
-def _save_labels(path: Path, labels: dict) -> None:
-    """Сохраняет multi-label разметку в labels.json v2 ({img: [classes]}, шаг B3)."""
+def _save_labels(path: Path, labels: dict, base_dir: "Path | None" = None) -> None:
+    """Сохраняет multi-label разметку в labels.json v2 ({img: [classes]}, шаг B3).
+    Ключи под base_dir делаются ОТНОСИТЕЛЬНЫМИ (как пишет пайплайн) — чтобы не было
+    дублей абсолютный/относительный на один файл и правки не расходились с пайплайном."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if base_dir is not None:
+        base = base_dir.resolve()
+        rel = {}
+        for k, v in labels.items():
+            try:
+                key = Path(k).resolve().relative_to(base).as_posix()
+            except (ValueError, OSError):
+                key = k                          # не под base_dir — оставляем как есть
+            rel[key] = v
+        labels = rel
     _ml.save_labels(path, labels, task="classify")
 
 
