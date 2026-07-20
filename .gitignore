@@ -2,6 +2,8 @@
 .config
 .plan
 .env
+.env.*
+!.env.example
 agents.yaml
 .data/
 .models/
