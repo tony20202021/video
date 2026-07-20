@@ -463,22 +463,13 @@ def train(
 
     (output_dir / "best.pt").unlink(missing_ok=True)
 
-    # Подбор порогов по КЛАССАМ на валидации → метрики на val и по всему датасету
+    # Подбор порогов по КЛАССАМ на валидации (дёшево — val-скоры уже нужны)
     print("\nПодбор порогов по классам (валидация)…", flush=True)
     yv_true, yv_score = _collect_scores(model, val_loader, device)
     thresholds = _tune_thresholds(yv_true, yv_score)
     print(f"  пороги: { {c: thresholds[c] for c in CLASSES} }", flush=True)
-
-    full_loader = DataLoader(CropDataset(valid, _val_tf), batch_size=batch_size)
-    yf_true, yf_score = _collect_scores(model, full_loader, device)
-    eval_full = _multilabel_metrics(yf_true, yf_score, thresholds)
     eval_val = _multilabel_metrics(yv_true, yv_score, thresholds)
-    print(f"  full:  macro_F1={eval_full['macro_f1']:.3f}  mAP={eval_full['mAP']:.3f}  subset_acc={eval_full['subset_accuracy']:.3f}", flush=True)
-    print(f"  val:   macro_F1={eval_val['macro_f1']:.3f}   mAP={eval_val['mAP']:.3f}   subset_acc={eval_val['subset_accuracy']:.3f}", flush=True)
-    for cls in CLASSES:
-        mf, mv = eval_full["by_class"][cls], eval_val["by_class"][cls]
-        print(f"  {cls}: thr={mv['threshold']:.2f} | full P={mf['precision']:.3f} R={mf['recall']:.3f} F1={mf['f1']:.3f} AP={mf['ap']:.3f}"
-              f" | val F1={mv['f1']:.3f} AP={mv['ap']:.3f} (n={mv['support']})", flush=True)
+    print(f"  val:   macro_F1={eval_val['macro_f1']:.3f}  mAP={eval_val['mAP']:.3f}  subset_acc={eval_val['subset_accuracy']:.3f}", flush=True)
 
     metrics = {
         "model_tag": model_tag,
@@ -495,19 +486,32 @@ def train(
         "history": history,
         "model_path": str(onnx_path.relative_to(REPO_ROOT)),
         "backbone_path": str(backbone_path.relative_to(REPO_ROOT)),
-        "eval": {"full": eval_full, "val": eval_val},
+        "eval": {"val": eval_val},
     }
+    # СНАЧАЛА пишем манифест (модель+пороги+val-метрики) — чтобы падение/OOM на полном
+    # eval по всему датасету (тяжёлый на слабом сервере) НЕ потеряло манифест.
     manifest_path = write_classify_manifest(
-        model_tag,
-        metrics=metrics,
-        dataset_version=dataset_version,
-        dataset_path=dataset_path_rel,
-        multi_label=True,
-        thresholds=thresholds,
-    )
+        model_tag, metrics=metrics, dataset_version=dataset_version,
+        dataset_path=dataset_path_rel, multi_label=True, thresholds=thresholds)
     print(f"\nЛучший val macro-F1: {best_macro_f1:.3f}")
-    print(f"Модель: {onnx_path}")
-    print(f"Результаты: {manifest_path}")
+    print(f"Модель:   {onnx_path}")
+    print(f"Манифест: {manifest_path}", flush=True)
+
+    # Полный eval по всему датасету — best-effort (может съесть память); манифест уже сохранён
+    for cls in CLASSES:
+        mv = eval_val["by_class"][cls]
+        print(f"  {cls}: thr={mv['threshold']:.2f}  val P={mv['precision']:.3f} R={mv['recall']:.3f} "
+              f"F1={mv['f1']:.3f} AP={mv['ap']:.3f} (n={mv['support']})", flush=True)
+    try:
+        full_loader = DataLoader(CropDataset(valid, _val_tf), batch_size=batch_size)
+        yf_true, yf_score = _collect_scores(model, full_loader, device)
+        eval_full = _multilabel_metrics(yf_true, yf_score, thresholds)
+        print(f"  full:  macro_F1={eval_full['macro_f1']:.3f}  mAP={eval_full['mAP']:.3f}  subset_acc={eval_full['subset_accuracy']:.3f}", flush=True)
+        metrics["eval"]["full"] = eval_full
+        write_classify_manifest(model_tag, metrics=metrics, dataset_version=dataset_version,
+                                dataset_path=dataset_path_rel, multi_label=True, thresholds=thresholds)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [!] Полный eval пропущен ({type(e).__name__}) — манифест уже сохранён с val-метриками", flush=True)
     return metrics
 
 
