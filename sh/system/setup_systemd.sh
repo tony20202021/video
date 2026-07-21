@@ -13,6 +13,7 @@
 #   video-transfer   — Transfer Server (приём файлов с Windows)
 #   video-yolo       — YOLO детекция кропов (watch-режим)
 #   video-classify   — Классификация групп, Модель 1 (watch-режим)
+#   video-smooth     — Темпоральное сглаживание классов Модели 1 (watch-режим)
 #   video-identify   — Идентификация жителей, Модель 2 (watch-режим)
 #
 # Опциональные (--with-data, только во время обучения):
@@ -60,6 +61,7 @@ CORE_SERVICES=(
     video-transfer
     video-yolo
     video-classify
+    video-smooth
     video-identify
 )
 
