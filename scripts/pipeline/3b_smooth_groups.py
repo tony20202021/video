@@ -240,14 +240,21 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
         tiles.append(canvas)
 
     strip = tiles[0] if len(tiles) == 1 else cv2.hconcat(tiles)
-    W = strip.shape[1]
 
     HH = 40
+    legend = "yellow=fixed  red=M>1(not smoothed)  nums=probs r/d/u/g %"
+    # ширина = max(полоса, самая длинная строка заголовка) — иначе на узком конкате текст обрезается
+    (nw_, _), _ = cv2.getTextSize(center_name, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+    (lw_, _), _ = cv2.getTextSize(legend, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+    W = max(strip.shape[1], nw_ + 12, lw_ + 12)
     header = np.full((HH, W, 3), 15, np.uint8)
     cv2.putText(header, center_name, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                 (170, 170, 170), 1, cv2.LINE_AA)
-    cv2.putText(header, "yellow=fixed  red=M>1(not smoothed)  nums=probs r/d/u/g %",
-                (6, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
+    cv2.putText(header, legend, (6, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                (120, 120, 120), 1, cv2.LINE_AA)
+    if W > strip.shape[1]:                        # добить полосу справа фоном до ширины заголовка
+        pad = np.full((strip.shape[0], W - strip.shape[1], 3), 25, np.uint8)
+        strip = cv2.hconcat([strip, pad])
 
     full = cv2.vconcat([header, strip])
     out_path.parent.mkdir(parents=True, exist_ok=True)
