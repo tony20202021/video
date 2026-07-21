@@ -138,39 +138,73 @@ def _fmt_dt(t: float, date_str: str) -> tuple[str, str]:
     return f"{ti // 3600:02d}:{(ti % 3600) // 60:02d}:{ti % 60:02d}", ds
 
 
-def _visits_by_rec(recs: list[dict], gap: float) -> dict[int, list[int]]:
-    """rec-индекс → список rec-индексов его визита (та же группировка, что в smooth_sequence)."""
-    by_cam: dict[str, list[int]] = {}
-    for i, r in enumerate(recs):
-        by_cam.setdefault(r.get("cam", ""), []).append(i)
-    out: dict[int, list[int]] = {}
-    for _cam, ids in by_cam.items():
-        ids.sort(key=lambda i: recs[i]["t"])
-        tms = [recs[i]["t"] for i in ids]
-        for vis in _ts.segment_visits(tms, gap):
-            members = [ids[j] for j in vis]
-            for i in members:
-                out[i] = members
+def _frames_by_cam(rows: list[dict]) -> dict[str, list[dict]]:
+    """ВСЕ кадры камеры (вкл. M>1 и multi/uncertain) по времени — для viz-контекста.
+    [{name, t, probs, M, out}]. Дедуп по имени (CSV накопительный)."""
+    out: dict[str, list[dict]] = {}
+    seen: set[str] = set()
+    for r in rows:
+        nm = r.get("crop", "")
+        if not nm or nm in seen:
+            continue
+        pr = _parse_cam_t(nm)
+        if pr is None:
+            continue
+        seen.add(nm)
+        cam, t = pr
+        te = r.get("ts_epoch", "")
+        try:
+            if te:
+                t = float(te)
+        except ValueError:
+            pass
+        try:
+            probs = [float(r.get(f"p_{c}", 0) or 0) for c in GROUP_CLASSES]
+        except ValueError:
+            probs = [0.0] * len(GROUP_CLASSES)
+        out.setdefault(cam, []).append({"name": nm, "t": t, "probs": probs,
+                                        "M": _persons_in_frame(nm), "out": r.get("out_class", "")})
+    for cam in out:
+        out[cam].sort(key=lambda x: x["t"])
     return out
 
 
-def _render_smoothing_viz(center_i: int, visit: list[int], recs: list[dict],
-                          files: dict, date_str: str, sm_class: str,
-                          out_path: Path, *, window: int = 10) -> bool:
-    """Рисует конкат визита с выделенным исправленным кадром. True если сохранил."""
+def _draw_probs(canvas, x: int, y: int, probs: list) -> None:
+    """4 числа-процента вероятностей, каждое в цвете своего класса (r/d/u/g)."""
+    import cv2
+    cx = x
+    for k, c in enumerate(GROUP_CLASSES):
+        cv2.putText(canvas, f"{int(round(probs[k] * 100)):02d}", (cx, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.34, _CLASS_BGR[c], 1, cv2.LINE_AA)
+        cx += 26
+
+
+def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: str,
+                          files: dict, date_str: str, out_path: Path,
+                          *, win_sec: float = 90.0, max_tiles: int = 41) -> bool:
+    """Конкат кадров камеры в окне ±win_sec СЕКУНД вокруг исправленного (по ВСЕМ кадрам, вкл. M>1).
+    Окно по ВРЕМЕНИ (не по числу кадров) — иначе на редкой камере попадут события со всего дня.
+    Под каждым кадром: время, класс-argmax модели, вероятности (r/d/u/g %). Исправленный —
+    жёлтая рамка + argmax→новый класс рядом. M>1 — красная рамка (не сглаживается)."""
     import cv2
     import numpy as np
-    if center_i not in visit:
+    pos = next((k for k, fr in enumerate(cam_frames) if fr["name"] == center_name), None)
+    if pos is None:
         return False
-    cpos = visit.index(center_i)
-    lo, hi = max(0, cpos - window), min(len(visit), cpos + window + 1)
-    seg = visit[lo:hi]
+    ct = cam_frames[pos]["t"]
+    near = [fr for fr in cam_frames if abs(fr["t"] - ct) <= win_sec]   # окно по времени
+    ci = next(k for k, fr in enumerate(near) if fr["name"] == center_name)
+    if len(near) > max_tiles:                                          # ограничение ширины
+        half = max_tiles // 2
+        near = near[max(0, ci - half): ci + half + 1]
+    seg = near
 
-    TH, MAXW, LAB = 150, 150, 32
+    TH, MAXW, LAB = 150, 150, 56
     tiles = []
-    for j in seg:
-        rec = recs[j]
-        f = files.get(rec["name"])
+    for fr in seg:
+        is_center = fr["name"] == center_name
+        M = fr["M"]
+        f = files.get(fr["name"])
         img = cv2.imread(str(f)) if f and Path(f).is_file() else None
         if img is None:
             img = np.full((TH, MAXW, 3), 40, np.uint8)
@@ -181,38 +215,39 @@ def _render_smoothing_viz(center_i: int, visit: list[int], recs: list[dict],
         tw = img.shape[1]
         canvas = np.full((TH + LAB, tw, 3), 25, np.uint8)
         canvas[:TH, :tw] = img
-        hhmmss, _ymd = _fmt_dt(rec["t"], date_str)
-        m_idx = int(np.argmax(rec["probs"]))
-        cv2.putText(canvas, hhmmss, (2, TH + 13), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.42, (210, 210, 210), 1, cv2.LINE_AA)
-        cv2.putText(canvas, _SHORT.get(GROUP_CLASSES[m_idx], "?"), (2, TH + 28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, _CLASS_BGR[GROUP_CLASSES[m_idx]], 1, cv2.LINE_AA)
-        if j == center_i:                        # исправленный кадр — жёлтая рамка
-            cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (0, 215, 255), 3)
+        hhmmss, _ymd = _fmt_dt(fr["t"], date_str)
+        m_idx = int(np.argmax(fr["probs"]))
+        cv2.putText(canvas, hhmmss, (2, TH + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    (210, 210, 210), 1, cv2.LINE_AA)
+        if M > 1:                                # многолюдный кадр — не сглаживается
+            cv2.putText(canvas, f"M{M}", (tw - 30, TH + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                        (60, 60, 235), 1, cv2.LINE_AA)
+        if is_center:                            # argmax → новый класс прямо у кадра
+            base = f"{_SHORT.get(GROUP_CLASSES[m_idx], '?')}->"
+            cv2.putText(canvas, base, (2, TH + 33), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
+                        (150, 150, 150), 1, cv2.LINE_AA)
+            (bw, _), _ = cv2.getTextSize(base, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1)
+            cv2.putText(canvas, _SHORT.get(sm_class, sm_class), (2 + bw, TH + 33),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, _CLASS_BGR.get(sm_class, (0, 215, 255)), 2, cv2.LINE_AA)
+        else:
+            cv2.putText(canvas, _SHORT.get(GROUP_CLASSES[m_idx], "?"), (2, TH + 33),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, _CLASS_BGR[GROUP_CLASSES[m_idx]], 1, cv2.LINE_AA)
+        _draw_probs(canvas, 2, TH + 51, fr["probs"])
+        if M > 1:
+            cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (60, 60, 200), 2)   # красная = M>1
+        if is_center:
+            cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (0, 215, 255), 3)   # жёлтая = исправлен
         tiles.append(canvas)
 
-    # выравнивание по ширине (hconcat требует равной высоты — она уже TH+LAB)
     strip = tiles[0] if len(tiles) == 1 else cv2.hconcat(tiles)
     W = strip.shape[1]
 
-    # заголовок: имя + вероятности модели центра + новый класс
-    rec = recs[center_i]
-    probs = rec["probs"]
-    hhmmss, ymd = _fmt_dt(rec["t"], date_str)
-    prob_txt = "  ".join(f"{_SHORT.get(c, c)} {probs[k]:.2f}" for k, c in enumerate(GROUP_CLASSES))
-    m_idx = int(np.argmax(probs))
-    HH = 60
+    HH = 40
     header = np.full((HH, W, 3), 15, np.uint8)
-    cv2.putText(header, f"{rec['name']}", (6, 16), cv2.FONT_HERSHEY_SIMPLEX,
-                0.42, (170, 170, 170), 1, cv2.LINE_AA)
-    cv2.putText(header, f"model: {prob_txt}", (6, 36), cv2.FONT_HERSHEY_SIMPLEX,
-                0.45, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(header, f"{ymd} {hhmmss}   {_SHORT.get(GROUP_CLASSES[m_idx],'?')} -> ",
-                (6, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1, cv2.LINE_AA)
-    (tw_, _), _ = cv2.getTextSize(f"{ymd} {hhmmss}   {_SHORT.get(GROUP_CLASSES[m_idx],'?')} -> ",
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
-    cv2.putText(header, _SHORT.get(sm_class, sm_class), (6 + tw_, 54),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, _CLASS_BGR.get(sm_class, (0, 215, 255)), 2, cv2.LINE_AA)
+    cv2.putText(header, center_name, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
+                (170, 170, 170), 1, cv2.LINE_AA)
+    cv2.putText(header, "yellow=fixed  red=M>1(not smoothed)  nums=probs r/d/u/g %",
+                (6, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (120, 120, 120), 1, cv2.LINE_AA)
 
     full = cv2.vconcat([header, strip])
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -293,20 +328,28 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
 
     # виз-дебаг: показываем ВСЕ исправления модели (sm≠argmax) — стабильно между прогонами,
     # т.к. считается от вероятностей CSV, а не от раскладки (иначе после перекладки viz пропадал).
+    # Перерисовываем только если CSV вырос с прошлой генерации (маркер .viz_rows) — не каждый поллинг.
     if viz and viz_targets:
         vdir = viz_dir or (date_dir / "meta" / "smooth_viz")
-        vdir.mkdir(parents=True, exist_ok=True)
-        for _old in vdir.glob("*.jpg"):
-            _old.unlink()
-        visit_of = _visits_by_rec(recs, gap)
-        for i, name, sm_class in viz_targets:
-            try:
-                if _render_smoothing_viz(i, visit_of.get(i, [i]), recs, files,
-                                         date_dir.name, sm_class,
-                                         vdir / f"{Path(name).stem}.jpg"):
-                    viz_n += 1
-            except Exception as e:                       # виз не должен ронять пайплайн
-                logger.warning("viz fail %s: %s", name, e)
+        marker = vdir / ".viz_rows"
+        prev = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
+        if prev == str(len(rows)) and any(vdir.glob("*.jpg")):
+            pass                                         # CSV не менялся — viz актуален, не трогаем
+        else:
+            vdir.mkdir(parents=True, exist_ok=True)
+            for _old in vdir.glob("*.jpg"):
+                _old.unlink()
+            cam_frames = _frames_by_cam(rows)            # ВСЕ кадры (вкл. M>1) для контекста
+            name_to_cam = {r["name"]: r["cam"] for r in recs}
+            for i, name, sm_class in viz_targets:
+                try:
+                    frames = cam_frames.get(name_to_cam.get(name, ""), [])
+                    if _render_smoothing_viz(name, frames, sm_class, files,
+                                             date_dir.name, vdir / f"{Path(name).stem}.jpg"):
+                        viz_n += 1
+                except Exception as e:                   # виз не должен ронять пайплайн
+                    logger.warning("viz fail %s: %s", name, e)
+            marker.write_text(str(len(rows)), encoding="utf-8")
 
     # перекладываем исправленные кропы в single/<sm_class>/ + правим labels.json
     for i, name, f, cur, sm_class in corrections:
