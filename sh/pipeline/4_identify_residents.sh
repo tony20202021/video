@@ -45,6 +45,8 @@ GROUPS_VER="$(_ef GROUPS_VER v3)"
 INFERENCE_IMAGES="$REPO/.data/groups/$GROUPS_VER/inference/images"
 OUT_DIR="$REPO/.data/residents/v1/inference"
 IDENTIFY_CONF="$(_ef IDENTIFY_CONF 0.70)"
+SMOOTH_WAIT="$(_ef SMOOTH_WAIT 1)"                     # ждать сглаживание (3b watermark) перед identify
+SMOOTH_WAIT_TIMEOUT="$(_ef SMOOTH_WAIT_TIMEOUT 600)"  # fallback: CSV не менялся N сек → smooth выкл/отстал, не ждём
 POLL_SEC=60
 ONCE=0
 EXTRA_ARGS=()
@@ -69,10 +71,43 @@ echo "  Output:         $OUT_DIR"
 echo "  identify_conf:  $IDENTIFY_CONF"
 echo "  модель:         $MODEL_TAG"
 echo "  poll: ${POLL_SEC}s"
+echo "  ждать сглаж.:   $([[ "$SMOOTH_WAIT" == "1" ]] && echo "да (timeout ${SMOOTH_WAIT_TIMEOUT}с)" || echo "нет")"
 echo "  (пропуск уже обработанных — на стороне Python)"
 echo ""
 echo "[identify] Ctrl+C для остановки"
 echo ""
+
+# identify берёт дату, только когда сглаживание (3b) «догнало» classifications.csv:
+# meta/smooth_state.json.csv_rows >= число строк CSV. Fallback: если CSV не менялся
+# SMOOTH_WAIT_TIMEOUT сек (smooth выключен/отстал) — не блокируем. 0=готово, 1=ждать.
+_smooth_ready() {
+    local date_dir="$1"
+    local csv="$date_dir/classifications.csv"
+    [[ -f "$csv" ]] || return 0
+    "$PYTHON" - "$csv" "$date_dir/meta/smooth_state.json" "$SMOOTH_WAIT_TIMEOUT" <<'PY'
+import sys, os, json, csv, time
+csv_path, wm_path, timeout = sys.argv[1], sys.argv[2], float(sys.argv[3])
+try:
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        rows = sum(1 for _ in csv.DictReader(f))
+except Exception:
+    sys.exit(0)                       # не читается CSV — не блокируем
+wm_rows = -1
+if os.path.exists(wm_path):
+    try:
+        wm_rows = json.load(open(wm_path, encoding="utf-8")).get("csv_rows", -1)
+    except Exception:
+        wm_rows = -1
+if wm_rows >= rows:
+    sys.exit(0)                       # сглаживание догнало CSV — готово
+try:                                  # отстаёт/нет: ждём, но не вечно (smooth мог быть выключен)
+    if time.time() - os.path.getmtime(csv_path) > timeout:
+        sys.exit(0)
+except OSError:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
 
 _count_crops() {
     local date_dir="$1"
@@ -117,6 +152,14 @@ while true; do
             if [[ -z "$new_crops" ]]; then
                 continue
             fi
+        fi
+
+        # Ждём, пока сглаживание (3b) догонит CSV — иначе опознаем ложных резидентов/гостей
+        # до перекладки. Watermark в meta/smooth_state.json; fallback по времени если smooth выкл.
+        if [[ "$SMOOTH_WAIT" == "1" ]] && ! _smooth_ready "$date_dir"; then
+            _any=1
+            echo "$(_ts)  INFO      $date: ожидание сглаживания (3b) — пропуск до готовности"
+            continue
         fi
 
         _any=1

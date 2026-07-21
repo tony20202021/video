@@ -89,6 +89,18 @@ def test_smooth_date_gate_preserves_confident(tmp_path):
     assert st["rescued_uncertain"] == 1
 
 
+def test_smooth_date_writes_watermark(tmp_path):
+    import json
+    m = _load()
+    dd = _make_dir(tmp_path)
+    m.smooth_date(dd, gap=60, p_stay=0.95, gate=None, include_uncertain=True)
+    wm = dd / "meta" / "smooth_state.json"
+    assert wm.is_file()
+    st = json.loads(wm.read_text(encoding="utf-8"))
+    # 5 строк CSV, все 5 eligible (3 резидента + доставка + uncertain) — identify ждёт этого watermark
+    assert st["csv_rows"] == 5 and st["eligible"] == 5 and st["smoother"] == "3b"
+
+
 def test_smooth_date_viz_writes_concats(tmp_path):
     m = _load()
     dd = _make_dir(tmp_path)

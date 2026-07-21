@@ -1251,10 +1251,12 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
 
     _exts = image_exts if image_exts is not None else IMAGE_EXTS
 
-    # Собираем картинки рекурсивно из input_dir, фильтруя по расширению
+    # Собираем картинки рекурсивно из input_dir, фильтруя по расширению.
+    # meta/ игнорируем: там служебное (viz-конкаты сглаживания, smooth_state.json), не кропы.
     crops: list[str] = []
     for f in sorted(input_dir.rglob("*")):
-        if f.is_file() and f.suffix.lower() in _exts:
+        if f.is_file() and f.suffix.lower() in _exts \
+                and "meta" not in f.relative_to(input_dir).parts:
             crops.append(f.resolve().as_posix())
 
     # Загружаем разметку и НОРМАЛИЗУЕМ ключи к ОДНОМУ каноническому пути кропа (resolve),

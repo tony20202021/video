@@ -180,7 +180,8 @@ Win + R → taskschd.msc → Task Scheduler Library → VideoWatchdog
 | `video-transfer` | `sh/transfer/1_start_server.sh` | Приём файлов с Windows (HTTP :8765) |
 | `video-yolo` | `sh/pipeline/2_yolo_boxes_files.sh` | YOLO детекция людей → кропы |
 | `video-classify` | `sh/pipeline/3_classify_groups.sh` | Классификация групп (Модель 1): 1_resident / 2_delivery / 3_utilities / 4_guest / uncertain |
-| `video-identify` | `sh/pipeline/4_identify_residents.sh` | Идентификация жителей (Модель 2): вход — 1_resident + 4_guest из classify |
+| `video-smooth` | `sh/pipeline/3b_smooth_groups.sh` | Темпоральное сглаживание классов (visit-HMM) in-place; watermark для identify |
+| `video-identify` | `sh/pipeline/4_identify_residents.sh` | Идентификация жителей (Модель 2): вход — 1_resident + 4_guest из classify (после сглаживания) |
 
 Опциональные (только во время обучения, `--with-data`):
 
@@ -203,17 +204,29 @@ video-yolo      →  .output/pipeline/2_yolo_boxes_files/images/
                    (исходники удаляются, poll 60s)
     ▼
 video-classify  →  .data/groups/v3/inference/images/{date}/
-                   1_resident/ 2_delivery/ 3_utilities/ 4_guest/ uncertain/
-                   (poll 60s)
+                   single/{1_resident,2_delivery,3_utilities,4_guest}/ multi/ uncertain/
+                   classifications.csv  labels.json   (poll 60s)
     ▼
-video-identify  вход: 1_resident/ + 4_guest/
+video-smooth    in-place: visit-HMM перекладывает single/, правит labels.json,
+                пишет meta/smooth_state.json (watermark: докуда просглажен CSV)
+                (poll 120s, тот же каталог)
+    ▼
+video-identify  вход: single/1_resident/ + single/4_guest/ + multi/
+                ⏸ ждёт watermark: берёт дату, когда smooth догнал CSV
+                  (SMOOTH_WAIT=1; fallback SMOOTH_WAIT_TIMEOUT=600с если smooth выкл)
              →  .data/residents/v1/inference/images/{date}/
                 {person_id}/  unknown_resident/
-                identifications.csv  labels.json
-                (poll 60s)
+                identifications.csv  labels.json   (poll 60s)
 ```
 
 Версии каталогов (`v3`, `v1`) берутся из `.env`: `GROUPS_VER`, `RESIDENTS_VER`.
+
+**Синхронизация smooth→identify.** Без неё identify успевает опознать «ложного резидента»
+(ошибку классификатора) до того, как smooth переложит кроп в правильный класс → неверная личность
+не откатывается (identify идемпотентен, skip-if-exists). Поэтому identify обрабатывает дату только
+когда `meta/smooth_state.json.csv_rows ≥` числа строк `classifications.csv`. Если сглаживание
+выключено — выставить `SMOOTH_WAIT=0` в `.env` (или положиться на `SMOOTH_WAIT_TIMEOUT`: identify
+пойдёт, когда CSV перестанет меняться дольше таймаута).
 
 ### Адаптивное замедление (ЦПУ)
 

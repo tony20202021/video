@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import shutil
@@ -95,6 +96,18 @@ def _read_csv_rows(date_dir: Path) -> list[dict]:
         return []
     with open(csv_path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
+
+
+def _write_watermark(date_dir: Path, *, csv_rows: int, eligible: int, changed: int) -> None:
+    """Пишет <date>/meta/smooth_state.json — «сглажено до csv_rows строк CSV».
+    identify (4) читает его и не берёт дату, пока smooth не догнал текущий classifications.csv
+    (иначе успевает опознать ложного резидента до перекладки — см. docs/services.md)."""
+    meta = date_dir / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / "smooth_state.json").write_text(
+        json.dumps({"csv_rows": csv_rows, "eligible": eligible, "changed": changed,
+                    "smoother": "3b"}, ensure_ascii=False),
+        encoding="utf-8")
 
 
 # ─── Визуальный дебаг сглаживания (--viz) ─────────────────────────────────────
@@ -254,6 +267,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         recs.append(rec)
 
     if not recs:
+        _write_watermark(date_dir, csv_rows=len(rows), eligible=0, changed=0)
         return {"date": date_dir.name, "rows": len(rows), "eligible": 0}
 
     smoothed = _ts.smooth_sequence(recs, GROUP_CLASSES, gap_sec=gap, p_stay=p_stay, gate=gate)
@@ -313,6 +327,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         w.writeheader()
         w.writerows(audit)
 
+    _write_watermark(date_dir, csv_rows=len(rows), eligible=len(recs), changed=changed)
     n_ident = sum(1 for a in audit if a["smoothed_class"] in IDENTIFY_CLASSES)
     return {"date": date_dir.name, "rows": len(rows), "eligible": len(recs),
             "changed": changed, "moved": moved, "rescued_uncertain": rescued,
