@@ -103,6 +103,31 @@ def test_smooth_sequence_min_minority_protects_transition():
     assert prot[-1][0] == "2_delivery"                        # защита сохранила доставку
 
 
+def test_window_average_denoises_spike():
+    # поток резидентов с одним скачком в доставку → окно усредняет, argmax снова резидент
+    P = np.array([_p("1_resident"), _p("1_resident"),
+                  _p("2_delivery", 0.6), _p("1_resident"), _p("1_resident")])
+    Pw = ts.window_average(P, [0, 1, 2, 3, 4], window_sec=3)
+    assert int(Pw[2].argmax()) == C.index("1_resident")   # единичный скачок усреднён
+
+
+def test_smooth_sequence_prob_window_fixes_error():
+    # режим бегущего окна чинит единичную ошибку усреднением вероятностей
+    recs = [{"cam": "c", "t": 0.0, "probs": _p("1_resident")},
+            {"cam": "c", "t": 1.0, "probs": _p("2_delivery", 0.55)},   # ошибка
+            {"cam": "c", "t": 2.0, "probs": _p("1_resident")}]
+    out = ts.smooth_sequence(recs, C, gap_sec=60, prob_window_sec=3.0)
+    assert out[1] == ("1_resident", True)                 # окно исправило (changed=True)
+
+
+def test_prob_window_respects_visit_gap():
+    # окно не усредняет через паузу визита (>gap) — разные события не смешиваются
+    recs = [{"cam": "c", "t": 0.0, "probs": _p("2_delivery")},
+            {"cam": "c", "t": 500.0, "probs": _p("1_resident")}]
+    out = [o[0] for o in ts.smooth_sequence(recs, C, gap_sec=60, prob_window_sec=30.0)]
+    assert out == ["2_delivery", "1_resident"]
+
+
 def test_smooth_sequence_mgt1_context_veto():
     # M=1 кадр в визите, где M>1-контекст даёт сильного гостя → не форсим в резидента
     recs = [{"cam": "c", "t": 0.0, "probs": _p("4_guest", 0.6)},

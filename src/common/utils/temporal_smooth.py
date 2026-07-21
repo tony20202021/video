@@ -37,6 +37,22 @@ def segment_visits(times, gap_sec: float = DEFAULT_GAP_SEC) -> list[list[int]]:
     return visits
 
 
+def window_average(probs: np.ndarray, times, window_sec: float,
+                   triangular: bool = False) -> np.ndarray:
+    """Бегущее окно по времени: probs[i] → среднее probs соседей в пределах ±window_sec.
+    Денойзит траектории вероятностей (единичные скачки усредняются). triangular: вес соседа
+    ∝ (1 - |dt|/window). Окно должно вызываться в пределах одного визита (не через паузы)."""
+    P = np.asarray(probs, dtype=float)
+    t = np.asarray(times, dtype=float)
+    out = np.zeros_like(P)
+    for i in range(len(t)):
+        d = np.abs(t - t[i])
+        sel = d <= window_sec
+        w = (1.0 - d[sel] / window_sec) if triangular else np.ones(int(sel.sum()))
+        out[i] = (P[sel] * w[:, None]).sum(0) / w.sum()
+    return out
+
+
 def viterbi(probs: np.ndarray, p_stay: float = DEFAULT_P_STAY) -> list[int]:
     """probs: [n, K] вероятности по классам. Возвращает индексы наиболее вероятной
     последовательности состояний (Viterbi). Матрица переходов: p_stay на диагонали,
@@ -72,10 +88,15 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
                     minority_classes: list[str] | None = None,
                     min_minority_prob: float | None = None,
                     context: list[dict] | None = None,
-                    veto_prob: float | None = None) -> list[tuple[str, bool]]:
+                    veto_prob: float | None = None,
+                    prob_window_sec: float | None = None,
+                    prob_window_tri: bool = False) -> list[tuple[str, bool]]:
     """Сглаживает предсказания по времени. records: [{'cam', 't', 'probs': [по classes]}].
     Возвращает (smoothed_class, changed) в ПОРЯДКЕ ВХОДА, changed = класс изменился vs argmax модели.
 
+    prob_window_sec: если задан — РЕЖИМ БЕГУЩЕГО ОКНА (замер на 20260720: 8.0%→3.5%, лучше по ВСЕМ
+    классам): внутри визита усредняем probs по ±window сек и берём argmax (Viterbi/gate/предохранители
+    НЕ применяются — они для HMM-режима; окно 3с уже разделяет разных людей лучше визита).
     gate: уверенные (max prob ≥ gate) не трогаем.
     Три предохранителя против ложных флипов «разных людей в резидента» (revert флипа = вернуть argmax):
       • guard_sec — не флипать одиночный кадр, если в ±guard_sec НЕТ кадра с argmax = новый класс
@@ -103,6 +124,14 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
         cam_ctx = ctx_by_cam.get(cam, [])
         for visit in segment_visits(times, gap_sec):
             vi = [idxs[j] for j in visit]
+            if prob_window_sec is not None:              # режим бегущего окна: усреднить probs → argmax
+                Praw = np.array([records[i]["probs"] for i in vi], dtype=float)
+                vtimes = [records[i]["t"] for i in vi]
+                Pw = window_average(Praw, vtimes, prob_window_sec, prob_window_tri)
+                for pos, i in enumerate(vi):
+                    sm_idx = int(Pw[pos].argmax())
+                    out[i] = (classes[sm_idx], sm_idx != int(Praw[pos].argmax()))
+                continue
             P = np.array([records[i]["probs"] for i in vi], dtype=float)
             vtimes = [records[i]["t"] for i in vi]
             argmax = [int(P[pos].argmax()) for pos in range(len(vi))]

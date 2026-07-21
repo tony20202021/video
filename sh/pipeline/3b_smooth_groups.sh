@@ -39,47 +39,45 @@ _ef() {
 
 GROUPS_VER="$(_ef GROUPS_VER v3)"
 IMAGES="$REPO/.data/groups/$GROUPS_VER/inference/images"
-GAP="$(_ef SMOOTH_GAP_SEC 60)"
-P_STAY="$(_ef SMOOTH_P_STAY 0.95)"
-GATE="$(_ef SMOOTH_GATE 0.8)"                 # уверенные предсказания не трогаем (замер: сохраняет меньшинства)
-MAX_PERSONS="$(_ef SMOOTH_MAX_PERSONS 1)"     # многолюдные кадры (разные люди) не сглаживаем
-VIZ="$(_ef SMOOTH_VIZ 1)"                     # дебаг-конкаты исправлений (нач. этап — вкл; 0=выкл)
-POLL_SEC=120
-EXTRA_ARGS=()
+POLL_SEC="$(_ef SMOOTH_POLL_SEC 120)"
+ONCE=0
+EXTRA_ARGS=()   # всё прочее (напр. --gap 5) пробрасывается в python и переопределяет env
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --once)        EXTRA_ARGS+=("--once"); shift ;;
-        --poll-sec)    POLL_SEC="$2"; shift 2 ;;
-        --gap)         GAP="$2"; shift 2 ;;
-        --p-stay)      P_STAY="$2"; shift 2 ;;
-        --gate)        GATE="$2"; shift 2 ;;
-        --max-persons) MAX_PERSONS="$2"; shift 2 ;;
-        --viz)         VIZ=1; shift ;;
-        --no-viz)      VIZ=0; shift ;;
+        --once)     ONCE=1; shift ;;
+        --poll-sec) POLL_SEC="$2"; shift 2 ;;
         *) EXTRA_ARGS+=("$1"); shift ;;
     esac
 done
 
+# Аргументы python из .env — читаются ЗАНОВО каждый поллинг → правки конфига (SMOOTH_*)
+# применяются без рестарта (как и правки кода). SMOOTH_PROB_WINDOW=N — режим бегущего окна.
+_build_args() {
+    local gap p_stay gate maxp viz pw
+    gap="$(_ef SMOOTH_GAP_SEC 60)";  p_stay="$(_ef SMOOTH_P_STAY 0.95)"
+    gate="$(_ef SMOOTH_GATE 0.8)";   maxp="$(_ef SMOOTH_MAX_PERSONS 1)"
+    viz="$(_ef SMOOTH_VIZ 1)";       pw="$(_ef SMOOTH_PROB_WINDOW 0)"
+    ARGS=("$IMAGES" "--gap" "$gap" "--p-stay" "$p_stay" "--max-persons" "$maxp")
+    [[ -n "$gate" ]] && ARGS+=("--gate" "$gate")
+    [[ "$viz" == "1" ]] && ARGS+=("--viz")
+    [[ -n "$pw" && "$pw" != "0" ]] && ARGS+=("--prob-window" "$pw")
+}
+
 echo "=== 3b_smooth_groups ==="
-echo "  Каталог:  $IMAGES"
-echo "  gap=${GAP}с  p_stay=${P_STAY}  gate=${GATE}  max_persons=${MAX_PERSONS}  viz=${VIZ}"
-echo "  poll: ${POLL_SEC}s"
+echo "  Каталог:  $IMAGES   poll: ${POLL_SEC}s   (config из .env, авто-применение)"
 echo ""
 
-args=("$IMAGES" "--gap" "$GAP" "--p-stay" "$P_STAY" "--max-persons" "$MAX_PERSONS")
-[[ -n "$GATE" ]] && args+=("--gate" "$GATE")
-[[ "$VIZ" == "1" ]] && args+=("--viz")
-
-# Разовый запуск (--once) — один прогон и выход.
-if [[ " ${EXTRA_ARGS[*]-} " == *" --once "* ]]; then
-    exec "$PYTHON" "$SCRIPT" "${args[@]}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+if [[ "$ONCE" -eq 1 ]]; then
+    _build_args
+    exec "$PYTHON" "$SCRIPT" "${ARGS[@]}" --once "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 fi
 
-# Watch-режим: bash-цикл заново вызывает python --once каждый поллинг. Так правки кода 3b
-# подхватываются БЕЗ рестарта сервиса (python-процесс не живёт между поллингами).
+# Watch-режим: bash-цикл заново вызывает python --once каждый поллинг → правки кода И конфига
+# подхватываются БЕЗ рестарта (python-процесс не живёт между поллингами).
 while true; do
-    "$PYTHON" "$SCRIPT" "${args[@]}" --once "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
+    _build_args
+    "$PYTHON" "$SCRIPT" "${ARGS[@]}" --once "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
         || echo "[3b] прогон завершился с ошибкой"
     sleep "$POLL_SEC"
 done

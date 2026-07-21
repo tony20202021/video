@@ -297,7 +297,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
                 include_uncertain: bool, max_persons: int = 1, ext: str = "jpg",
                 viz: bool = False, viz_dir: Path | None = None,
                 guard_sec: float | None = None, min_minority_prob: float | None = None,
-                veto_prob: float | None = None) -> dict:
+                veto_prob: float | None = None, prob_window_sec: float | None = None) -> dict:
     """Сглаживает один каталог-дату. Возвращает статистику.
     max_persons: сглаживаем только кропы из кадров с ≤ max_persons людей (pNofM) — многолюдные
     кадры содержат РАЗНЫХ людей, их сглаживать по времени нельзя (см. замер: ломает гостей).
@@ -359,7 +359,8 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         recs, GROUP_CLASSES, gap_sec=gap, p_stay=p_stay, gate=gate,
         guard_sec=guard_sec, protect_class=RESIDENT_CLASS,
         minority_classes=[c for c in GROUP_CLASSES if c != RESIDENT_CLASS],
-        min_minority_prob=min_minority_prob, context=context, veto_prob=veto_prob)
+        min_minority_prob=min_minority_prob, context=context, veto_prob=veto_prob,
+        prob_window_sec=prob_window_sec)
 
     labels = _ml.load_labels(date_dir / "labels.json")   # {rel: [classes]}
     moved = changed = rescued = viz_n = 0
@@ -460,6 +461,9 @@ def main() -> int:
     ap.add_argument("--viz", action="store_true",
                     help="дебаг: для каждого исправленного кропа рисовать конкат визита "
                          "в <date>/meta/smooth_viz/ (по умолчанию выкл)")
+    ap.add_argument("--prob-window", type=float, default=0.0,
+                    help="режим бегущего окна: усреднять probs по ±N сек внутри визита и брать "
+                         "argmax вместо Viterbi (замер: 8.0%%→3.5%%, лучше по всем классам; 0=выкл)")
     ap.add_argument("--ext", default="jpg")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--poll-sec", type=float, default=120.0)
@@ -470,8 +474,9 @@ def main() -> int:
         return 1
 
     gate = args.gate if args.gate and args.gate > 0 else None
-    logger.info("3b smooth: gap=%.0fс p_stay=%.2f gate=%s max_persons=%d uncertain=%s viz=%s",
-                args.gap, args.p_stay, gate, args.max_persons, args.include_uncertain, args.viz)
+    prob_window = args.prob_window if args.prob_window and args.prob_window > 0 else None
+    logger.info("3b smooth: gap=%.0fс p_stay=%.2f gate=%s max_persons=%d uncertain=%s viz=%s prob_window=%s",
+                args.gap, args.p_stay, gate, args.max_persons, args.include_uncertain, args.viz, prob_window)
 
     while True:
         dates = _date_dirs(args.input_dir)
@@ -479,7 +484,8 @@ def main() -> int:
         for dd in dates:
             st = smooth_date(dd, gap=args.gap, p_stay=args.p_stay, gate=gate,
                              include_uncertain=args.include_uncertain,
-                             max_persons=args.max_persons, ext=args.ext, viz=args.viz)
+                             max_persons=args.max_persons, ext=args.ext, viz=args.viz,
+                             prob_window_sec=prob_window)
             if st.get("changed"):
                 logger.info("1 батч (%d кадров)  Готово.  %s: сглажено %d (переложено %d, "
                             "uncertain→класс %d, в identify %d, viz %d)",
