@@ -264,11 +264,17 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
 
 def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None,
                 include_uncertain: bool, max_persons: int = 1, ext: str = "jpg",
-                viz: bool = False, viz_dir: Path | None = None) -> dict:
+                viz: bool = False, viz_dir: Path | None = None,
+                guard_sec: float | None = None, min_minority_prob: float | None = None,
+                veto_prob: float | None = None) -> dict:
     """Сглаживает один каталог-дату. Возвращает статистику.
     max_persons: сглаживаем только кропы из кадров с ≤ max_persons людей (pNofM) — многолюдные
     кадры содержат РАЗНЫХ людей, их сглаживать по времени нельзя (см. замер: ломает гостей).
-    viz: для каждого исправленного кропа рисует конкат визита в viz_dir (дебаг сглаживания)."""
+    guard_sec/min_minority_prob/veto_prob: предохранители против ложных флипов в резидента
+    (temporal_smooth.smooth_sequence). ПО УМОЛЧАНИЮ ВЫКЛ (None): замер на 1101 ручной метке
+    20260720 показал, что veto/min_minority меняют ~7 резидентов ради ~1-2 меньшинств — net хуже
+    (8.0%→8.5-8.9%). Модель путает res/del/guest, «сильное меньшинство» часто = неуверенный
+    резидент. Оставлены параметром для будущих замеров. viz: конкат визита в viz_dir (дебаг)."""
     rows = _read_csv_rows(date_dir)
     if not rows:
         return {"date": date_dir.name, "rows": 0}
@@ -276,22 +282,13 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
     files = _index_files(date_dir, ext)
     # по имени кропа: исходные вероятности (первое вхождение — CSV накопительный, вероятности стабильны)
     recs: list[dict] = []
+    context: list[dict] = []     # M>1 кадры — не сглаживаем, но держим как контекст (вето по гостям)
     meta: dict[str, dict] = {}
+    seen_ctx: set[str] = set()
     skipped_crowd = 0
     for r in rows:
         name = r.get("crop", "")
-        if not name or name in meta:
-            continue
-        oc = r.get("out_class", "")
-        eligible = oc in GROUP_CLASSES or (include_uncertain and oc == "uncertain")
-        if not eligible:
-            continue
-        if _persons_in_frame(name) > max_persons:   # многолюдный кадр — не сглаживаем
-            skipped_crowd += 1
-            continue
-        try:
-            probs = [float(r.get(f"p_{c}", 0) or 0) for c in GROUP_CLASSES]
-        except ValueError:
+        if not name:
             continue
         pr = _parse_cam_t(name)
         if pr is None:
@@ -304,6 +301,21 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
                 t = float(te)
         except ValueError:
             pass
+        try:
+            probs = [float(r.get(f"p_{c}", 0) or 0) for c in GROUP_CLASSES]
+        except ValueError:
+            continue
+        if _persons_in_frame(name) > max_persons:   # многолюдный кадр — в контекст, не в сглаживание
+            if name not in seen_ctx:
+                seen_ctx.add(name)
+                context.append({"cam": cam, "t": t, "probs": probs})
+                skipped_crowd += 1
+            continue
+        if name in meta:
+            continue
+        oc = r.get("out_class", "")
+        if not (oc in GROUP_CLASSES or (include_uncertain and oc == "uncertain")):
+            continue
         rec = {"cam": cam, "t": t, "probs": probs, "name": name, "model_class": r.get("group", oc)}
         meta[name] = rec
         recs.append(rec)
@@ -312,7 +324,11 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         _write_watermark(date_dir, csv_rows=len(rows), eligible=0, changed=0)
         return {"date": date_dir.name, "rows": len(rows), "eligible": 0}
 
-    smoothed = _ts.smooth_sequence(recs, GROUP_CLASSES, gap_sec=gap, p_stay=p_stay, gate=gate)
+    smoothed = _ts.smooth_sequence(
+        recs, GROUP_CLASSES, gap_sec=gap, p_stay=p_stay, gate=gate,
+        guard_sec=guard_sec, protect_class=RESIDENT_CLASS,
+        minority_classes=[c for c in GROUP_CLASSES if c != RESIDENT_CLASS],
+        min_minority_prob=min_minority_prob, context=context, veto_prob=veto_prob)
 
     labels = _ml.load_labels(date_dir / "labels.json")   # {rel: [classes]}
     moved = changed = rescued = viz_n = 0

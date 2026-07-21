@@ -66,25 +66,74 @@ def viterbi(probs: np.ndarray, p_stay: float = DEFAULT_P_STAY) -> list[int]:
 
 def smooth_sequence(records: list[dict], classes: list[str], *,
                     gap_sec: float = DEFAULT_GAP_SEC, p_stay: float = DEFAULT_P_STAY,
-                    gate: float | None = None) -> list[tuple[str, bool]]:
+                    gate: float | None = None,
+                    guard_sec: float | None = None,
+                    protect_class: str | None = None,
+                    minority_classes: list[str] | None = None,
+                    min_minority_prob: float | None = None,
+                    context: list[dict] | None = None,
+                    veto_prob: float | None = None) -> list[tuple[str, bool]]:
     """Сглаживает предсказания по времени. records: [{'cam', 't', 'probs': [по classes]}].
-    Возвращает список (smoothed_class, changed) в ПОРЯДКЕ ВХОДА, где changed = класс изменился
-    относительно argmax модели. gate: если задан, уверенные (max prob ≥ gate) оставляем как есть."""
+    Возвращает (smoothed_class, changed) в ПОРЯДКЕ ВХОДА, changed = класс изменился vs argmax модели.
+
+    gate: уверенные (max prob ≥ gate) не трогаем.
+    Три предохранителя против ложных флипов «разных людей в резидента» (revert флипа = вернуть argmax):
+      • guard_sec — не флипать одиночный кадр, если в ±guard_sec НЕТ кадра с argmax = новый класс
+        (одиночные кадры другого человека, случай 014723/164148);
+      • min_minority_prob + protect_class/minority_classes — не давить в protect_class кадр, чья
+        argmax = меньшинство с prob ≥ min_minority_prob (реальный переход, случай 120912);
+      • context (кадры M>1, НЕ сглаживаются) + veto_prob — если в визите есть M>1-кадр с prob
+        меньшинства ≥ veto_prob, не форсить M=1 в protect_class (гости в многолюдных, случай 194041)."""
     out: list[tuple[str, bool] | None] = [None] * len(records)
+    protect_idx = classes.index(protect_class) if protect_class in classes else None
+    minority_idx = {classes.index(c) for c in (minority_classes or []) if c in classes}
+
+    ctx_by_cam: dict[str, list[dict]] = {}
+    for r in (context or []):
+        ctx_by_cam.setdefault(r.get("cam", ""), []).append(r)
+    for c in ctx_by_cam:
+        ctx_by_cam[c].sort(key=lambda r: r["t"])
+
     by_cam: dict[str, list[int]] = {}
     for i, r in enumerate(records):
         by_cam.setdefault(r.get("cam", ""), []).append(i)
-    for _cam, idxs in by_cam.items():
+    for cam, idxs in by_cam.items():
         idxs.sort(key=lambda i: records[i]["t"])
         times = [records[i]["t"] for i in idxs]
+        cam_ctx = ctx_by_cam.get(cam, [])
         for visit in segment_visits(times, gap_sec):
             vi = [idxs[j] for j in visit]
             P = np.array([records[i]["probs"] for i in vi], dtype=float)
+            vtimes = [records[i]["t"] for i in vi]
+            argmax = [int(P[pos].argmax()) for pos in range(len(vi))]
             path = viterbi(P, p_stay)
+            # (M>1-контекст) есть ли в пределах времени визита многолюдный кадр с сильным меньшинством
+            veto_minority = False
+            if context is not None and veto_prob is not None and minority_idx:
+                t0, t1 = vtimes[0], vtimes[-1]
+                for r in cam_ctx:
+                    if t0 - 1e-3 <= r["t"] <= t1 + 1e-3 and any(
+                            r["probs"][mi] >= veto_prob for mi in minority_idx):
+                        veto_minority = True
+                        break
             for pos, i in enumerate(vi):
-                model_idx = int(P[pos].argmax())
+                model_idx = argmax[pos]
                 sm_idx = path[pos]
                 if gate is not None and P[pos].max() >= gate:
                     sm_idx = model_idx
+                if sm_idx != model_idx:                      # флип — проверяем предохранители
+                    revert = False
+                    if guard_sec is not None:                # нет поддержки нового класса рядом
+                        t = vtimes[pos]
+                        revert = not any(argmax[q] == sm_idx and abs(vtimes[q] - t) <= guard_sec
+                                         for q in range(len(vi)) if q != pos)
+                    into_protect = protect_idx is not None and sm_idx == protect_idx
+                    if (not revert and into_protect and min_minority_prob is not None
+                            and model_idx in minority_idx and P[pos][model_idx] >= min_minority_prob):
+                        revert = True                        # сильная улика меньшинства
+                    if not revert and into_protect and veto_minority:
+                        revert = True                        # M>1-контекст против резидента
+                    if revert:
+                        sm_idx = model_idx
                 out[i] = (classes[sm_idx], sm_idx != model_idx)
     return [o if o is not None else (classes[0], False) for o in out]

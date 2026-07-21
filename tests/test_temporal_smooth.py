@@ -78,3 +78,39 @@ def test_smooth_sequence_gap_splits_visits():
     ]
     out = [o[0] for o in ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.99)]
     assert out == ["2_delivery", "2_delivery", "1_resident", "1_resident"]
+
+
+def test_smooth_sequence_guard_reverts_unsupported_flip():
+    # одиночный гость с паузой 6с до пачки резидентов: без guard флипается в резидента,
+    # с guard(5с) — нет поддержки резидента рядом → остаётся гостем (кейс 014723-типа)
+    recs = [{"cam": "c", "t": 0.0, "probs": _p("4_guest", 0.6)}]
+    recs += [{"cam": "c", "t": 6.0 + i * 0.1, "probs": _p("1_resident")} for i in range(10)]
+    no_guard = ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.95)
+    assert no_guard[0][0] == "1_resident"                      # без guard задавлен
+    with_guard = ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.95, guard_sec=5.0)
+    assert with_guard[0] == ("4_guest", False)                # guard вернул argmax
+
+
+def test_smooth_sequence_min_minority_protects_transition():
+    # сильная доставка на границе резидентского прогона: min_minority_prob не даёт задавить в res
+    recs = [{"cam": "c", "t": float(i), "probs": _p("1_resident")} for i in range(4)]
+    recs.append({"cam": "c", "t": 4.0, "probs": _p("2_delivery", 0.85)})   # сильная улика
+    base = ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.95)
+    assert base[-1][0] == "1_resident"                        # без защиты — заглажен в res
+    prot = ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.95,
+                              protect_class="1_resident", minority_classes=["2_delivery"],
+                              min_minority_prob=0.7)
+    assert prot[-1][0] == "2_delivery"                        # защита сохранила доставку
+
+
+def test_smooth_sequence_mgt1_context_veto():
+    # M=1 кадр в визите, где M>1-контекст даёт сильного гостя → не форсим в резидента
+    recs = [{"cam": "c", "t": 0.0, "probs": _p("4_guest", 0.6)},
+            {"cam": "c", "t": 1.0, "probs": _p("1_resident")}]
+    ctx = [{"cam": "c", "t": 0.5, "probs": _p("4_guest", 0.9)}]   # многолюдный кадр — гости
+    no_veto = ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.95)
+    assert no_veto[0][0] == "1_resident"                      # без вето — задавлен
+    veto = ts.smooth_sequence(recs, C, gap_sec=60, p_stay=0.95,
+                              protect_class="1_resident", minority_classes=["4_guest"],
+                              context=ctx, veto_prob=0.85)
+    assert veto[0] == ("4_guest", False)                      # вето по M>1-контексту
