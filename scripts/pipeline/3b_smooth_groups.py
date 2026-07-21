@@ -169,14 +169,42 @@ def _frames_by_cam(rows: list[dict]) -> dict[str, list[dict]]:
     return out
 
 
-def _draw_probs(canvas, x: int, y: int, probs: list) -> None:
-    """4 числа-процента вероятностей, каждое в цвете своего класса (r/d/u/g)."""
+_PROB_DX = 26   # шаг между колонками вероятностей в подписи тайла
+
+
+def _draw_probs(canvas, x: int, y: int, probs: list, *, labels: bool = False) -> None:
+    """4 числа-процента вероятностей, каждое в цвете класса (r/d/u/g). labels: строкой ниже —
+    буквенные названия классов (res/del/utl/gst) под соответствующими числами."""
     import cv2
     cx = x
     for k, c in enumerate(GROUP_CLASSES):
         cv2.putText(canvas, f"{int(round(probs[k] * 100)):02d}", (cx, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.34, _CLASS_BGR[c], 1, cv2.LINE_AA)
-        cx += 26
+        if labels:
+            cv2.putText(canvas, _SHORT.get(c, c), (cx, y + 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.3, _CLASS_BGR[c], 1, cv2.LINE_AA)
+        cx += _PROB_DX
+
+
+def _draw_prob_graph(width: int, pts: list, height: int = 96):
+    """График вероятностей по времени на всю ширину конката: для каждого кадра — 4 точки
+    (по классам, высота=вероятность), точки одного класса соединены отрезками. pts: [(x_center, probs)]."""
+    import cv2
+    import numpy as np
+    g = np.full((height, width, 3), 18, np.uint8)
+    top, bot, left = 9, height - 10, 22
+    for val, lab in ((1.0, "1"), (0.5, ".5"), (0.0, "0")):        # сетка 0/.5/1
+        y = int(top + (1 - val) * (bot - top))
+        cv2.line(g, (left, y), (width - 3, y), (45, 45, 55), 1)
+        cv2.putText(g, lab, (2, y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (110, 110, 110), 1, cv2.LINE_AA)
+    for k, c in enumerate(GROUP_CLASSES):
+        col = _CLASS_BGR[c]
+        poly = [(int(x), int(top + (1 - pr[k]) * (bot - top))) for x, pr in pts]
+        if len(poly) >= 2:
+            cv2.polylines(g, [np.array(poly, np.int32)], False, col, 1, cv2.LINE_AA)
+        for (x, y) in poly:
+            cv2.circle(g, (x, y), 2, col, -1, cv2.LINE_AA)
+    return g
 
 
 def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: str,
@@ -199,8 +227,8 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
         near = near[max(0, ci - half): ci + half + 1]
     seg = near
 
-    TH, MAXW, LAB = 150, 150, 56
-    tiles = []
+    TH, MAXW, LAB = 150, 150, 66
+    tiles, pts, xoff = [], [], 0
     for fr in seg:
         is_center = fr["name"] == center_name
         M = fr["M"]
@@ -232,17 +260,20 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
         else:
             cv2.putText(canvas, _SHORT.get(GROUP_CLASSES[m_idx], "?"), (2, TH + 33),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.44, _CLASS_BGR[GROUP_CLASSES[m_idx]], 1, cv2.LINE_AA)
-        _draw_probs(canvas, 2, TH + 51, fr["probs"])
+        _draw_probs(canvas, 2, TH + 50, fr["probs"], labels=True)   # числа + буквы классов ниже
         if M > 1:
             cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (60, 60, 200), 2)   # красная = M>1
         if is_center:
             cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (0, 215, 255), 3)   # жёлтая = исправлен
         tiles.append(canvas)
+        pts.append((xoff + tw / 2.0, fr["probs"]))                 # точка графика — центр тайла
+        xoff += tw
 
     strip = tiles[0] if len(tiles) == 1 else cv2.hconcat(tiles)
+    graph = _draw_prob_graph(strip.shape[1], pts)                  # график probs по времени на всю ширину
 
     HH = 40
-    legend = "yellow=fixed  red=M>1(not smoothed)  nums=probs r/d/u/g %"
+    legend = "yellow=fixed  red=M>1(not smoothed)  nums/graph=probs r/d/u/g %"
     # ширина = max(полоса, самая длинная строка заголовка) — иначе на узком конкате текст обрезается
     (nw_, _), _ = cv2.getTextSize(center_name, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
     (lw_, _), _ = cv2.getTextSize(legend, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
@@ -252,11 +283,11 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
                 (170, 170, 170), 1, cv2.LINE_AA)
     cv2.putText(header, legend, (6, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                 (120, 120, 120), 1, cv2.LINE_AA)
-    if W > strip.shape[1]:                        # добить полосу справа фоном до ширины заголовка
-        pad = np.full((strip.shape[0], W - strip.shape[1], 3), 25, np.uint8)
-        strip = cv2.hconcat([strip, pad])
+    if W > strip.shape[1]:                        # добить полосу и график справа фоном до ширины заголовка
+        strip = cv2.hconcat([strip, np.full((strip.shape[0], W - strip.shape[1], 3), 25, np.uint8)])
+        graph = cv2.hconcat([graph, np.full((graph.shape[0], W - graph.shape[1], 3), 18, np.uint8)])
 
-    full = cv2.vconcat([header, strip])
+    full = cv2.vconcat([header, strip, graph])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), full)
     return True

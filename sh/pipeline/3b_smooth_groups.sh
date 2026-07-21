@@ -67,8 +67,19 @@ echo "  gap=${GAP}с  p_stay=${P_STAY}  gate=${GATE}  max_persons=${MAX_PERSONS}
 echo "  poll: ${POLL_SEC}s"
 echo ""
 
-args=("$IMAGES" "--gap" "$GAP" "--p-stay" "$P_STAY" "--max-persons" "$MAX_PERSONS" "--poll-sec" "$POLL_SEC")
+args=("$IMAGES" "--gap" "$GAP" "--p-stay" "$P_STAY" "--max-persons" "$MAX_PERSONS")
 [[ -n "$GATE" ]] && args+=("--gate" "$GATE")
 [[ "$VIZ" == "1" ]] && args+=("--viz")
 
-exec "$PYTHON" "$SCRIPT" "${args[@]}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+# Разовый запуск (--once) — один прогон и выход.
+if [[ " ${EXTRA_ARGS[*]-} " == *" --once "* ]]; then
+    exec "$PYTHON" "$SCRIPT" "${args[@]}" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+fi
+
+# Watch-режим: bash-цикл заново вызывает python --once каждый поллинг. Так правки кода 3b
+# подхватываются БЕЗ рестарта сервиса (python-процесс не живёт между поллингами).
+while true; do
+    "$PYTHON" "$SCRIPT" "${args[@]}" --once "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" \
+        || echo "[3b] прогон завершился с ошибкой"
+    sleep "$POLL_SEC"
+done
