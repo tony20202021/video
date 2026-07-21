@@ -389,7 +389,6 @@ _GALLERY_HTML = """<!DOCTYPE html>
 <div id="bulk-bar">
   <span id="bulk-count">Выбрано: 0</span>
   <div id="bulk-btns"></div>
-  <button class="btn-bulk btn-bulk-desel" onclick="deselectAll()">✕ Снять</button>
 </div>
 
 <div id="modal">
@@ -505,7 +504,7 @@ function render() {
 
 function tileClick(i, e) {
   if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(i, e);
-  else openModal(i);
+  else { deselectAll(); openModal(i); }   // обычный клик по картинке — крупный вид + снять выделение
 }
 
 function toggleSelect(idx, e) {
@@ -520,9 +519,15 @@ function toggleSelect(idx, e) {
       selected.add(idx);
       lastToggleIdx = idx;
     }
-  } else {
+  } else if (e.ctrlKey || e.metaKey) {
     if (selected.has(idx)) selected.delete(idx);
     else { selected.add(idx); lastToggleIdx = idx; }
+  } else {
+    // клик по галке без ctrl/shift — сбрасываем прежнее выделение, оставляем только этот кроп
+    const onlyThis = selected.size === 1 && selected.has(idx);
+    selected.clear();
+    if (!onlyThis) { selected.add(idx); lastToggleIdx = idx; }
+    else lastToggleIdx = -1;
   }
   updateSelectionDOM();
   updateBulkBar();
@@ -583,7 +588,8 @@ function renderBulkChecks() {
         style="${stl}">${box} ${cls}${badge}</button>`;
     }).join('') +
     `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')">Пропустить</button>` +
-    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>`;
+    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>` +
+    `<button class="btn-bulk btn-bulk-desel" onclick="deselectAll()" style="margin-left:0">✕ Снять выделение</button>`;
 }
 
 function toggleBulkClass(cls) {
@@ -672,6 +678,13 @@ document.getElementById('modal').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();
+});
+// клик по пустому месту (не тайл/бар/модалка/кнопка/ссылка) без ctrl/shift — снять выделение
+document.addEventListener('click', e => {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (e.target.closest('.tile') || e.target.closest('#bulk-bar') || e.target.closest('#modal')
+      || e.target.closest('button') || e.target.closest('a')) return;
+  if (selected.size) deselectAll();
 });
 
 loadState();
@@ -764,7 +777,6 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
 <div id="bulk-bar">
   <span id="bulk-count">Выбрано: 0</span>
   <div id="bulk-btns"></div>
-  <button class="btn-bulk btn-bulk-desel" onclick="deselectAll()">✕ Снять</button>
 </div>
 
 <div id="modal">
@@ -850,7 +862,8 @@ function render() {
   if (layout !== 'v4') {
     document.getElementById('bulk-btns').innerHTML = classes.map((cls, i) =>
       `<button class="btn-bulk btn-bulk-cls" onclick="applyBulk('${cls}','move')"
-        style="border-left-color:${CLASS_COLORS[i]||'#888'}">${cls}</button>`).join('');
+        style="border-left-color:${CLASS_COLORS[i]||'#888'}">${cls}</button>`).join('') +
+      `<button class="btn-bulk btn-bulk-desel" onclick="deselectAll()" style="margin-left:0">✕ Снять выделение</button>`;
   }
 
   // Группируем по КОМБИНАЦИИ классов
@@ -891,7 +904,7 @@ function render() {
 
 function tileClick(i, e) {
   if (e.ctrlKey || e.metaKey || e.shiftKey) toggleSelect(i, e);
-  else openModal(allFiles[i].path);
+  else { deselectAll(); openModal(allFiles[i].path); }   // клик по картинке — крупный вид + снять выделение
 }
 
 function toggleSelect(idx, e) {
@@ -905,9 +918,15 @@ function toggleSelect(idx, e) {
       selected.add(idx);
       lastTogglePath = allFiles[idx].path;
     }
-  } else {
+  } else if (e.ctrlKey || e.metaKey) {
     if (selected.has(idx)) selected.delete(idx);
     else { selected.add(idx); lastTogglePath = allFiles[idx].path; }
+  } else {
+    // клик по галке без ctrl/shift — сбрасываем прежнее выделение, оставляем только этот файл
+    const onlyThis = selected.size === 1 && selected.has(idx);
+    selected.clear();
+    if (!onlyThis) { selected.add(idx); lastTogglePath = allFiles[idx].path; }
+    else lastTogglePath = null;
   }
   updateSelectionDOM();
   updateBulkBar();
@@ -968,7 +987,8 @@ function renderBulkChecks() {
         style="${stl}">${box} ${cls}${badge}</button>`;
     }).join('') +
     `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')" style="margin-left:0">Пропустить</button>` +
-    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')">Очистить всё</button>`;
+    `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')">Очистить всё</button>` +
+    `<button class="btn-bulk btn-bulk-desel" onclick="deselectAll()" style="margin-left:0">✕ Снять выделение</button>`;
 }
 
 function toggleBulkClass(cls) {
@@ -1078,6 +1098,13 @@ document.getElementById('modal').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeModal();
+});
+// клик по пустому месту (не тайл/бар/модалка/кнопка/ссылка) без ctrl/shift — снять выделение
+document.addEventListener('click', e => {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (e.target.closest('.tile') || e.target.closest('#bulk-bar') || e.target.closest('#modal')
+      || e.target.closest('button') || e.target.closest('a')) return;
+  if (selected.size) deselectAll();
 });
 
 loadState();
