@@ -275,8 +275,9 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
     labels = _ml.load_labels(date_dir / "labels.json")   # {rel: [classes]}
     moved = changed = rescued = viz_n = 0
     audit = []
-    corrections = []   # (rec_idx, name, path, cur_class, smoothed_class)
-    for i, (rec, (sm_class, _changed)) in enumerate(zip(recs, smoothed)):
+    corrections = []   # (rec_idx, name, path, cur_class, smoothed_class) — перемещение раскладки
+    viz_targets = []   # (rec_idx, name, smoothed_class) — где smoothing изменил класс vs МОДЕЛИ
+    for i, (rec, (sm_class, changed)) in enumerate(zip(recs, smoothed)):
         name = rec["name"]
         f = files.get(name)
         if f is None or not f.is_file():
@@ -285,17 +286,20 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         cur = _current_class(rel_parts)     # текущая раскладка (что было до сглаживания)
         audit.append({"crop": name, "cam": rec["cam"], "model_class": cur,
                       "smoothed_class": sm_class, "changed": cur != sm_class})
-        if cur != sm_class:
+        if changed:                         # sm != argmax модели → «исправление» (для viz, стабильно)
+            viz_targets.append((i, name, sm_class))
+        if cur != sm_class:                 # раскладка отличается от sm → переложить файл
             corrections.append((i, name, f, cur, sm_class))
 
-    # виз-дебаг: рисуем ДО перемещений — все кадры визитов ещё на исходных местах
-    if viz and corrections:
+    # виз-дебаг: показываем ВСЕ исправления модели (sm≠argmax) — стабильно между прогонами,
+    # т.к. считается от вероятностей CSV, а не от раскладки (иначе после перекладки viz пропадал).
+    if viz and viz_targets:
         vdir = viz_dir or (date_dir / "meta" / "smooth_viz")
-        if vdir.is_dir():
-            for _old in vdir.glob("*.jpg"):
-                _old.unlink()
+        vdir.mkdir(parents=True, exist_ok=True)
+        for _old in vdir.glob("*.jpg"):
+            _old.unlink()
         visit_of = _visits_by_rec(recs, gap)
-        for i, name, _f, _cur, sm_class in corrections:
+        for i, name, sm_class in viz_targets:
             try:
                 if _render_smoothing_viz(i, visit_of.get(i, [i]), recs, files,
                                          date_dir.name, sm_class,

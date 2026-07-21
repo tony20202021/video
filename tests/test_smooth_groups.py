@@ -104,12 +104,14 @@ def test_smooth_date_writes_watermark(tmp_path):
 def test_smooth_date_viz_writes_concats(tmp_path):
     m = _load()
     dd = _make_dir(tmp_path)
-    # viz=True → на каждый исправленный кроп конкат-картинка в meta/smooth_viz/
+    # viz=True → конкат для КАЖДОГО исправления модели (sm≠argmax). Ошибочная доставка
+    # (argmax=delivery→resident) даёт viz; uncertain-кроп (argmax уже resident) — перекладка
+    # есть, но vs модели класс не изменился, поэтому в viz не попадает.
     st = m.smooth_date(dd, gap=60, p_stay=0.95, gate=None, include_uncertain=True, viz=True)
-    assert st["changed"] == 2 and st.get("viz") == 2
+    assert st["changed"] == 2 and st.get("viz") == 1
     vdir = dd / "meta" / "smooth_viz"
     assert vdir.is_dir()
     imgs = list(vdir.glob("*.jpg"))
-    assert len(imgs) == 2 and all(p.stat().st_size > 0 for p in imgs)
+    assert len(imgs) == 1 and all(p.stat().st_size > 0 for p in imgs)
     # meta/ не попадает в раскладку кропов (identify/индексатор его игнорируют)
     assert not (dd / "single" / "meta").exists()
