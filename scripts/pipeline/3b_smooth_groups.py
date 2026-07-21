@@ -49,6 +49,15 @@ IDENTIFY_CLASSES = {RESIDENT_CLASS, GUEST_CLASS}
 _DATE_RE = re.compile(r"^\d{8}$")
 
 
+_RE_PERSON = re.compile(r"p\d+of(\d+)")
+
+
+def _persons_in_frame(name: str) -> int:
+    """Число людей в кадре из 'pNofM' (M). 1 если не найдено."""
+    m = _RE_PERSON.search(name)
+    return int(m.group(1)) if m else 1
+
+
 def _parse_cam_t(name: str) -> tuple[str, float] | None:
     """Камера + время (сек от начала суток) из имени кропа. None если не разобрать."""
     stem = name.rsplit(".", 1)[0]
@@ -89,8 +98,10 @@ def _read_csv_rows(date_dir: Path) -> list[dict]:
 
 
 def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None,
-                include_uncertain: bool, ext: str = "jpg") -> dict:
-    """Сглаживает один каталог-дату. Возвращает статистику."""
+                include_uncertain: bool, max_persons: int = 1, ext: str = "jpg") -> dict:
+    """Сглаживает один каталог-дату. Возвращает статистику.
+    max_persons: сглаживаем только кропы из кадров с ≤ max_persons людей (pNofM) — многолюдные
+    кадры содержат РАЗНЫХ людей, их сглаживать по времени нельзя (см. замер: ломает гостей)."""
     rows = _read_csv_rows(date_dir)
     if not rows:
         return {"date": date_dir.name, "rows": 0}
@@ -99,6 +110,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
     # по имени кропа: исходные вероятности (первое вхождение — CSV накопительный, вероятности стабильны)
     recs: list[dict] = []
     meta: dict[str, dict] = {}
+    skipped_crowd = 0
     for r in rows:
         name = r.get("crop", "")
         if not name or name in meta:
@@ -106,6 +118,9 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         oc = r.get("out_class", "")
         eligible = oc in GROUP_CLASSES or (include_uncertain and oc == "uncertain")
         if not eligible:
+            continue
+        if _persons_in_frame(name) > max_persons:   # многолюдный кадр — не сглаживаем
+            skipped_crowd += 1
             continue
         try:
             probs = [float(r.get(f"p_{c}", 0) or 0) for c in GROUP_CLASSES]
@@ -170,7 +185,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
     n_ident = sum(1 for a in audit if a["smoothed_class"] in IDENTIFY_CLASSES)
     return {"date": date_dir.name, "rows": len(rows), "eligible": len(recs),
             "changed": changed, "moved": moved, "rescued_uncertain": rescued,
-            "to_identify": n_ident}
+            "skipped_crowd": skipped_crowd, "to_identify": n_ident}
 
 
 def _date_dirs(root: Path) -> list[Path]:
@@ -189,8 +204,10 @@ def main() -> int:
                     help=f"пауза (сек) для сегментации визитов (default: {_ts.DEFAULT_GAP_SEC})")
     ap.add_argument("--p-stay", type=float, default=_ts.DEFAULT_P_STAY,
                     help=f"вероятность сохранения класса в HMM (default: {_ts.DEFAULT_P_STAY})")
-    ap.add_argument("--gate", type=float, default=None,
-                    help="не трогать предсказания с уверенностью ≥ gate (default: выкл)")
+    ap.add_argument("--gate", type=float, default=0.8,
+                    help="не трогать предсказания с уверенностью ≥ gate (default: 0.8; 0=выкл)")
+    ap.add_argument("--max-persons", type=int, default=1,
+                    help="сглаживать только кадры с ≤ N людей (default: 1 — многолюдные не трогаем)")
     ap.add_argument("--no-uncertain", dest="include_uncertain", action="store_false",
                     help="не спасать uncertain-кропы (по умолчанию спасаем — даём класс визита)")
     ap.add_argument("--ext", default="jpg")
@@ -202,15 +219,17 @@ def main() -> int:
         logger.error("Не найдено: %s", args.input_dir)
         return 1
 
-    logger.info("3b smooth: gap=%.0fс p_stay=%.2f gate=%s uncertain=%s",
-                args.gap, args.p_stay, args.gate, args.include_uncertain)
+    gate = args.gate if args.gate and args.gate > 0 else None
+    logger.info("3b smooth: gap=%.0fс p_stay=%.2f gate=%s max_persons=%d uncertain=%s",
+                args.gap, args.p_stay, gate, args.max_persons, args.include_uncertain)
 
     while True:
         dates = _date_dirs(args.input_dir)
         total_changed = 0
         for dd in dates:
-            st = smooth_date(dd, gap=args.gap, p_stay=args.p_stay, gate=args.gate,
-                             include_uncertain=args.include_uncertain, ext=args.ext)
+            st = smooth_date(dd, gap=args.gap, p_stay=args.p_stay, gate=gate,
+                             include_uncertain=args.include_uncertain,
+                             max_persons=args.max_persons, ext=args.ext)
             if st.get("changed"):
                 logger.info("1 батч (%d кадров)  Готово.  %s: сглажено %d (переложено %d, "
                             "uncertain→класс %d, в identify %d)",
