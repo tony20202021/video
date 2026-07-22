@@ -186,7 +186,7 @@ def _draw_probs(canvas, x: int, y: int, probs: list, *, labels: bool = False) ->
         cx += _PROB_DX
 
 
-def _draw_prob_graph(width: int, pts: list, height: int = 96):
+def _draw_prob_graph(width: int, pts: list, height: int = 96, title: str = ""):
     """График вероятностей по времени на всю ширину конката: для каждого кадра — 4 точки
     (по классам, высота=вероятность), точки одного класса соединены отрезками. pts: [(x_center, probs)]."""
     import cv2
@@ -197,6 +197,8 @@ def _draw_prob_graph(width: int, pts: list, height: int = 96):
         y = int(top + (1 - val) * (bot - top))
         cv2.line(g, (left, y), (width - 3, y), (45, 45, 55), 1)
         cv2.putText(g, lab, (2, y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (110, 110, 110), 1, cv2.LINE_AA)
+    if title:
+        cv2.putText(g, title, (left + 6, top + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (150, 150, 150), 1, cv2.LINE_AA)
     for k, c in enumerate(GROUP_CLASSES):
         col = _CLASS_BGR[c]
         poly = [(int(x), int(top + (1 - pr[k]) * (bot - top))) for x, pr in pts]
@@ -209,7 +211,8 @@ def _draw_prob_graph(width: int, pts: list, height: int = 96):
 
 def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: str,
                           files: dict, date_str: str, out_path: Path,
-                          *, win_sec: float = 90.0, max_tiles: int = 41) -> bool:
+                          *, win_sec: float = 90.0, max_tiles: int = 41,
+                          prob_window_sec: float | None = None) -> bool:
     """Конкат кадров камеры в окне ±win_sec СЕКУНД вокруг исправленного (по ВСЕМ кадрам, вкл. M>1).
     Окно по ВРЕМЕНИ (не по числу кадров) — иначе на редкой камере попадут события со всего дня.
     Под каждым кадром: время, класс-argmax модели, вероятности (r/d/u/g %). Исправленный —
@@ -227,9 +230,22 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
         near = near[max(0, ci - half): ci + half + 1]
     seg = near
 
+    # probs ПОСЛЕ сглаживания по кадрам (M=1: усреднить ±окно как в сглаживании; M>1: raw) —
+    # чтобы КАЖДЫЙ тайл показывал класс после сглаживания, а не только центр.
+    seg_sm = None
+    if prob_window_sec:
+        m1_t = np.array([fr["t"] for fr in seg if fr["M"] == 1])
+        m1_P = np.array([fr["probs"] for fr in seg if fr["M"] == 1], dtype=float)
+        seg_sm = []
+        for fr in seg:
+            if fr["M"] == 1 and len(m1_t):
+                seg_sm.append(m1_P[np.abs(m1_t - fr["t"]) <= prob_window_sec].mean(0))
+            else:
+                seg_sm.append(np.asarray(fr["probs"], dtype=float))
+
     TH, MAXW, LAB = 150, 150, 66
     tiles, pts, xoff = [], [], 0
-    for fr in seg:
+    for k, fr in enumerate(seg):
         is_center = fr["name"] == center_name
         M = fr["M"]
         f = files.get(fr["name"])
@@ -244,33 +260,42 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
         canvas = np.full((TH + LAB, tw, 3), 25, np.uint8)
         canvas[:TH, :tw] = img
         hhmmss, _ymd = _fmt_dt(fr["t"], date_str)
-        m_idx = int(np.argmax(fr["probs"]))
+        m_idx = int(np.argmax(fr["probs"]))                        # класс модели (raw argmax)
+        s_idx = int(np.argmax(seg_sm[k])) if seg_sm is not None else m_idx   # класс ПОСЛЕ сглаживания
         cv2.putText(canvas, hhmmss, (2, TH + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                     (210, 210, 210), 1, cv2.LINE_AA)
         if M > 1:                                # многолюдный кадр — не сглаживается
             cv2.putText(canvas, f"M{M}", (tw - 30, TH + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                         (60, 60, 235), 1, cv2.LINE_AA)
-        if is_center:                            # argmax → новый класс прямо у кадра
+        if s_idx != m_idx:                       # сглаживание сменило класс → model->smoothed прямо у кадра
+            sm_name = sm_class if is_center else GROUP_CLASSES[s_idx]
             base = f"{_SHORT.get(GROUP_CLASSES[m_idx], '?')}->"
             cv2.putText(canvas, base, (2, TH + 33), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
                         (150, 150, 150), 1, cv2.LINE_AA)
             (bw, _), _ = cv2.getTextSize(base, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 1)
-            cv2.putText(canvas, _SHORT.get(sm_class, sm_class), (2 + bw, TH + 33),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, _CLASS_BGR.get(sm_class, (0, 215, 255)), 2, cv2.LINE_AA)
-        else:
-            cv2.putText(canvas, _SHORT.get(GROUP_CLASSES[m_idx], "?"), (2, TH + 33),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, _CLASS_BGR[GROUP_CLASSES[m_idx]], 1, cv2.LINE_AA)
+            cv2.putText(canvas, _SHORT.get(sm_name, sm_name), (2 + bw, TH + 33),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, _CLASS_BGR.get(sm_name, (0, 215, 255)),
+                        2 if is_center else 1, cv2.LINE_AA)
+        else:                                    # класс не менялся — просто класс (после сглаживания = модели)
+            cv2.putText(canvas, _SHORT.get(GROUP_CLASSES[s_idx], "?"), (2, TH + 33),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, _CLASS_BGR[GROUP_CLASSES[s_idx]], 1, cv2.LINE_AA)
         _draw_probs(canvas, 2, TH + 50, fr["probs"], labels=True)   # числа + буквы классов ниже
         if M > 1:
             cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (60, 60, 200), 2)   # красная = M>1
         if is_center:
-            cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (0, 215, 255), 3)   # жёлтая = исправлен
+            cv2.rectangle(canvas, (0, 0), (tw - 1, TH - 1), (0, 215, 255), 3)   # жёлтая = центр
         tiles.append(canvas)
         pts.append((xoff + tw / 2.0, fr["probs"]))                 # точка графика — центр тайла
         xoff += tw
 
     strip = tiles[0] if len(tiles) == 1 else cv2.hconcat(tiles)
-    graph = _draw_prob_graph(strip.shape[1], pts)                  # график probs по времени на всю ширину
+    title1 = "model probs" if prob_window_sec else ""
+    graph = _draw_prob_graph(strip.shape[1], pts, title=title1)    # график probs модели на всю ширину
+
+    graph2 = None
+    if seg_sm is not None:                                         # второй график — probs ПОСЛЕ сглаживания
+        sm_pts = [(pts[k][0], seg_sm[k]) for k in range(len(seg))]
+        graph2 = _draw_prob_graph(strip.shape[1], sm_pts, title=f"smoothed (window {prob_window_sec:g}s)")
 
     HH = 40
     legend = "yellow=fixed  red=M>1(not smoothed)  nums/graph=probs r/d/u/g %"
@@ -283,11 +308,14 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
                 (170, 170, 170), 1, cv2.LINE_AA)
     cv2.putText(header, legend, (6, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                 (120, 120, 120), 1, cv2.LINE_AA)
-    if W > strip.shape[1]:                        # добить полосу и график справа фоном до ширины заголовка
+    if W > strip.shape[1]:                        # добить полосу и графики справа фоном до ширины заголовка
         strip = cv2.hconcat([strip, np.full((strip.shape[0], W - strip.shape[1], 3), 25, np.uint8)])
         graph = cv2.hconcat([graph, np.full((graph.shape[0], W - graph.shape[1], 3), 18, np.uint8)])
+        if graph2 is not None:
+            graph2 = cv2.hconcat([graph2, np.full((graph2.shape[0], W - graph2.shape[1], 3), 18, np.uint8)])
 
-    full = cv2.vconcat([header, strip, graph])
+    parts = [header, strip, graph] + ([graph2] if graph2 is not None else [])
+    full = cv2.vconcat(parts)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(out_path), full)
     return True
@@ -400,7 +428,8 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
                 try:
                     frames = cam_frames.get(name_to_cam.get(name, ""), [])
                     if _render_smoothing_viz(name, frames, sm_class, files,
-                                             date_dir.name, vdir / f"{Path(name).stem}.jpg"):
+                                             date_dir.name, vdir / f"{Path(name).stem}.jpg",
+                                             prob_window_sec=prob_window_sec):
                         viz_n += 1
                 except Exception as e:                   # виз не должен ронять пайплайн
                     logger.warning("viz fail %s: %s", name, e)
