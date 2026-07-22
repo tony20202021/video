@@ -54,14 +54,16 @@ done
 # Аргументы python из .env — читаются ЗАНОВО каждый поллинг → правки конфига (SMOOTH_*)
 # применяются без рестарта (как и правки кода). SMOOTH_PROB_WINDOW=N — режим бегущего окна.
 _build_args() {
-    local gap p_stay gate maxp viz pw
+    local gap p_stay gate maxp viz pw pwk
     gap="$(_ef SMOOTH_GAP_SEC 60)";  p_stay="$(_ef SMOOTH_P_STAY 0.95)"
     gate="$(_ef SMOOTH_GATE 0.8)";   maxp="$(_ef SMOOTH_MAX_PERSONS 1)"
     viz="$(_ef SMOOTH_VIZ 1)";       pw="$(_ef SMOOTH_PROB_WINDOW 0)"
+    pwk="$(_ef SMOOTH_PROB_WINDOW_K 0)"          # адаптивное окно: ≤K ближайших кадров (0=все в окне)
     ARGS=("$IMAGES" "--gap" "$gap" "--p-stay" "$p_stay" "--max-persons" "$maxp")
     [[ -n "$gate" ]] && ARGS+=("--gate" "$gate")
     [[ "$viz" == "1" ]] && ARGS+=("--viz")
     [[ -n "$pw" && "$pw" != "0" ]] && ARGS+=("--prob-window" "$pw")
+    [[ -n "$pwk" && "$pwk" != "0" ]] && ARGS+=("--prob-window-k" "$pwk")
 }
 
 echo "=== 3b_smooth_groups ==="

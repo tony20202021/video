@@ -212,7 +212,8 @@ def _draw_prob_graph(width: int, pts: list, height: int = 96, title: str = ""):
 def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: str,
                           files: dict, date_str: str, out_path: Path,
                           *, win_sec: float = 90.0, max_tiles: int = 41,
-                          prob_window_sec: float | None = None) -> bool:
+                          prob_window_sec: float | None = None,
+                          prob_window_kmax: int | None = None) -> bool:
     """Конкат кадров камеры в окне ±win_sec СЕКУНД вокруг исправленного (по ВСЕМ кадрам, вкл. M>1).
     Окно по ВРЕМЕНИ (не по числу кадров) — иначе на редкой камере попадут события со всего дня.
     Под каждым кадром: время, класс-argmax модели, вероятности (r/d/u/g %). Исправленный —
@@ -239,7 +240,10 @@ def _render_smoothing_viz(center_name: str, cam_frames: list[dict], sm_class: st
         seg_sm = []
         for fr in seg:
             if fr["M"] == 1 and len(m1_t):
-                seg_sm.append(m1_P[np.abs(m1_t - fr["t"]) <= prob_window_sec].mean(0))
+                d = np.abs(m1_t - fr["t"]); idx = np.nonzero(d <= prob_window_sec)[0]
+                if prob_window_kmax and len(idx) > prob_window_kmax:   # адаптивное: K ближайших
+                    idx = idx[np.argsort(d[idx], kind="stable")[:prob_window_kmax]]
+                seg_sm.append(m1_P[idx].mean(0))
             else:
                 seg_sm.append(np.asarray(fr["probs"], dtype=float))
 
@@ -325,7 +329,8 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
                 include_uncertain: bool, max_persons: int = 1, ext: str = "jpg",
                 viz: bool = False, viz_dir: Path | None = None,
                 guard_sec: float | None = None, min_minority_prob: float | None = None,
-                veto_prob: float | None = None, prob_window_sec: float | None = None) -> dict:
+                veto_prob: float | None = None, prob_window_sec: float | None = None,
+                prob_window_kmax: int | None = None) -> dict:
     """Сглаживает один каталог-дату. Возвращает статистику.
     max_persons: сглаживаем только кропы из кадров с ≤ max_persons людей (pNofM) — многолюдные
     кадры содержат РАЗНЫХ людей, их сглаживать по времени нельзя (см. замер: ломает гостей).
@@ -373,7 +378,9 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         if name in meta:
             continue
         oc = r.get("out_class", "")
-        if not (oc in GROUP_CLASSES or (include_uncertain and oc == "uncertain")):
+        # multi (M=1, модель зажгла 2+ класса = неоднозначность одного человека) — ТОЖЕ сглаживаем:
+        # окно разрешает его в один класс (замер 9 дней v4_1: 17.3%→15.5%). uncertain — по флагу.
+        if not (oc in GROUP_CLASSES or oc == "multi" or (include_uncertain and oc == "uncertain")):
             continue
         rec = {"cam": cam, "t": t, "probs": probs, "name": name, "model_class": r.get("group", oc)}
         meta[name] = rec
@@ -388,7 +395,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
         guard_sec=guard_sec, protect_class=RESIDENT_CLASS,
         minority_classes=[c for c in GROUP_CLASSES if c != RESIDENT_CLASS],
         min_minority_prob=min_minority_prob, context=context, veto_prob=veto_prob,
-        prob_window_sec=prob_window_sec)
+        prob_window_sec=prob_window_sec, prob_window_kmax=prob_window_kmax)
 
     labels = _ml.load_labels(date_dir / "labels.json")   # {rel: [classes]}
     moved = changed = rescued = viz_n = 0
@@ -429,7 +436,8 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
                     frames = cam_frames.get(name_to_cam.get(name, ""), [])
                     if _render_smoothing_viz(name, frames, sm_class, files,
                                              date_dir.name, vdir / f"{Path(name).stem}.jpg",
-                                             prob_window_sec=prob_window_sec):
+                                             prob_window_sec=prob_window_sec,
+                                             prob_window_kmax=prob_window_kmax):
                         viz_n += 1
                 except Exception as e:                   # виз не должен ронять пайплайн
                     logger.warning("viz fail %s: %s", name, e)
@@ -493,6 +501,9 @@ def main() -> int:
     ap.add_argument("--prob-window", type=float, default=0.0,
                     help="режим бегущего окна: усреднять probs по ±N сек внутри визита и брать "
                          "argmax вместо Viterbi (замер: 8.0%%→3.5%%, лучше по всем классам; 0=выкл)")
+    ap.add_argument("--prob-window-k", type=int, default=0,
+                    help="адаптивное окно: не более K ближайших кадров в пределах --prob-window сек "
+                         "(0=выкл, брать все кадры в окне)")
     ap.add_argument("--ext", default="jpg")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--poll-sec", type=float, default=120.0)
@@ -504,8 +515,10 @@ def main() -> int:
 
     gate = args.gate if args.gate and args.gate > 0 else None
     prob_window = args.prob_window if args.prob_window and args.prob_window > 0 else None
-    logger.info("3b smooth: gap=%.0fс p_stay=%.2f gate=%s max_persons=%d uncertain=%s viz=%s prob_window=%s",
-                args.gap, args.p_stay, gate, args.max_persons, args.include_uncertain, args.viz, prob_window)
+    prob_window_k = args.prob_window_k if args.prob_window_k and args.prob_window_k > 0 else None
+    logger.info("3b smooth: gap=%.0fс p_stay=%.2f gate=%s max_persons=%d uncertain=%s viz=%s prob_window=%s k=%s",
+                args.gap, args.p_stay, gate, args.max_persons, args.include_uncertain, args.viz,
+                prob_window, prob_window_k)
 
     while True:
         dates = _date_dirs(args.input_dir)
@@ -514,7 +527,7 @@ def main() -> int:
             st = smooth_date(dd, gap=args.gap, p_stay=args.p_stay, gate=gate,
                              include_uncertain=args.include_uncertain,
                              max_persons=args.max_persons, ext=args.ext, viz=args.viz,
-                             prob_window_sec=prob_window)
+                             prob_window_sec=prob_window, prob_window_kmax=prob_window_k)
             if st.get("changed"):
                 logger.info("1 батч (%d кадров)  Готово.  %s: сглажено %d (переложено %d, "
                             "uncertain→класс %d, в identify %d, viz %d)",

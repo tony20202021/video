@@ -120,6 +120,17 @@ def test_smooth_sequence_prob_window_fixes_error():
     assert out[1] == ("1_resident", True)                 # окно исправило (changed=True)
 
 
+def test_window_average_kmax_limits_neighbors():
+    # 5 кадров в 0.4с; полное окно давит доставку в резидента, kmax=2 (сам+ближайший) — сохраняет
+    P = np.array([_p("2_delivery"), _p("2_delivery"), _p("1_resident"),
+                  _p("1_resident"), _p("1_resident")])
+    times = [0.0, 0.1, 0.2, 0.3, 0.4]
+    full = ts.window_average(P, times, 3.0)
+    k2 = ts.window_average(P, times, 3.0, kmax=2)
+    assert int(full[0].argmax()) == C.index("1_resident")   # полное: 3 резид > 2 достав
+    assert int(k2[0].argmax()) == C.index("2_delivery")     # K=2: сам+сосед-доставка
+
+
 def test_prob_window_respects_visit_gap():
     # окно не усредняет через паузу визита (>gap) — разные события не смешиваются
     recs = [{"cam": "c", "t": 0.0, "probs": _p("2_delivery")},

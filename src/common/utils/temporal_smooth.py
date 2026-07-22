@@ -38,18 +38,21 @@ def segment_visits(times, gap_sec: float = DEFAULT_GAP_SEC) -> list[list[int]]:
 
 
 def window_average(probs: np.ndarray, times, window_sec: float,
-                   triangular: bool = False) -> np.ndarray:
+                   triangular: bool = False, kmax: int | None = None) -> np.ndarray:
     """Бегущее окно по времени: probs[i] → среднее probs соседей в пределах ±window_sec.
     Денойзит траектории вероятностей (единичные скачки усредняются). triangular: вес соседа
-    ∝ (1 - |dt|/window). Окно должно вызываться в пределах одного визита (не через паузы)."""
+    ∝ (1 - |dt|/window). kmax: адаптивное окно — брать не более K БЛИЖАЙШИХ по времени соседей
+    (в пределах window_sec) — учитывает неравномерную плотность кадров. Вызывать в пределах визита."""
     P = np.asarray(probs, dtype=float)
     t = np.asarray(times, dtype=float)
     out = np.zeros_like(P)
     for i in range(len(t)):
         d = np.abs(t - t[i])
-        sel = d <= window_sec
-        w = (1.0 - d[sel] / window_sec) if triangular else np.ones(int(sel.sum()))
-        out[i] = (P[sel] * w[:, None]).sum(0) / w.sum()
+        idx = np.nonzero(d <= window_sec)[0]
+        if kmax and len(idx) > kmax:                          # K ближайших по времени
+            idx = idx[np.argsort(d[idx], kind="stable")[:kmax]]
+        w = (1.0 - d[idx] / window_sec) if triangular else np.ones(len(idx))
+        out[i] = (P[idx] * w[:, None]).sum(0) / w.sum()
     return out
 
 
@@ -90,7 +93,8 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
                     context: list[dict] | None = None,
                     veto_prob: float | None = None,
                     prob_window_sec: float | None = None,
-                    prob_window_tri: bool = False) -> list[tuple[str, bool]]:
+                    prob_window_tri: bool = False,
+                    prob_window_kmax: int | None = None) -> list[tuple[str, bool]]:
     """Сглаживает предсказания по времени. records: [{'cam', 't', 'probs': [по classes]}].
     Возвращает (smoothed_class, changed) в ПОРЯДКЕ ВХОДА, changed = класс изменился vs argmax модели.
 
@@ -127,7 +131,7 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
             if prob_window_sec is not None:              # режим бегущего окна: усреднить probs → argmax
                 Praw = np.array([records[i]["probs"] for i in vi], dtype=float)
                 vtimes = [records[i]["t"] for i in vi]
-                Pw = window_average(Praw, vtimes, prob_window_sec, prob_window_tri)
+                Pw = window_average(Praw, vtimes, prob_window_sec, prob_window_tri, prob_window_kmax)
                 for pos, i in enumerate(vi):
                     sm_idx = int(Pw[pos].argmax())
                     out[i] = (classes[sm_idx], sm_idx != int(Praw[pos].argmax()))
