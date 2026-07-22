@@ -418,13 +418,18 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
 
     # виз-дебаг: показываем ВСЕ исправления модели (sm≠argmax) — стабильно между прогонами,
     # т.к. считается от вероятностей CSV, а не от раскладки (иначе после перекладки viz пропадал).
-    # Перерисовываем только если CSV вырос с прошлой генерации (маркер .viz_rows) — не каждый поллинг.
+    # Перерисовываем если вырос CSV ИЛИ сменилась VERSION (правка кода/конфига) — иначе пропуск.
     if viz and viz_targets:
         vdir = viz_dir or (date_dir / "meta" / "smooth_viz")
+        try:
+            _ver = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        except OSError:
+            _ver = ""
+        sig = f"{len(rows)}:{_ver}:pw{prob_window_sec}:k{prob_window_kmax}"
         marker = vdir / ".viz_rows"
         prev = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
-        if prev == str(len(rows)) and any(vdir.glob("*.jpg")):
-            pass                                         # CSV не менялся — viz актуален, не трогаем
+        if prev == sig and any(vdir.glob("*.jpg")):
+            pass                                         # ни CSV, ни версия/конфиг не менялись — не трогаем
         else:
             vdir.mkdir(parents=True, exist_ok=True)
             for _old in vdir.glob("*.jpg"):
@@ -441,7 +446,7 @@ def smooth_date(date_dir: Path, *, gap: float, p_stay: float, gate: float | None
                         viz_n += 1
                 except Exception as e:                   # виз не должен ронять пайплайн
                     logger.warning("viz fail %s: %s", name, e)
-            marker.write_text(str(len(rows)), encoding="utf-8")
+            marker.write_text(sig, encoding="utf-8")
 
     # перекладываем исправленные кропы в single/<sm_class>/ + правим labels.json
     for i, name, f, cur, sm_class in corrections:
