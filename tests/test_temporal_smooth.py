@@ -105,10 +105,44 @@ def test_smooth_sequence_min_minority_protects_transition():
 
 def test_window_average_denoises_spike():
     # поток резидентов с одним скачком в доставку → окно усредняет, argmax снова резидент
+    # window_sec=3 → радиус ±1.5с: кадр 2 (t=2) усредняется с соседями t=1 и t=3 (резиденты)
     P = np.array([_p("1_resident"), _p("1_resident"),
                   _p("2_delivery", 0.6), _p("1_resident"), _p("1_resident")])
     Pw = ts.window_average(P, [0, 1, 2, 3, 4], window_sec=3)
     assert int(Pw[2].argmax()) == C.index("1_resident")   # единичный скачок усреднён
+
+
+def test_window_average_is_classic_per_frame():
+    # классическое бегущее окно: КАЖДЫЙ кадр получает СВОЁ значение (не одно на весь визит).
+    # переход доставка→резидент: начало окна = доставка, конец = резидент, а не один класс на всех
+    P = np.array([_p("2_delivery"), _p("2_delivery"), _p("2_delivery"),
+                  _p("1_resident"), _p("1_resident"), _p("1_resident")])
+    times = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
+    Pw = ts.window_average(P, times, window_sec=3.0, kmax=7)   # ±1.5с / ±3 кадра
+    cls = [int(v.argmax()) for v in Pw]
+    assert cls[0] == C.index("2_delivery")
+    assert cls[-1] == C.index("1_resident")
+    assert len(set(cls)) >= 2                                 # разные значения, не одно на всех
+
+
+def test_window_average_total_window_radius():
+    # window_sec = ПОЛНЫЙ размер окна → радиус window_sec/2. window_sec=2 → ±1с: кадр t=0 не
+    # видит t=1.5 (за пределами ±1с), поэтому не усредняется с далёким классом
+    P = np.array([_p("2_delivery"), _p("1_resident"), _p("1_resident")])
+    close = ts.window_average(P, [0.0, 1.5, 3.0], window_sec=2.0)   # радиус 1с
+    assert int(close[0].argmax()) == C.index("2_delivery")         # сосед t=1.5 вне ±1с → сам
+
+
+def test_window_average_triangular_weights_center_more():
+    # треугольный вес ∝ (1−|Δt|/радиус): далёкие соседи влияют меньше → центр (доставка) сохраняется
+    P = np.array([_p("2_delivery"), _p("1_resident"), _p("1_resident")])
+    times = [0.0, 1.0, 2.0]
+    uni = ts.window_average(P, times, 4.0)                    # радиус 2с, равные веса
+    tri = ts.window_average(P, times, 4.0, triangular=True)
+    di = C.index("2_delivery")
+    assert tri[0][di] > uni[0][di]                            # доля доставки в центре выше при взвешивании
+    assert int(uni[0].argmax()) == C.index("1_resident")     # равные веса: 2 резид задавили
+    assert int(tri[0].argmax()) == C.index("2_delivery")     # взвешенное: центр-доставка сохранён
 
 
 def test_smooth_sequence_prob_window_fixes_error():
@@ -121,14 +155,15 @@ def test_smooth_sequence_prob_window_fixes_error():
 
 
 def test_window_average_kmax_limits_neighbors():
-    # 5 кадров в 0.4с; полное окно давит доставку в резидента, kmax=2 (сам+ближайший) — сохраняет
+    # 5 кадров в 0.4с; полное окно по времени давит доставку в резидента.
+    # kmax=3 → позиционный радиус ±1 кадр: кадр 0 видит только себя+сосед (обе доставки) → доставка
     P = np.array([_p("2_delivery"), _p("2_delivery"), _p("1_resident"),
                   _p("1_resident"), _p("1_resident")])
     times = [0.0, 0.1, 0.2, 0.3, 0.4]
     full = ts.window_average(P, times, 3.0)
-    k2 = ts.window_average(P, times, 3.0, kmax=2)
+    k3 = ts.window_average(P, times, 3.0, kmax=3)
     assert int(full[0].argmax()) == C.index("1_resident")   # полное: 3 резид > 2 достав
-    assert int(k2[0].argmax()) == C.index("2_delivery")     # K=2: сам+сосед-доставка
+    assert int(k3[0].argmax()) == C.index("2_delivery")     # kmax=3 (±1 кадр): сам+сосед-доставка
 
 
 def test_prob_window_respects_visit_gap():

@@ -71,10 +71,11 @@ SERVICES = [
     },
     {
         "name":       "video-smooth",
+        "label":      "classify-smooth",   # отображаемое имя (systemd-юнит остаётся video-smooth)
         "in_label":   f".data/groups/{GROUPS_VER}/inference/  images/  (classifications.csv)",
         "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
-        "out_label":  f"groups/{GROUPS_VER}/  single/<class>/  (сглажено по времени)",
-        "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/images",
+        "out_label":  f"groups/{GROUPS_VER}/inference/  smoothed/",
+        "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/smoothed",
         "log_work":   r"Готово|сглажено",
         "log_wait":   r"Изменений нет|ожидание",
         "stats_pat":  r"Готово\.",
@@ -82,14 +83,26 @@ SERVICES = [
     },
     {
         "name":       "video-identify",
-        "in_label":   f"groups/{GROUPS_VER}/  single/1_resident  single/4_guest  multi/",
-        "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
-        "out_label":  f".data/residents/{RESIDENTS_VER}/inference/  images/",
+        "in_label":   f"groups/{GROUPS_VER}/inference/  smoothed/ →resident,guest",
+        "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/smoothed",
+        "out_label":  f".data/residents/{RESIDENTS_VER}/inference/  images/  (identifications.csv)",
         "out_dir":    REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
         "log_work":   r"Готово",
         "log_wait":   r"Идентификаций не найдено|ожидание|Кропов нет",
         "stats_pat":  r"Готово\. Время:",
         "has_timing": True,
+    },
+    {
+        "name":       "video-smooth-identity",
+        "label":      "identify-smooth",   # отображаемое имя (systemd-юнит остаётся video-smooth-identity)
+        "in_label":   f"residents/{RESIDENTS_VER}/inference/  images/  (identifications.csv)",
+        "in_dir":     REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
+        "out_label":  f"residents/{RESIDENTS_VER}/inference/  smoothed/",
+        "out_dir":    REPO / f".data/residents/{RESIDENTS_VER}/inference/smoothed",
+        "log_work":   r"Готово|сглажено",
+        "log_wait":   r"Изменений нет|ожидание",
+        "stats_pat":  r"Готово\.",
+        "has_timing": False,
     },
 ]
 
@@ -136,9 +149,20 @@ def dir_state(directory: Path | None) -> str:
 _DATE_RE = re.compile(r"^\d{8}$")
 
 
+def _fmt_date(s: str) -> str:
+    """'20260720' → '2026-07-20' (для читаемости в колонках)."""
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if _DATE_RE.match(s) else s
+
+
+def _thou(n: int) -> str:
+    """Разряды тысяч через пробел: 4315 → '4 315'."""
+    return f"{n:,}".replace(",", " ")
+
+
 def _is_inference_images(directory: Path | None) -> bool:
-    """Каталог вида …/inference/images — там данные разложены по датам YYYYMMDD/."""
-    return (directory is not None and directory.name == "images"
+    """Каталог вида …/inference/{images,smoothed} — данные разложены по датам YYYYMMDD/
+    (images/ = кропы модели; smoothed/ = сайдкар сглаживания: CSV + viz-конкаты по датам)."""
+    return (directory is not None and directory.name in ("images", "smoothed")
             and directory.parent.name == "inference")
 
 
@@ -164,10 +188,10 @@ def dir_state_by_date(directory: Path | None) -> str:
     if not dated and not extra:
         return "—"
     total = sum(n for _, n in dated)
-    lines = [f"{name}: {n}" for name, n in dated]
-    lines.append(f"ИТОГО: {total} ({len(dated)} дат)")
+    lines = [f"{_fmt_date(name)}: {_thou(n)}" for name, n in dated]
+    lines.append(f"ИТОГО: {_thou(total)} ({len(dated)} дат)")
     for name, n in extra:
-        lines.append(f"[!] {name}: {n} (не дата)")
+        lines.append(f"[!] {name}: {_thou(n)} (не дата)")
     return "\n".join(lines)
 
 
@@ -504,6 +528,7 @@ def collect() -> list[dict]:
         kind = "burst" if s["name"] == "video-transfer" else "batch"
         rows.append({
             "name":      s["name"],
+            "label":     s.get("label", s["name"]),   # отображаемое имя (≠ systemd-юнит для smooth-сервисов)
             "input":     _fmt_tree(in_label) + "\n" + in_state,
             "output":    _fmt_tree(s["out_label"]) + "\n" + out_state,
             "state":     state,
@@ -568,7 +593,7 @@ def render_term(rows: list[dict], ts: str) -> str:
     widths  = [7, 20, 8, 38, 38, 150, 120, 65]
     data = [
         ["Linux",
-         r["name"],
+         r["label"],
          ("✓" if r["state"] == "active" else "✗") + " " + r["state"],
          r["input"],
          r["output"],
@@ -603,7 +628,7 @@ def render_md(rows: list[dict], ts: str) -> str:
                "прогонов (кадров/файлов) (за 10м/1ч/24ч)<br>время обраб. (мин/ср/макс/посл)<br>цпу% (мин/ср/макс/посл)"]
     data = [
         ["Linux",
-         f"`{r['name']}`",
+         f"`{r['label']}`",
          ("✓ " if r["state"] == "active" else "✗ ") + r["state"],
          r["input"].replace("\n", "<br>"),
          r["output"].replace("\n", "<br>"),

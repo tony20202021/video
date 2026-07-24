@@ -63,6 +63,7 @@ CORE_SERVICES=(
     video-classify
     video-smooth
     video-identify
+    video-smooth-identity
 )
 
 DATA_SERVICES=(
@@ -203,6 +204,8 @@ After=network.target video-classify.service
 Type=simple
 User=$USER_NAME
 WorkingDirectory=$REPO
+Nice=10
+IOSchedulingClass=idle
 ExecStart=/bin/bash $REPO/sh/pipeline/3b_smooth_groups.sh
 Restart=on-failure
 RestartSec=10
@@ -222,6 +225,26 @@ Type=simple
 User=$USER_NAME
 WorkingDirectory=$REPO
 ExecStart=/bin/bash $REPO/sh/pipeline/4_identify_residents.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target"
+
+# ─── video-smooth-identity (сглаживание идентификации жителей, ПОСЛЕ identify) ──
+_install "video-smooth-identity" "[Unit]
+Description=Video — Темпоральное сглаживание идентификации жителей, Модель 2 (watch-режим)
+After=network.target video-identify.service
+
+[Service]
+Type=simple
+User=$USER_NAME
+WorkingDirectory=$REPO
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/bin/bash $REPO/sh/pipeline/4b_smooth_identity.sh
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

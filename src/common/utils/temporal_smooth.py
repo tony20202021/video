@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 
-DEFAULT_GAP_SEC = 60.0     # пауза больше → новый визит
+DEFAULT_GAP_SEC = 5.0      # пауза больше → новый визит
 DEFAULT_P_STAY = 0.95      # вероятность сохранения класса между соседними кадрами визита
 
 
@@ -39,20 +39,33 @@ def segment_visits(times, gap_sec: float = DEFAULT_GAP_SEC) -> list[list[int]]:
 
 def window_average(probs: np.ndarray, times, window_sec: float,
                    triangular: bool = False, kmax: int | None = None) -> np.ndarray:
-    """Бегущее окно по времени: probs[i] → среднее probs соседей в пределах ±window_sec.
-    Денойзит траектории вероятностей (единичные скачки усредняются). triangular: вес соседа
-    ∝ (1 - |dt|/window). kmax: адаптивное окно — брать не более K БЛИЖАЙШИХ по времени соседей
-    (в пределах window_sec) — учитывает неравномерную плотность кадров. Вызывать в пределах визита."""
+    """Классическое бегущее окно: для КАЖДОГО кадра i его вектор вероятностей заменяется на
+    среднее по соседям в окне вокруг НЕГО (меняется только значение самого i; соседи берутся как
+    есть). На краях отрезка окно одностороннее, но усредняются ВСЕ кадры.
+
+    window_sec — ПОЛНЫЙ размер окна по времени (сек): радиус = window_sec/2 (напр. 3с → ±1.5с).
+    kmax — ПОЛНОЕ макс. число кадров в окне: позиционный радиус = (kmax-1)//2 (напр. 7 → ±3 кадра).
+      Окно = ПЕРЕСЕЧЕНИЕ ограничений (в пределах ±радиус_кадров И ±радиус_времени). kmax=None —
+      без ограничения по числу кадров (только время). triangular: вес соседа ∝ (1-|dt|/радиус).
+    Требует времена, отсортированные по возрастанию (визит сортируется по времени)."""
     P = np.asarray(probs, dtype=float)
     t = np.asarray(times, dtype=float)
+    n = len(t)
     out = np.zeros_like(P)
-    for i in range(len(t)):
-        d = np.abs(t - t[i])
-        idx = np.nonzero(d <= window_sec)[0]
-        if kmax and len(idx) > kmax:                          # K ближайших по времени
-            idx = idx[np.argsort(d[idx], kind="stable")[:kmax]]
-        w = (1.0 - d[idx] / window_sec) if triangular else np.ones(len(idx))
-        out[i] = (P[idx] * w[:, None]).sum(0) / w.sum()
+    rt = window_sec / 2.0                              # радиус по времени
+    rk = (kmax - 1) // 2 if kmax else None             # радиус по числу кадров (позиционный)
+    for i in range(n):
+        lo = 0 if rk is None else max(0, i - rk)
+        hi = n if rk is None else min(n, i + rk + 1)
+        j = np.arange(lo, hi)
+        d = np.abs(t[j] - t[i])
+        j = j[d <= rt]                                 # ∩ временно́е окно (±window_sec/2)
+        if len(j) == 0:
+            j = np.array([i])
+        dd = np.abs(t[j] - t[i])
+        w = (1.0 - dd / rt) if (triangular and rt > 0) else np.ones(len(j))
+        w = np.clip(w, 1e-9, None)
+        out[i] = (P[j] * w[:, None]).sum(0) / w.sum()
     return out
 
 
@@ -99,8 +112,9 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
     Возвращает (smoothed_class, changed) в ПОРЯДКЕ ВХОДА, changed = класс изменился vs argmax модели.
 
     prob_window_sec: если задан — РЕЖИМ БЕГУЩЕГО ОКНА (замер на 20260720: 8.0%→3.5%, лучше по ВСЕМ
-    классам): внутри визита усредняем probs по ±window сек и берём argmax (Viterbi/gate/предохранители
-    НЕ применяются — они для HMM-режима; окно 3с уже разделяет разных людей лучше визита).
+    классам): внутри визита классическое бегущее окно (window_average) — probs каждого кадра →
+    среднее соседей в ±window_sec/2 (и ≤ prob_window_kmax кадров), затем argmax
+    (Viterbi/gate/предохранители НЕ применяются — они для HMM-режима).
     gate: уверенные (max prob ≥ gate) не трогаем.
     Три предохранителя против ложных флипов «разных людей в резидента» (revert флипа = вернуть argmax):
       • guard_sec — не флипать одиночный кадр, если в ±guard_sec НЕТ кадра с argmax = новый класс

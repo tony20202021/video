@@ -180,8 +180,9 @@ Win + R → taskschd.msc → Task Scheduler Library → VideoWatchdog
 | `video-transfer` | `sh/transfer/1_start_server.sh` | Приём файлов с Windows (HTTP :8765) |
 | `video-yolo` | `sh/pipeline/2_yolo_boxes_files.sh` | YOLO детекция людей → кропы |
 | `video-classify` | `sh/pipeline/3_classify_groups.sh` | Классификация групп (Модель 1): 1_resident / 2_delivery / 3_utilities / 4_guest / uncertain |
-| `video-smooth` | `sh/pipeline/3b_smooth_groups.sh` | Темпоральное сглаживание классов (visit-HMM) in-place; watermark для identify |
+| `video-smooth` | `sh/pipeline/3b_smooth_groups.sh` | Темпоральное сглаживание классов (Viterbi/HMM или окно); пишет сайдкар `smoothed/<date>/` (images/ не трогает); watermark для identify |
 | `video-identify` | `sh/pipeline/4_identify_residents.sh` | Идентификация жителей (Модель 2): вход — 1_resident + 4_guest из classify (после сглаживания) |
+| `video-smooth-identity` | `sh/pipeline/4b_smooth_identity.sh` | Темпоральное сглаживание идентификации (Модель 2) — ТО ЖЕ ядро (`smooth_core`), классы-жители из p_* колонок; сайдкар `residents/<ver>/inference/smoothed/<date>/`; ПОСЛЕ identify |
 
 Опциональные (только во время обучения, `--with-data`):
 
@@ -203,28 +204,34 @@ video-transfer  →  .output/transfer/diff/
 video-yolo      →  .output/pipeline/2_yolo_boxes_files/images/
                    (исходники удаляются, poll 60s)
     ▼
-video-classify  →  .data/groups/v3/inference/images/{date}/
+video-classify  →  .data/groups/v4/inference/images/{date}/
                    single/{1_resident,2_delivery,3_utilities,4_guest}/ multi/ uncertain/
                    classifications.csv  labels.json   (poll 60s)
     ▼
-video-smooth    in-place: visit-HMM перекладывает single/, правит labels.json,
-                пишет meta/smooth_state.json (watermark: докуда просглажен CSV)
-                (poll 120s, тот же каталог)
+video-smooth    images/ НЕ трогает → сайдкар .data/groups/v4/inference/smoothed/{date}/:
+                classifications_smoothed.csv (crop→smoothed_class), smooth_state.json (watermark), smooth_viz/
+                (Viterbi/HMM или бегущее окно; poll 120s)
     ▼
-video-identify  вход: single/1_resident/ + single/4_guest/ + multi/
-                ⏸ ждёт watermark: берёт дату, когда smooth догнал CSV
+video-identify  вход: кропы со smoothed_class ∈ {1_resident,4_guest} из smoothed/{date}/CSV,
+                jpg берётся из images/ по имени (fallback: физ. single/ + multi/ если сайдкара нет)
+                ⏸ ждёт watermark smoothed/{date}/smooth_state.json: берёт дату, когда smooth догнал CSV
                   (SMOOTH_WAIT=1; fallback SMOOTH_WAIT_TIMEOUT=600с если smooth выкл)
              →  .data/residents/v1/inference/images/{date}/
                 {person_id}/  unknown_resident/
                 identifications.csv  labels.json   (poll 60s)
+    ▼
+video-smooth-identity   ТО ЖЕ ядро smooth_core, что у video-smooth, но для Модели 2.
+                images/ НЕ трогает → сайдкар .data/residents/v1/inference/smoothed/{date}/:
+                classifications_smoothed.csv (crop→smoothed person_id), smooth_state.json, smooth_viz/
+                (классы-жители из p_* колонок identifications.csv — открытый набор; poll 120s)
 ```
 
-Версии каталогов (`v3`, `v1`) берутся из `.env`: `GROUPS_VER`, `RESIDENTS_VER`.
+Версии каталогов (`v4`, `v1`) берутся из `.env`: `GROUPS_VER`, `RESIDENTS_VER`.
 
 **Синхронизация smooth→identify.** Без неё identify успевает опознать «ложного резидента»
-(ошибку классификатора) до того, как smooth переложит кроп в правильный класс → неверная личность
-не откатывается (identify идемпотентен, skip-if-exists). Поэтому identify обрабатывает дату только
-когда `meta/smooth_state.json.csv_rows ≥` числа строк `classifications.csv`. Если сглаживание
+(ошибку классификатора) до того, как smooth пересчитает класс → неверная личность не откатывается
+(identify идемпотентен, skip-if-exists). Поэтому identify обрабатывает дату только когда
+`smoothed/{date}/smooth_state.json.csv_rows ≥` числа строк `classifications.csv`. Если сглаживание
 выключено — выставить `SMOOTH_WAIT=0` в `.env` (или положиться на `SMOOTH_WAIT_TIMEOUT`: identify
 пойдёт, когда CSV перестанет меняться дольше таймаута).
 
@@ -245,6 +252,12 @@ video-identify  вход: single/1_resident/ + single/4_guest/ + multi/
 `.env`: `*_ADAPT_HIGH=0.50` (порог «перегружен» → замедлить), `*_ADAPT_LOW=0.25`
 («недогружен» → ускорить), `*_ADAPT_FACTOR=2.0` (во сколько раз менять интервал),
 `*_ADAPT_WINDOW=10` (окно оценки). `*_MAX_FPS=0` полностью выключает замедление.
+
+**Сглаживание (`video-smooth`, `video-smooth-identity`)** адаптивного лимитера НЕ имеет — вместо него
+в юнитах задан пониженный приоритет: `Nice=10` (уступает ЦПУ реальным стадиям пайплайна при конкуренции)
+и `IOSchedulingClass=idle` (уступает диск; на текущем планировщике `mq-deadline` — no-op, форвард-совместимо
+с BFQ). Само сглаживание лёгкое (~0.2с/дата), стоит только рендер viz (~5с на большую новую дату, CPU-bound,
+≤1 ядро, редко) — `Nice` гарантирует, что этот всплеск не мешает transfer/yolo/classify/identify.
 
 > **Подхват `.env` (важно):** `.sh`-обёртки сервисов сорсят `.env` ОДИН раз при старте.
 > После правки `*_ADAPT_*`/`*_MAX_FPS` в `.env` нужен `sudo systemctl restart video-<svc>` —
@@ -306,6 +319,10 @@ sudo systemctl stop    video-yolo
   `10 прогонов (0 кадров)`).
 - **Непрерывный приём** `video-transfer` — `N прогонов (X файлов)`: `N` — всплески приёма
   (события, разделённые паузой > `BURST_GAP_SEC`), `X` — принятые файлы.
+- **Сглаживание** `video-smooth` / `video-smooth-identity` — идемпотентные писатели сайдкара
+  `smoothed/<date>/` (без по-кадрового тайминга): «Вход» — `images/` инференса соответствующей
+  модели, «Выход» — каталог `smoothed/` (виз-конкаты + CSV). Состояние читается по лог-колонкам:
+  `сглажено …` (работа) / `Изменений нет (K дат пропущено)` (skip — CSV не рос, конфиг не менялся).
 - **Windows** (`status_win.ps1`): `motion_diff` — обычно `1 прогон (X файлов)` (непрерывный цикл,
   X = сохранённые кадры с движением), но при рестарте(ах) в окне — `N прогонов` (N = число стартов
   «Порог:»; читаются 2 свежих date-каталога, т.к. при рестарте/полуночи строки прогона попадают в

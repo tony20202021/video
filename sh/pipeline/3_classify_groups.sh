@@ -62,6 +62,10 @@ _count_crops() {
 
 MODEL_TAG=$(basename "$(_ef CLASSIFY_MODEL ?)" .onnx)
 
+# ID сессии — ОДИН на запуск сервиса: все поллинги пишут в один meta/<date>/<RUN_TS>/ (run.log
+# дописывается). Новый каталог только при рестарте (новый RUN_TS) и полночи (python сменит <date>).
+RUN_TS="$(TZ='Europe/Moscow' date '+%Y%m%d_%H%M%S')_msk"
+
 echo "=== 3_classify_groups ==="
 echo "  Input:         $S2DIR"
 echo "  Output:        $OUT_DIR"
@@ -81,6 +85,7 @@ while true; do
         "$PYTHON" "$SCRIPT" "$S2DIR" \
             --classify-conf "$CLASSIFY_CONF" \
             --output        "$OUT_DIR" \
+            --run-ts        "$RUN_TS" \
             "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
         echo ""

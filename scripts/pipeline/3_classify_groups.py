@@ -397,6 +397,10 @@ def main() -> int:
                         help="Перестроить classifications.csv из уже классифицированных файлов")
     parser.add_argument("--date",          default=None, metavar="YYYYMMDD",
                         help="Дата для --rebuild-csv (default: сегодня по МСК)")
+    parser.add_argument("--run-ts",        default=None, metavar="TS",
+                        help="ID сессии для каталога meta/<date>/<run_ts>/ (передаёт .sh один раз на "
+                             "запуск сервиса → все поллинги пишут в ОДИН каталог; новый — при рестарте "
+                             "и переходе через полночь). Без него — новый каталог на каждый прогон.")
     args = parser.parse_args()
 
     # ── Single-instance guard ──────────────────────────────────────────────
@@ -445,7 +449,9 @@ def main() -> int:
 
     _base    = args.output or DEFAULT_OUTPUT
     _today   = datetime.now(MSK).strftime("%Y%m%d")
-    _run_ts  = ts_for_dir()
+    # ID сессии из .sh (один на запуск сервиса) → все поллинги пишут в ОДИН meta-каталог (run.log
+    # дописывается). Новый подкаталог только при рестарте (новый run_ts) и полночи (сменится _today).
+    _run_ts  = args.run_ts or ts_for_dir()
     images_dir = _base / "images" / _today
     meta_dir   = _base / "meta"   / _today / _run_ts
     images_dir.mkdir(parents=True, exist_ok=True)

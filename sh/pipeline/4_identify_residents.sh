@@ -77,14 +77,19 @@ echo ""
 echo "[identify] Ctrl+C для остановки"
 echo ""
 
+# сайдкар сглаживания рядом с images/: inference/smoothed/<date>/ (images/ не мутируется)
+_smoothed_dir() {
+    echo "$REPO/.data/groups/$GROUPS_VER/inference/smoothed/$(basename "$1")"
+}
+
 # identify берёт дату, только когда сглаживание (3b) «догнало» classifications.csv:
-# meta/smooth_state.json.csv_rows >= число строк CSV. Fallback: если CSV не менялся
+# smoothed/<date>/smooth_state.json.csv_rows >= число строк CSV. Fallback: если CSV не менялся
 # SMOOTH_WAIT_TIMEOUT сек (smooth выключен/отстал) — не блокируем. 0=готово, 1=ждать.
 _smooth_ready() {
     local date_dir="$1"
     local csv="$date_dir/classifications.csv"
     [[ -f "$csv" ]] || return 0
-    "$PYTHON" - "$csv" "$date_dir/meta/smooth_state.json" "$SMOOTH_WAIT_TIMEOUT" <<'PY'
+    "$PYTHON" - "$csv" "$(_smoothed_dir "$date_dir")/smooth_state.json" "$SMOOTH_WAIT_TIMEOUT" <<'PY'
 import sys, os, json, csv, time
 csv_path, wm_path, timeout = sys.argv[1], sys.argv[2], float(sys.argv[3])
 try:
@@ -111,9 +116,14 @@ PY
 
 _count_crops() {
     local date_dir="$1"
+    local smoothed_csv="$(_smoothed_dir "$date_dir")/classifications_smoothed.csv"
+    if [[ -f "$smoothed_csv" ]]; then
+        # кропы со СГЛАЖЕННЫМ классом resident/guest (col4). Сглаживание пишет в smoothed/, images/ не трогает.
+        awk -F, 'NR>1 && ($4=="1_resident" || $4=="4_guest")' "$smoothed_csv" 2>/dev/null | wc -l
+        return
+    fi
+    # fallback: физическая раскладка (сглаживание не запускалось) — single/{1_resident,4_guest} + multi/
     local n=0
-    # v4 multi-label раскладка Модели 1: single/{1_resident,4_guest} + multi/ (триггер;
-    # фильтрацию multi/ по labels.json делает Python). Плюс старый плоский формат <class>/.
     for d in "$date_dir/single/1_resident" "$date_dir/single/4_guest" "$date_dir/multi" \
              "$date_dir/1_resident" "$date_dir/4_guest"; do
         if [[ -d "$d" ]]; then

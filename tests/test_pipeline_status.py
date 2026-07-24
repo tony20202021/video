@@ -1,6 +1,7 @@
 """Тесты pipeline_status.py: склонение и формат ячейки «N прогонов (X кадров/файлов)»."""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -84,8 +85,8 @@ def test_dir_state_by_date(tmp_path):
     (root / "dataset" / "p1" / "z.jpg").write_bytes(b"x")
     assert ps._is_inference_images(root) is True
     out = ps.dir_state_by_date(root)
-    assert "20260718: 1" in out
-    assert "20260719: 1" in out
+    assert "2026-07-18: 1" in out                          # дата в формате ГГГГ-ММ-ДД
+    assert "2026-07-19: 1" in out
     assert "ИТОГО: 2 (2 дат)" in out                       # итог — только по датам
     assert "[!] dataset: 1 (не дата)" in out               # dataset/ виден отдельной строкой
 
@@ -160,3 +161,57 @@ def test_parse_stat_lines_empty():
     st = ps.parse_stat_lines(["нет совпадений тут"], r"Готово\. Время:", has_timing=True)
     assert st["count"] == 0 and st["frames"] == 0 and st["bursts"] == 0
     assert st["avg"] is None
+
+
+# ─── проводка SERVICES (сайдкар smoothed/ + шаг 4b) ───────────────────────────
+
+def _svc(name):
+    return next(s for s in ps.SERVICES if s["name"] == name)
+
+
+def test_services_include_smooth_identity_step():
+    # после рефакторинга на сайдкар в таблице 6 шагов, включая video-smooth-identity (4b)
+    names = [s["name"] for s in ps.SERVICES]
+    assert names == [
+        "video-transfer", "video-yolo", "video-classify",
+        "video-smooth", "video-identify", "video-smooth-identity",
+    ]
+
+
+def test_smooth_services_point_to_sidecar_not_images():
+    # video-smooth пишет сайдкар smoothed/ (images/ НЕ мутирует), а не ин-плейс single/
+    assert _svc("video-smooth")["out_dir"].name == "smoothed"
+    # identify читает вход из сайдкара smoothed/, а не из физических single/<class>
+    assert _svc("video-identify")["in_dir"].name == "smoothed"
+    # 4b: вход — images/ Модели 2, выход — её сайдкар smoothed/; тайминга нет
+    si = _svc("video-smooth-identity")
+    assert si["in_dir"].name == "images" and "residents" in si["in_dir"].as_posix()
+    assert si["out_dir"].name == "smoothed" and "residents" in si["out_dir"].as_posix()
+    assert si["has_timing"] is False
+
+
+def test_smooth_services_display_label():
+    # systemd-юнит остаётся video-smooth*, но в отчёте показываем classify-/identify-smooth
+    assert _svc("video-smooth")["label"] == "classify-smooth"
+    assert _svc("video-smooth-identity")["label"] == "identify-smooth"
+    # у не-переименованных label не задан → рендер падает на name
+    assert "label" not in _svc("video-yolo")
+
+
+def test_is_inference_images_covers_smoothed():
+    # сайдкар smoothed/ тоже разложен по датам → разбивка по датам, а не плоский счётчик
+    from pathlib import Path
+    assert ps._is_inference_images(Path("/x/inference/smoothed")) is True
+    assert ps._is_inference_images(Path("/x/inference/images")) is True
+    assert ps._is_inference_images(Path("/x/foo/smoothed")) is False
+
+
+def test_fmt_date_and_thousands():
+    assert ps._fmt_date("20260720") == "2026-07-20"
+    assert ps._fmt_date("dataset") == "dataset"        # не-дата не трогаем
+    # тысячи отделены пробельным символом; \s нормализует и обычный, и неразрывный
+    norm = lambda s: re.sub(r"\s", "_", s)
+    assert norm(ps._thou(1126)) == "1_126"
+    assert norm(ps._thou(4315)) == "4_315"
+    assert ps._thou(999) == "999"
+    assert norm(ps._thou(15967)) == "15_967"

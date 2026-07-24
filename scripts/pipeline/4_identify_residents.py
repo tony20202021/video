@@ -69,16 +69,38 @@ UNKNOWN_CLASS  = "unknown_resident"
 
 
 
+def _smoothed_dir(run_dir: Path) -> Path:
+    """Сайдкар сглаживания рядом с images/: <inference>/smoothed/<date>/ для run_dir=images/<date>."""
+    return run_dir.parents[1] / "smoothed" / run_dir.name
+
+
 def _v4_identify_crops(run_dir: Path) -> list[Path]:
-    """v4 multi-label раскладка Модели 1: кропы resident/guest на идентификацию.
+    """Кропы resident/guest на идентификацию по СГЛАЖЕННЫМ классам.
 
-      single/1_resident/*.jpg, single/4_guest/*.jpg — кроп с ОДНИМ классом (напрямую)
-      multi/*.jpg                                    — кроп с НЕСКОЛЬКИМИ классами; берём
-        только те, чей набор в labels.json содержит 1_resident или 4_guest
-    Дедуп по имени файла (кроп размещён ровно в одном каталоге)."""
-    out: list[Path] = []
-    seen: set[str] = set()
+    Основной путь: сайдкар smoothed/<date>/classifications_smoothed.csv (crop→smoothed_class),
+    берём кропы со smoothed_class ∈ {1_resident, 4_guest}; jpg ищется в images/<date>/ по ИМЕНИ
+    (images/ не мутируется сглаживанием). Fallback (нет сайдкара — сглаживание не запускалось):
+    старая физическая раскладка single/{1_resident,4_guest} + multi/ по labels.json."""
+    smoothed_csv = _smoothed_dir(run_dir) / "classifications_smoothed.csv"
+    if smoothed_csv.is_file():
+        idx: dict[str, Path] = {}                        # имя кропа → путь в images/<date>/
+        for f in run_dir.rglob("*.jpg"):
+            if "meta" in f.relative_to(run_dir).parts:
+                continue
+            idx.setdefault(f.name, f)
+        out: list[Path] = []
+        seen: set[str] = set()
+        with open(smoothed_csv, newline="", encoding="utf-8") as fh:
+            for r in csv.DictReader(fh):
+                nm = r.get("crop", "")
+                if r.get("smoothed_class") in _IDENTIFY_CLASSES and nm and nm not in seen and nm in idx:
+                    seen.add(nm)
+                    out.append(idx[nm])
+        return sorted(out, key=lambda p: p.name)
 
+    # fallback: старая физическая раскладка (сглаживание не запускалось)
+    out = []
+    seen = set()
     for cls in _IDENTIFY_CLASSES:
         d = run_dir / "single" / cls
         if d.is_dir():
@@ -86,7 +108,6 @@ def _v4_identify_crops(run_dir: Path) -> list[Path]:
                 if f.is_file() and f.suffix.lower() == ".jpg" and f.name not in seen:
                     seen.add(f.name)
                     out.append(f)
-
     multi_dir = run_dir / "multi"
     if multi_dir.is_dir():
         labels = _ml.load_labels(run_dir / "labels.json")   # {rel: [classes]}
@@ -95,7 +116,6 @@ def _v4_identify_crops(run_dir: Path) -> list[Path]:
             if not (f.is_file() and f.suffix.lower() == ".jpg") or f.name in seen:
                 continue
             classes = labels.get(f"multi/{f.name}", [])
-            # нет labels.json → консервативно берём все multi-кропы (multi = несколько людей)
             if (not have_labels) or any(c in _IDENTIFY_CLASSES for c in classes):
                 seen.add(f.name)
                 out.append(f)
