@@ -455,15 +455,22 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
     viz_n = 0
     audit, corrections, viz_targets = [], [], []
     smoothed_by_name: dict[str, str] = {}
+    sm_labels: dict[str, list] = {}          # rel(→images) → [smoothed_class]: самодостаточный labels.json
     for i, (rec, (sm_class, was_changed)) in enumerate(zip(recs, smoothed)):
         name = rec["name"]
         f = files.get(name)
         if f is None or not f.is_file():
             continue
         smoothed_by_name[name] = sm_class
+        rel = f.relative_to(date_dir).as_posix()
         cur = _current_class(f.relative_to(date_dir).parts)
-        audit.append({"crop": name, "cam": rec["cam"], "model_class": cur,
-                      "smoothed_class": sm_class, "changed": cur != sm_class})
+        # rel + p_* добавляем ПОСЛЕ changed: col4 остаётся smoothed_class (identify.sh читает $4)
+        row_out = {"crop": name, "cam": rec["cam"], "model_class": cur,
+                   "smoothed_class": sm_class, "changed": cur != sm_class, "rel": rel}
+        for c, pv in zip(ctx.classes, rec["probs"]):
+            row_out[f"p_{c}"] = round(pv, 4)
+        audit.append(row_out)
+        sm_labels[rel] = [sm_class]
         if was_changed:
             viz_targets.append((i, name, sm_class))
         if cur != sm_class:
@@ -511,10 +518,16 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
     changed = len(corrections)
     rescued = sum(1 for (_n, cur, _sm) in corrections if cur in ("uncertain", "unknown_resident"))
     out_dir.mkdir(parents=True, exist_ok=True)
+    fieldnames = (["crop", "cam", "model_class", "smoothed_class", "changed", "rel"]
+                  + [f"p_{c}" for c in ctx.classes])
     with open(out_dir / "classifications_smoothed.csv", "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["crop", "cam", "model_class", "smoothed_class", "changed"])
+        w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(audit)
+    # самодостаточный labels.json (сглаженные классы, ключи rel→images) — прямо в 2_label_ui
+    # (--labels) и дальше по пайплайну; images/ не мутируется
+    _ml.save_labels(out_dir / "labels.json", sm_labels,
+                    task=("identify" if cfg.smoother == "identity" else "classify"))
     _write_watermark(out_dir, csv_rows=len(rows), eligible=len(recs), changed=changed, sig=cfg_sig, smoother=cfg.smoother)
     n_next = sum(1 for a in audit if a["smoothed_class"] in ctx.downstream_classes)
     return {"date": date_dir.name, "rows": len(rows), "eligible": len(recs), "changed": changed,

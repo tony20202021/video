@@ -142,9 +142,13 @@ v2-метках выводят подсказку и не запускаются
    (полный размер `=3с` → **±1.5с**) И не более **`SMOOTH_PROB_WINDOW_K`** кадров
    (`=7` → **±3 кадра**), берётся пересечение; на краях визита окно одностороннее. Меняется только
    значение самого кадра (центра), соседи — как есть;
-4. **`images/` НЕ мутируется** (неизменяемый выход Модели 1). Сглаженный класс на кроп пишется в
-   сайдкар `inference/smoothed/<date>/classifications_smoothed.csv` (`crop, cam, model_class,
-   smoothed_class, changed`) — кропы НЕ перекладываются, `images/labels.json` НЕ переписывается.
+4. **`images/` НЕ мутируется** (неизменяемый выход Модели 1). Результат пишется в сайдкар
+   `inference/smoothed/<date>/` — **самодостаточно для разметки и downstream**:
+   - `classifications_smoothed.csv` — `crop, cam, model_class, smoothed_class, changed, rel, p_<class>…`
+     (`smoothed_class` в **col4** — identify читает `$4`; `rel` = путь кропа относительно `images/<date>`;
+     `p_<class>` = probs модели → CSV годится как `--probs-csv` для разметчика);
+   - `labels.json` — v2 `{rel: [smoothed_class]}`, готов к `2_label_ui --labels` и к передаче дальше;
+   - кропы НЕ перекладываются, `images/labels.json` НЕ переписывается.
 
 **Резервный режим — HMM/Viterbi** (при `SMOOTH_PROB_WINDOW=0`): сегментация на визиты + Viterbi
 внутри визита (переходы `p_stay`, эмиссия = probs модели) + опциональный **гейтинг** (max prob ≥ `gate`
@@ -238,7 +242,8 @@ vs истины** (сглаж-класс ∉ метки, в т.ч. НЕ испр
 ```
 inference/
   images/<date>/     ← НЕИЗМЕНЯЕМО (только classify): single/<class>/, multi/, uncertain/, CSV, labels.json
-  smoothed/<date>/   ← только 3b: classifications_smoothed.csv (crop→smoothed_class), smooth_state.json, smooth_viz/
+  smoothed/<date>/   ← только 3b: classifications_smoothed.csv (crop,…,smoothed_class,rel,p_*), labels.json
+                        (v2 сглаженных классов — прямо в разметчик), smooth_state.json, smooth_viz/
   meta/<date>/<session>/ ← логи classify: ОДИН каталог на сессию сервиса (run.log дописывается);
                            новый — только при рестарте и полночи (не на каждый поллинг)
 ```
@@ -253,8 +258,11 @@ classify раскладывает `images/`; **3b НЕ трогает `images/`*
 `SMOOTH_WAIT_TIMEOUT=600` — fallback: если CSV не менялся N сек (smooth выключен/отстал), не блокируем.
 Нет сайдкара вовсе → identify откатывается на старую физ. раскладку `single/{1_resident,4_guest}`+`multi/`.
 
-Ручную разметку под датасет теперь можно вести прямо на `images/labels.json` — 3b его больше не трогает
-(снапшот не нужен). Разметчик игнорирует `meta/`/`smoothed/` (viz-конкаты и watermark — не кропы).
+**Разметка результата сглаживания.** Сайдкар самодостаточен → `./sh/train/2_label_ui.sh --smoothed
+.data/groups/v4/inference/smoothed/<date>` выведет всё сам: кропы из `images/<date>` (INPUT), «текущий
+класс» = сглаженный из `smoothed/<date>/labels.json` (LABELS), probs из того же `classifications_smoothed.csv`.
+Правки разметчика пишутся в `smoothed/<date>/labels.json` (`images/` не мутируется — основной вид UI файлы
+не двигает). Либо разметка модельного выхода — прямо на `images/labels.json` (3b его не трогает).
 
 **Общее ядро (группы и жители).** Логика сглаживания вынесена в `src/common/utils/smooth_core.py`
 (параметризовано классами/подписями/цветами). Два тонких драйвера и **два сервиса**:

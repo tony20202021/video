@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Веб-разметчик кропов (общий — Модель 1 и Модель 2)
 #
-# Usage (жители — дефолт):
-#   ./sh/train/2_label_ui.sh
-# Usage (группы):
-#   ./sh/train/2_label_ui.sh --input .data/groups/v1/inference/images/20260707 --dataset .data/groups/v1/dataset
+# Usage (результат сглаживания — дефолт): достаточно каталога сайдкара smoothed/<date>,
+# INPUT/LABELS/PROBS_CSV/DATASET выведутся сами (кропы из images/, метки+probs из smoothed/):
+#   ./sh/train/2_label_ui.sh --smoothed .data/groups/v4/inference/smoothed/20260720
+# Usage (произвольный вход вручную):
+#   ./sh/train/2_label_ui.sh --input .data/groups/v4/inference/images/20260720 --dataset .data/groups/v4/dataset
+# Usage (просмотр готового датасета):
+#   ./sh/train/2_label_ui.sh --smoothed "" --input .data/groups/v4/dataset
 
 set -euo pipefail
 
@@ -23,22 +26,17 @@ if [[ -f "$ENV_FILE" ]]; then
     set +a
 fi
 
-# # groups v4 — просмотр датасета (single/<class>/ + multi/ + labels.json)
-# INPUT="$REPO/.data/groups/v4/dataset"
-# LABELS="$REPO/.data/groups/v4/dataset/labels.json"
-# DATASET="$REPO/.data/groups/v4/dataset"
+# РАЗМЕТКА РЕЗУЛЬТАТА СГЛАЖИВАНИЯ (по умолчанию).
+# Достаточно каталога сайдкара smoothed/<date> (SMOOTHED= или --smoothed) — остальное выведется:
+#   INPUT     = <inference>/images/<date>                     кропы (images/ НЕ мутируется)
+#   LABELS    = smoothed/<date>/labels.json                   сглаженные классы — их и ведём разметкой
+#   PROBS_CSV = smoothed/<date>/classifications_smoothed.csv  там же p_* (probs)
+#   DATASET   = <vX>/dataset                                  набор классов
+SMOOTHED="${SMOOTHED:-$REPO/.data/groups/v4/inference/smoothed/20260720}"
+INPUT=""; LABELS=""; DATASET=""; PROBS_CSV=""
 
-# groups — разметка нового инференса:
-INPUT="$REPO/.data/groups/v4/inference/images/20260720"
-LABELS="$REPO/.data/groups/v4/inference/images/20260720/labels.json"
-DATASET="$REPO/.data/groups/v4/dataset"
-PROBS_CSV="$REPO/.data/groups/v4/inference/images/20260720/classifications.csv"
-
-# # residents
-# INPUT="$REPO/.data/residents/v1/inference/images/20260714"
-# LABELS="$REPO/.data/residents/v1/inference/images/20260714/labels.json"
-# DATASET="$REPO/.data/residents/v1/dataset"
-# PROBS_CSV="$REPO/.data/residents/v1/inference/images/20260714/identifications.csv"
+# # residents: SMOOTHED="$REPO/.data/residents/v1/inference/smoothed/20260714"
+# # просмотр готового датасета вместо сглаживания: --smoothed "" --input .data/groups/v4/dataset
 
 PORT="${LABEL_UI_PORT:-8750}"
 UNLABELED_ONLY=0
@@ -47,6 +45,7 @@ PROBS=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --smoothed)       SMOOTHED="$2"; shift 2 ;;
         --input)          INPUT="$2";   shift 2 ;;
         --labels)         LABELS="$2";  shift 2 ;;
         --dataset)        DATASET="$2"; shift 2 ;;
@@ -60,9 +59,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Устойчивость к незаданным переменным (set -u) + удобство: если задан только DATASET
-# (смотрим датасет) — берём его как вход; метки по умолчанию — labels.json внутри входа.
 INPUT="${INPUT:-}"; DATASET="${DATASET:-}"; PROBS_CSV="${PROBS_CSV:-}"; LABELS="${LABELS:-}"
+
+# Вывод путей из каталога сглаживания smoothed/<date> (что явно задано через флаги — не трогаем).
+SMOOTHED="${SMOOTHED:-}"
+if [[ -n "$SMOOTHED" && -z "$INPUT" ]]; then
+    _date="$(basename "$SMOOTHED")"
+    _inf="$(dirname "$(dirname "$SMOOTHED")")"   # .../inference
+    _ver="$(dirname "$_inf")"                    # .../vX
+    INPUT="$_inf/images/$_date"
+    [[ -z "$LABELS"    ]] && LABELS="$SMOOTHED/labels.json"
+    [[ -z "$PROBS_CSV" ]] && PROBS_CSV="$SMOOTHED/classifications_smoothed.csv"
+    [[ -z "$DATASET"   ]] && DATASET="$_ver/dataset"
+fi
+
+# Удобство: если задан только DATASET (смотрим датасет) — берём его как вход.
 [[ -z "$INPUT" && -n "$DATASET" ]] && INPUT="$DATASET"
 [[ -z "$LABELS" && -n "$INPUT" ]] && LABELS="$INPUT/labels.json"
 

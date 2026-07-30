@@ -209,7 +209,8 @@ video-classify  →  .data/groups/v4/inference/images/{date}/
                    classifications.csv  labels.json   (poll 60s)
     ▼
 video-smooth    images/ НЕ трогает → сайдкар .data/groups/v4/inference/smoothed/{date}/:
-                classifications_smoothed.csv (crop→smoothed_class), smooth_state.json (watermark), smooth_viz/
+                classifications_smoothed.csv (crop,…,smoothed_class[col4],rel,p_*), labels.json (v2 —
+                самодостаточно для разметки: 2_label_ui.sh --smoothed …), smooth_state.json, smooth_viz/
                 (Viterbi/HMM или бегущее окно; poll 120s)
     ▼
 video-identify  вход: кропы со smoothed_class ∈ {1_resident,4_guest} из smoothed/{date}/CSV,
@@ -222,7 +223,8 @@ video-identify  вход: кропы со smoothed_class ∈ {1_resident,4_guest
     ▼
 video-smooth-identity   ТО ЖЕ ядро smooth_core, что у video-smooth, но для Модели 2.
                 images/ НЕ трогает → сайдкар .data/residents/v1/inference/smoothed/{date}/:
-                classifications_smoothed.csv (crop→smoothed person_id), smooth_state.json, smooth_viz/
+                classifications_smoothed.csv (…smoothed_class[col4],rel,p_*), labels.json (v2),
+                smooth_state.json, smooth_viz/
                 (классы-жители из p_* колонок identifications.csv — открытый набор; poll 120s)
 ```
 
