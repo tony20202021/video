@@ -57,6 +57,7 @@ from common.utils.cam_urls import collect_cam_urls as _collect_cam_urls
 from common.utils.camera_run import (
     CapReader as _CapReader,
     CpuMonitor as _CpuMonitor,
+    compute_per_frame_log as _compute_per_frame_log,
     parse_img_filename as _parse_img_filename,
     regen_osd_from_images as _regen_osd_from_images,
     save_charts as _save_charts_base,
@@ -555,6 +556,11 @@ def main() -> int:
     # frames/diffs/pts на диск реже, чем cpu (тяжелее): раз в 5 мин или 5×интервал cpu
     _STATS_SAVE_INTERVAL = max(300.0, args.csv_save_interval * 5)
 
+    # ЧИСТОЕ время ОБРАБОТКИ кадра (gray+diff, без ожидания RTSP-чтения) — скользящее окно;
+    # его min/avg/max пишем в строки save/heartbeat как 'счёт/кадр: … мс' (как yolo/classify/identify).
+    _proc_ms: list[float] = []
+    _PROC_WINDOW = 600          # последние ~50с при ~12 fps
+
     try:
         while True:
             if deadline is not None and time.monotonic() >= deadline:
@@ -622,7 +628,12 @@ def main() -> int:
                         saves_log.append([round(_now - t_start, 4), _ts_str, vn, "diff"])
                         _interval = _now - last_save_time.get(vn, _now)
                         last_save_time[vn] = _now
-                        logger.info(f"  {fname}  diff={diff:.2f}  Готово. Время: {_interval:.1f} с.")
+                        logger.info(f"  {fname}  diff={diff:.2f}  Готово. Время: {_interval:.1f} с.{_compute_per_frame_log(_proc_ms)}")
+
+                # чистое время ОБРАБОТКИ этого кадра (gray+diff, без ожидания чтения) → окно для счёт/кадр
+                _proc_ms.append((time.monotonic() - _now) * 1000.0)
+                if len(_proc_ms) > _PROC_WINDOW:
+                    del _proc_ms[:-_PROC_WINDOW]
 
                 for vn in var_list:
                     if heartbeat_sec <= 0:
@@ -642,7 +653,7 @@ def main() -> int:
                     saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "heartbeat"])
                     _hb_interval = now - last_save_time.get(vn, now)
                     last_save_time[vn] = now
-                    logger.info(f"  пульс {hb_name}  Готово. Время: {_hb_interval:.1f} с.")
+                    logger.info(f"  пульс {hb_name}  Готово. Время: {_hb_interval:.1f} с.{_compute_per_frame_log(_proc_ms)}")
 
             if args.csv_save_interval > 0:
                 _now = time.monotonic()

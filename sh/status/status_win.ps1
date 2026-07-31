@@ -50,16 +50,21 @@ function _Plural($n, $one, $few, $many) {
 
 # Единый формат «N прогонов (X файлов)» (как у Linux-сервисов). motion_diff → runs=1
 # (непрерывный цикл), 2_send → runs=число батчей отправки.
-function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "") {
+function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "", $procMs = $null) {
     $rw = _Plural $runs "прогон" "прогона" "прогонов"
     $fw = _Plural $files "файл" "файла" "файлов"
     $s = "${runs} ${rw}${suffix} (${files} ${fw})"
+    # ЧИСТОЕ время обработки кадра (gray+diff) — из 'счёт/кадр: min/avg/max мс' в run.log
+    if ($procMs -ne $null) {
+        $s += "<br>счёт/кадр $([math]::Round($procMs[0]))/$([math]::Round($procMs[1]))/$([math]::Round($procMs[2])) мс"
+    }
+    # 'Готово. Время' у motion_diff — это ИНТЕРВАЛ между сохранёнными кадрами (тишина), не обработка
     if ($times.Count -gt 0) {
         $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
         $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
         $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
         $lst = [math]::Round($times[$times.Count - 1], 1)
-        $s  += "<br>1кадр ${mn}с/${avg}с/${mx}с/${lst}с"
+        $s  += "<br>интервал ${mn}с/${avg}с/${mx}с/${lst}с"
     }
     if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
     return $s
@@ -213,6 +218,7 @@ if (Test-Path $logFile) {
     $times10m = [System.Collections.Generic.List[double]]::new()
     $count60m = 0; $times60m = [System.Collections.Generic.List[double]]::new()
     $runs10m  = 0; $runs60m  = 0
+    $procMs10m = $null; $procMs60m = $null   # последняя тройка 'счёт/кадр' (реальная обработка) в окне
     $metaRoot2  = Join-Path $motionDir "meta"
     $recentDirs = if (Test-Path $metaRoot2) { Get-ChildItem $metaRoot2 -Directory | Sort-Object Name -Descending | Select-Object -First 2 } else { @() }
     foreach ($d in $recentDirs) {
@@ -227,8 +233,13 @@ if (Test-Path $logFile) {
             $isDiff  = ($ln -match "diff=")           # сохранённый diff-кадр
             $t_v = $null
             if ($isDiff -and ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с')) { $t_v = [double]($Matches[1] -replace ',', '.') }
-            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++; if ($t_v -ne $null) { $times10m.Add($t_v) } }; if ($isStart) { $runs10m++ } }
-            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++; if ($t_v -ne $null) { $times60m.Add($t_v) } }; if ($isStart) { $runs60m++ } }
+            # реальная обработка кадра: 'счёт/кадр: min/avg/max мс' (есть и на diff-, и на пульс-строках)
+            $pm = $null
+            if ($ln -match 'счёт/кадр:\s*([\d.,]+)/([\d.,]+)/([\d.,]+)\s*мс') {
+                $pm = @([double]($Matches[1] -replace ',','.'), [double]($Matches[2] -replace ',','.'), [double]($Matches[3] -replace ',','.'))
+            }
+            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++; if ($t_v -ne $null) { $times10m.Add($t_v) } }; if ($isStart) { $runs10m++ }; if ($pm) { $procMs10m = $pm } }
+            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++; if ($t_v -ne $null) { $times60m.Add($t_v) } }; if ($isStart) { $runs60m++ }; if ($pm) { $procMs60m = $pm } }
         }
     }
     # нет стартов в окне, но есть активность → 1 непрерывный прогон; иначе N рестартов
@@ -375,12 +386,12 @@ $winHost    = $env:COMPUTERNAME.ToLower()
 # motion_diff — непрерывный цикл: обычно «1 прогон (X файлов)», но при рестарте(ах) в окне —
 # «N прогонов» (N = число стартов «Порог:», в т.ч. из соседнего date-каталога у полуночи).
 if ($count10m -gt 0) {
-    $stats10m = Fmt-Runs $motionRuns10m $count10m " (10м)" $times10m $motionCpuLine
+    $stats10m = Fmt-Runs $motionRuns10m $count10m " (10м)" $times10m $motionCpuLine $procMs10m
 } elseif ($count60m -gt 0) {
-    $stats10m = Fmt-Runs $motionRuns60m $count60m " (60м)" $times60m $motionCpuLine
+    $stats10m = Fmt-Runs $motionRuns60m $count60m " (60м)" $times60m $motionCpuLine $procMs60m
 } elseif ($frameCount10m -gt 0) {
     # нет событий движения, но кадры обрабатываются
-    $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine
+    $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine $procMs10m
 } elseif ($motionCpuLine -ne "") {
     # нет ни движения ни diffs.csv, но CPU есть — хотя бы покажем CPU
     $stats10m = "—<br>${motionCpuLine}"
