@@ -255,13 +255,27 @@ if (Test-Path $logFile) {
 Write-Host ""
 
 # ── 2_send log ────────────────────────────────────────────────────────────────
-$sendLogFile = Join-Path $REPO ".output\logs\2_send.log"
+# 2_send.log ротируется по датам (transfer_client/meta/<date>/2_send.log) — берём последний.
+# Fallback — старый единый .output\logs\2_send.log (переходный период до рестарта 2_send).
+$sendMetaRoot = Join-Path $REPO ".output\transfer_client\meta"
+$sendLogFile = ""
+if (Test-Path $sendMetaRoot) {
+    $sd = Get-ChildItem $sendMetaRoot -Directory -EA SilentlyContinue |
+          Where-Object { Test-Path (Join-Path $_.FullName "2_send.log") } |
+          Sort-Object Name -Descending | Select-Object -First 1
+    if ($sd) { $sendLogFile = Join-Path $sd.FullName "2_send.log" }
+}
+if (-not $sendLogFile) {
+    $oldSend = Join-Path $REPO ".output\logs\2_send.log"
+    if (Test-Path $oldSend) { $sendLogFile = $oldSend }
+}
 $sendLastLogLine = "--"; $sendLastEventTime = "--"; $sendLastIdleLine = "--"; $sendCount10m = 0; $sendBatches10m = 0
 
 Write-Host "  Log 2_send (last 5 lines):"
-if (Test-Path $sendLogFile) {
+if ($sendLogFile -and (Test-Path $sendLogFile)) {
     $sendLogDate = (Get-Item $sendLogFile).LastWriteTime.ToString("yyyy-MM-dd")
-    $sendAllLines = Get-Content $sendLogFile -Encoding UTF8
+    # -Tail: дневной файл маленький, но ограничиваем на всякий случай — статусу хватает окна 10м/60м
+    $sendAllLines = Get-Content $sendLogFile -Tail 3000 -Encoding UTF8
     Get-Content $sendLogFile -Tail 5 -Encoding UTF8 | ForEach-Object { Write-Host "    $_" }
 
     # Последний отправленный файл (содержит расширение изображения)
@@ -283,9 +297,9 @@ if (Test-Path $sendLogFile) {
     $sendCutoff   = (Get-Date).AddMinutes(-10)
     $sendTodayStr = $sendLogDate
     $sendTimes10m = [System.Collections.Generic.List[double]]::new()
-    # 2_send.log — ЕДИНЫЙ файл за все дни; все строки датируются одним днём, поэтому старые
-    # отправки с временем суток позже cutoff ложно попадают в 10-мин окно (баг «1997x»).
-    # Считаем только строки ТЕКУЩЕГО запуска — после последнего маркера '=== 2_send start ==='.
+    # 2_send.log теперь дневной (ротация по датам), но за день может быть несколько рестартов.
+    # Считаем только строки ТЕКУЩЕГО запуска — после последнего маркера '=== 2_send start ==='
+    # (иначе отправки прошлых запусков ложно попадают в 10-мин окно).
     $sendStartIdx = -1
     for ($i = $sendAllLines.Count - 1; $i -ge 0; $i--) {
         if ($sendAllLines[$i] -match '=== 2_send start ===') { $sendStartIdx = $i; break }

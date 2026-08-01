@@ -6,7 +6,7 @@
 #
 # Each script handles its own logging:
 #   1_motion_diff: .output\pipeline\1_motion_diff\meta\<date>\run.log
-#   2_send:        .output\logs\2_send.log
+#   2_send:        .output\transfer_client\meta\<date>\2_send.log  (ротация по датам)
 #   watchdog:      .output\logs\watchdog.log
 #
 # Usage:
