@@ -349,7 +349,7 @@ if (Test-Path $cpuCsvFile) {
         $cpuAvg = [int][math]::Round(($cpuVals | Measure-Object -Average).Average)
         $cpuMx  = ($cpuVals | Measure-Object -Maximum).Maximum
         $cpuLst = $cpuVals[$cpuVals.Count - 1]
-        $motionCpuLine = "${cpuMn}%/${cpuAvg}%/${cpuMx}%/${cpuLst}%"
+        $motionCpuLine = "${cpuMn}%/${cpuAvg}%/${cpuMx}%/${cpuLst}% (цпу)"
     }
 }
 
@@ -390,7 +390,7 @@ if (Test-Path $sendCpuCsv) {
         $sAvg = [int][math]::Round(($sVals | Measure-Object -Average).Average)
         $sMx = ($sVals | Measure-Object -Maximum).Maximum
         $sLst = $sVals[$sVals.Count - 1]
-        $sendCpuLine = "${sMn}%/${sAvg}%/${sMx}%/${sLst}%"
+        $sendCpuLine = "${sMn}%/${sAvg}%/${sMx}%/${sLst}% (цпу)"
     }
 }
 
@@ -406,7 +406,7 @@ $winHost    = $env:COMPUTERNAME.ToLower()
 if ($count10m -gt 0) {
     $stats10m = Fmt-Runs $motionRuns10m $count10m " (10м)" $times10m $motionCpuLine $procMs10m
 } elseif ($count60m -gt 0) {
-    $stats10m = Fmt-Runs $motionRuns60m $count60m " (60м)" $times60m $motionCpuLine $procMs60m
+    $stats10m = Fmt-Runs $motionRuns60m $count60m " (1ч)" $times60m $motionCpuLine $procMs60m
 } elseif ($frameCount10m -gt 0) {
     # нет событий движения, но кадры обрабатываются
     $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine $procMs10m
