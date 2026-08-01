@@ -36,10 +36,10 @@ function _Plural($n, $one, $few, $many) {
     return $many
 }
 
-# ЧИСТОЕ время обработки кадра (gray+diff) → 'счёт/кадр min/avg/max мс' (или '' если нет данных).
+# ЧИСТОЕ время обработки кадра (gray+diff) → 'счёт min/avg/max мсек/кадр' (или '' если нет данных).
 function _FmtProcMs($procMs) {
     if ($procMs -eq $null) { return "" }
-    return "счёт/кадр $([math]::Round($procMs[0]))/$([math]::Round($procMs[1]))/$([math]::Round($procMs[2])) мс"
+    return "счёт $([math]::Round($procMs[0]))/$([math]::Round($procMs[1]))/$([math]::Round($procMs[2])) мсек/кадр"
 }
 
 # ЦПУ из cpu.csv за окно с фолбэком startWin→1ч→24ч (как Linux service_cpu): первое непустое окно →
@@ -95,7 +95,7 @@ function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "", $procMs = $null
         $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
         $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
         $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
-        $s  += "<br>отправка ${mn}с/${avg}с/${mx}с"
+        $s  += "<br>отправка ${mn}/${avg}/${mx} сек/кадр"
     }
     if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
     return $s

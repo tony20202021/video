@@ -58,20 +58,20 @@ def test_fmt_stats_compute():
     # compute-сервисы: чистое время вычисления кадра (счёт/кадр min/avg/max мс)
     cell = ps.fmt_stats(_st(5, 10, frames=100, cmin=8, cavg=26, cmax=54),
                         has_timing=True, kind="batch")
-    assert cell == "5 прогонов (10м) (100 кадров)\nсчёт/кадр 8/26/54 мс"
+    assert cell == "5 прогонов (10м) (100 кадров)\nсчёт 8/26/54 мсек/кадр"
 
 
 def test_fmt_stats_cpu_label():
     cell = ps.fmt_stats(_st(5, 10, frames=100, cmin=8, cavg=26, cmax=54),
                         has_timing=True, cpu_line="9%/29%/74%/65%", kind="batch")
-    assert cell.endswith("счёт/кадр 8/26/54 мс\n9%/29%/74%/65% (цпу)")
+    assert cell.endswith("счёт 8/26/54 мсек/кадр\n9%/29%/74%/65% (цпу)")
 
 
 def test_fmt_stats_burst_receive():
     # transfer: чистое время приёма файла (I/O)
     cell = ps.fmt_stats(_st(328, 10, bursts=12, min=0.1, avg=0.1, max=0.2),
                         has_timing=True, kind="burst")
-    assert cell.endswith("приём 0.1с/0.1с/0.2с")
+    assert cell.endswith("приём 0.1/0.1/0.2 сек/кадр")
 
 
 # ─── dir_state_by_date (разбивка инференса по датам) ──────────────────────────
