@@ -646,21 +646,34 @@ def render_md(rows: list[dict], ts: str) -> str:
 # ─── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description="Статус pipeline-сервисов: таблица на экран + .md")
+    ap.add_argument("--no-save", action="store_true",
+                    help="не писать timestamped .md в .output/status/ (для встраивания в status.sh)")
+    ap.add_argument("--md-out", type=Path, default=None,
+                    help="дополнительно записать markdown в этот путь (детерминированный — для status.sh)")
+    args = ap.parse_args()
+
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rows = collect()
 
     term_out = render_term(rows, ts)
     md_out   = render_md(rows, ts)
 
-    now     = datetime.now()
-    out_dir = REPO / ".output/status" / now.strftime("%Y-%m-%d")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stem    = now.strftime("%Y%m%d_%H%M%S")
-    md_path = out_dir / f"{stem}.md"
-    md_path.write_text(md_out, encoding="utf-8")
+    md_path = None
+    if not args.no_save:
+        now     = datetime.now()
+        out_dir = REPO / ".output/status" / now.strftime("%Y-%m-%d")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        md_path = out_dir / f"{now.strftime('%Y%m%d_%H%M%S')}.md"
+        md_path.write_text(md_out, encoding="utf-8")
+    if args.md_out is not None:
+        args.md_out.parent.mkdir(parents=True, exist_ok=True)
+        args.md_out.write_text(md_out, encoding="utf-8")
 
     print(term_out)
-    print(f"  → {md_path}")
+    if md_path is not None:
+        print(f"  → {md_path}")
     print()
 
 

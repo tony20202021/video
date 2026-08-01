@@ -122,10 +122,14 @@ _parse_win_sys() {
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 sep
+# md Linux-таблицы пишем в ДЕТЕРМИНИРОВАННЫЙ temp (--md-out), не в timestamped .output/status
+# (--no-save). Так status.sh надёжно читает строки и удаляет файл — без парсинга пути из ANSI-вывода.
+LINUX_MD="$(mktemp "${TMPDIR:-/tmp}/vstatus.XXXXXX.md")"
+trap 'rm -f "$LINUX_MD" 2>/dev/null' EXIT    # temp удаляется всегда, даже при раннем выходе
 if [[ -z "$TS_SERVER" ]] || _is_self "$TS_SERVER"; then
     # мы НА сервере (или TS_SERVER не задан) — локально
     LINUX_LABEL="$(hostname)"; linux_repo="$REPO"
-    linux_out=$(bash "$REPO/sh/status/status_linux.sh" 2>&1)
+    linux_out=$(bash "$REPO/sh/status/status_linux.sh" --no-save --md-out "$LINUX_MD" 2>&1)
     linux_sys=$(_linux_sys_stats)
 else
     # запуск с другой машины — опрашиваем сервер по SSH
@@ -134,14 +138,14 @@ else
         ssh -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
             "$TS_SERVER_USER@$TS_SERVER" "$@" 2>&1
     }
-    linux_out=$(_ssh_srv "bash '$TS_SERVER_REPO/sh/status/status_linux.sh'")
+    _rmd="/tmp/vstatus_remote_$$.md"
+    linux_out=$(_ssh_srv "bash '$TS_SERVER_REPO/sh/status/status_linux.sh' --no-save --md-out '$_rmd'")
+    _ssh_srv "cat '$_rmd' 2>/dev/null; rm -f '$_rmd'" | tr -d '\r' > "$LINUX_MD"
     linux_sys=$(_ssh_srv "python3 '$TS_SERVER_REPO/scripts/utils/sys_stats.py'" | tr -d '\r')
 fi
 echo "  LINUX  ($LINUX_LABEL)"
 sep
 echo "$linux_out" | grep -v "^  → "
-
-linux_md=$(echo "$linux_out" | grep -o '/[^ ]*\.md' | tail -1)
 IFS='|' read -r linux_cpu linux_ram linux_disk linux_svcs <<< "$linux_sys"
 
 # ── Windows (SSH) ─────────────────────────────────────────────────────────────
@@ -158,7 +162,7 @@ _ssh_win() {
 # WIN_SVC формат: # WIN_SVC|name|server|status|input|output|last_log|last_idle|stats_10m
 _win_svc_md_rows() {
     local win_out="$1" label="${2:-}"   # label — алиас машины из .env (вместо hostname)
-    echo "$win_out" | tr -d $'\r' | grep "^# WIN_SVC|" | while IFS='|' read -r _ name server status input output last_log last_idle stats_10m; do
+    echo "$win_out" | tr -d $'\r' | { grep "^# WIN_SVC|" || true; } | while IFS='|' read -r _ name server status input output last_log last_idle stats_10m; do
         local s_icon
         [[ "$status" == "OK" ]] && s_icon="✓" || s_icon="✗"
         echo "| ${label:-$server} | \`${name}\` | ${s_icon} ${status} | ${input} | ${output} | ${last_log} | ${last_idle} | ${stats_10m} |"
@@ -170,13 +174,19 @@ echo ""
 sep
 echo "  WINDOWS  ($WIN_CAMERAS_3_LABEL / $TS_CAMERAS_3)"
 sep
-cam3_out=$(_ssh_win "$TS_CAMERAS_3" "$TS_CAMERAS_3_USER" "$WIN_SCRIPT_CAMERAS_3")
-if [[ -n "$cam3_out" ]]; then
-    echo "$cam3_out" | grep -v "^# WIN_SVC|"
-    IFS='|' read -r cam3_cpu cam3_ram cam3_disk cam3_repo cam3_scripts <<< "$(_parse_win_sys "$cam3_out")"
+# дефолты + предпроверка доступности (как у CAMERAS_1/DEVELOP): иначе текст ошибки SSH
+# непустой → парсится в мусор '?'. Только достучавшись — опрашиваем status_win.ps1.
+cam3_cpu="—"; cam3_ram="—"; cam3_disk="—"; cam3_repo="—"; cam3_scripts="недоступна"
+cam3_out=""
+if ssh -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3" "echo ok" &>/dev/null 2>&1; then
+    cam3_out=$(_ssh_win "$TS_CAMERAS_3" "$TS_CAMERAS_3_USER" "$WIN_SCRIPT_CAMERAS_3")
+    if [[ -n "$cam3_out" ]]; then
+        echo "$cam3_out" | grep -v "^# WIN_SVC|"
+        IFS='|' read -r cam3_cpu cam3_ram cam3_disk cam3_repo cam3_scripts <<< "$(_parse_win_sys "$cam3_out")"
+    fi
 else
     echo "  [недоступна — $TS_CAMERAS_3]"
-    cam3_cpu="—"; cam3_ram="—"; cam3_disk="—"; cam3_repo="—"; cam3_scripts="недоступна"
 fi
 
 # DEVELOP
@@ -236,22 +246,22 @@ fi
     echo "## Сервисы"
     echo ""
     # Заголовок + разделитель (первые 2 строки из Linux .md)
-    if [[ -n "$linux_md" && -f "$linux_md" ]]; then
-        grep "^|" "$linux_md" | head -2
+    if [[ -n "$LINUX_MD" && -f "$LINUX_MD" ]]; then
+        { grep "^|" "$LINUX_MD" || true; } | head -2
     fi
     # Windows-сервисы ПЕРВЫЕ (они первые в пайплайне: камеры → детекция → отправка)
     _win_svc_md_rows "$cam3_out" "$WIN_CAMERAS_3_LABEL"
     [[ -n "$dev_out" ]] && _win_svc_md_rows "$dev_out" "$WIN_DEVELOP_LABEL"
     [[ -n "$cam1_out" ]] && _win_svc_md_rows "$cam1_out" "$WIN_CAMERAS_1_LABEL"
     # Linux-сервисы (пропускаем header/separator — уже выведены)
-    if [[ -n "$linux_md" && -f "$linux_md" ]]; then
-        grep "^|" "$linux_md" | tail -n +3
+    if [[ -n "$LINUX_MD" && -f "$LINUX_MD" ]]; then
+        { grep "^|" "$LINUX_MD" || true; } | tail -n +3
     fi
     echo ""
 } > "$MD_OUT"
 
 # Удалить промежуточный файл pipeline_status.py
-[[ -n "$linux_md" && -f "$linux_md" ]] && rm -f "$linux_md"
+[[ -n "$LINUX_MD" && -f "$LINUX_MD" ]] && rm -f "$LINUX_MD"
 
 echo ""
 echo "  → $MD_OUT"

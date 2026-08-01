@@ -48,16 +48,20 @@ function _Plural($n, $one, $few, $many) {
     return $many
 }
 
+# ЧИСТОЕ время обработки кадра (gray+diff) → 'счёт/кадр min/avg/max мс' (или '' если нет данных).
+function _FmtProcMs($procMs) {
+    if ($procMs -eq $null) { return "" }
+    return "счёт/кадр $([math]::Round($procMs[0]))/$([math]::Round($procMs[1]))/$([math]::Round($procMs[2])) мс"
+}
+
 # Единый формат «N прогонов (X файлов)» (как у Linux-сервисов). motion_diff → runs=1
 # (непрерывный цикл), 2_send → runs=число батчей отправки.
 function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "", $procMs = $null) {
     $rw = _Plural $runs "прогон" "прогона" "прогонов"
     $fw = _Plural $files "файл" "файла" "файлов"
     $s = "${runs} ${rw}${suffix} (${files} ${fw})"
-    # ЧИСТОЕ время обработки кадра (gray+diff) — из 'счёт/кадр: min/avg/max мс' в run.log
-    if ($procMs -ne $null) {
-        $s += "<br>счёт/кадр $([math]::Round($procMs[0]))/$([math]::Round($procMs[1]))/$([math]::Round($procMs[2])) мс"
-    }
+    $pf = _FmtProcMs $procMs
+    if ($pf -ne "") { $s += "<br>$pf" }
     # 'Готово. Время' у motion_diff — это ИНТЕРВАЛ между сохранёнными кадрами (тишина), не обработка
     if ($times.Count -gt 0) {
         $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
@@ -392,10 +396,15 @@ if ($count10m -gt 0) {
 } elseif ($frameCount10m -gt 0) {
     # нет событий движения, но кадры обрабатываются
     $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine $procMs10m
-} elseif ($motionCpuLine -ne "") {
-    # нет ни движения ни diffs.csv, но CPU есть — хотя бы покажем CPU
-    $stats10m = "—<br>${motionCpuLine}"
-} else { $stats10m = "--" }
+} else {
+    # совсем нет движения/diffs (тихая ночь) — но счёт/кадр (из heartbeat) и CPU показываем
+    $pm = if ($procMs10m -ne $null) { $procMs10m } else { $procMs60m }
+    $extra = @("—")
+    $pf = _FmtProcMs $pm
+    if ($pf -ne "")            { $extra += $pf }
+    if ($motionCpuLine -ne "") { $extra += $motionCpuLine }
+    $stats10m = if ($extra.Count -gt 1) { $extra -join "<br>" } else { "--" }
+}
 
 # stats для 2_send: 10м с таймингом + CPU (cpu.csv клиента). CPU есть даже без отправок.
 # 2_send — батчи отправки: «N прогонов (X файлов)», N = число батчей [в батче 1/K]
