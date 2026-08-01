@@ -54,6 +54,44 @@ function _FmtProcMs($procMs) {
     return "счёт/кадр $([math]::Round($procMs[0]))/$([math]::Round($procMs[1]))/$([math]::Round($procMs[2])) мс"
 }
 
+# ЦПУ из cpu.csv за окно с фолбэком startWin→1ч→24ч (как Linux service_cpu): первое непустое окно →
+# 'мин%/ср%/макс%/посл% (цпу)' или '' если данных нет. metaRoot содержит подкаталоги-даты с cpu.csv;
+# читаем 2 свежих (рестарт/полночь). ts_msk: 20260716_084240_891271_msk.
+function Get-CpuLine($metaRoot, $startWin = 10) {
+    if (-not $metaRoot -or -not (Test-Path $metaRoot)) { return "" }
+    $dirs = Get-ChildItem $metaRoot -Directory -EA SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName "cpu.csv") } |
+            Sort-Object Name -Descending | Select-Object -First 2 | Sort-Object Name
+    if (-not $dirs -or @($dirs).Count -eq 0) { return "" }
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($d in $dirs) {
+        foreach ($r in (Import-Csv (Join-Path $d.FullName "cpu.csv"))) {
+            $ts = $r.ts_msk; $dt = $null
+            try {
+                if ($ts -match '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})') {
+                    $dt = [datetime]::ParseExact("$($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5]):$($Matches[6])", 'yyyy-MM-dd HH:mm:ss', $null)
+                } else { $dt = [datetime]$ts }
+            } catch { $dt = $null }
+            if ($dt -ne $null) { $rows.Add([pscustomobject]@{ dt = $dt; cpu = [int][math]::Round([double]$r.cpu_pct) }) }
+        }
+    }
+    if ($rows.Count -eq 0) { return "" }
+    $sorted = @($rows | Sort-Object dt)
+    foreach ($w in @($startWin, 60, 1440)) {
+        $cut = (Get-Date).AddMinutes(-$w)
+        $sel = @($sorted | Where-Object { $_.dt -ge $cut })
+        if ($sel.Count -gt 0) {
+            $vals = @($sel | ForEach-Object { $_.cpu })
+            $mn  = ($vals | Measure-Object -Minimum).Minimum
+            $avg = [int][math]::Round(($vals | Measure-Object -Average).Average)
+            $mx  = ($vals | Measure-Object -Maximum).Maximum
+            $lst = $sel[$sel.Count - 1].cpu
+            return "${mn}%/${avg}%/${mx}%/${lst}% (цпу)"
+        }
+    }
+    return ""
+}
+
 # Единый формат «N прогонов (X файлов)» (как у Linux-сервисов). motion_diff → runs=1
 # (непрерывный цикл), 2_send → runs=число батчей отправки.
 function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "", $procMs = $null) {
@@ -62,7 +100,8 @@ function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "", $procMs = $null
     $s = "${runs} ${rw}${suffix} (${files} ${fw})"
     $pf = _FmtProcMs $procMs
     if ($pf -ne "") { $s += "<br>$pf" }
-    # 'Готово. Время' у motion_diff — это ИНТЕРВАЛ между сохранёнными кадрами (тишина), не обработка
+    # $times — чистое время отправки файла 2_send (work_ms из '(КБ Nмс)'). idle-интервалы motion_diff
+    # ('Готово. Время' между сохранёнными кадрами, включают простой) убраны из статистики — неинтересны.
     if ($times.Count -gt 0) {
         $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
         $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
@@ -219,8 +258,7 @@ if (Test-Path $logFile) {
     # date-каталоги → читаем 2 свежих каталога, у каждой строки своя дата (имя каталога).
     $cutoff   = (Get-Date).AddMinutes(-10)
     $cutoff60 = (Get-Date).AddMinutes(-60)
-    $times10m = [System.Collections.Generic.List[double]]::new()
-    $count60m = 0; $times60m = [System.Collections.Generic.List[double]]::new()
+    $count60m = 0
     $runs10m  = 0; $runs60m  = 0
     $procMs10m = $null; $procMs60m = $null   # последняя тройка 'счёт/кадр' (реальная обработка) в окне
     $metaRoot2  = Join-Path $motionDir "meta"
@@ -235,15 +273,13 @@ if (Test-Path $logFile) {
             try { $lt = [DateTime]::ParseExact("$dIso $ts2", "yyyy-MM-dd HH:mm:ss", $null) } catch { continue }
             $isStart = ($ln -match "Порог:")          # старт прогона motion_diff
             $isDiff  = ($ln -match "diff=")           # сохранённый diff-кадр
-            $t_v = $null
-            if ($isDiff -and ($ln -match 'Готово\. Время:\s*([\d.,]+)\s*с')) { $t_v = [double]($Matches[1] -replace ',', '.') }
             # реальная обработка кадра: 'счёт/кадр: min/avg/max мс' (есть и на diff-, и на пульс-строках)
             $pm = $null
             if ($ln -match 'счёт/кадр:\s*([\d.,]+)/([\d.,]+)/([\d.,]+)\s*мс') {
                 $pm = @([double]($Matches[1] -replace ',','.'), [double]($Matches[2] -replace ',','.'), [double]($Matches[3] -replace ',','.'))
             }
-            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++; if ($t_v -ne $null) { $times10m.Add($t_v) } }; if ($isStart) { $runs10m++ }; if ($pm) { $procMs10m = $pm } }
-            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++; if ($t_v -ne $null) { $times60m.Add($t_v) } }; if ($isStart) { $runs60m++ }; if ($pm) { $procMs60m = $pm } }
+            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++ }; if ($isStart) { $runs10m++ }; if ($pm) { $procMs10m = $pm } }
+            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++ }; if ($isStart) { $runs60m++ }; if ($pm) { $procMs60m = $pm } }
         }
     }
     # нет стартов в окне, но есть активность → 1 непрерывный прогон; иначе N рестартов
@@ -329,29 +365,8 @@ if ($sendLogFile -and (Test-Path $sendLogFile)) {
 }
 Write-Host ""
 
-# ── CPU из cpu.csv (1_motion_diff) ───────────────────────────────────────────
-$motionCpuLine = ""
-$cpuCsvFile = Join-Path $motionDir "meta\$today\cpu.csv"
-if (Test-Path $cpuCsvFile) {
-    $cpuCutoff = (Get-Date).AddMinutes(-10)
-    # ts_msk формат: 20260716_084240_891271_msk → парсим YYYYMMDD_HHMMSS
-    $cpuRows = Import-Csv $cpuCsvFile | Where-Object {
-        try {
-            $ts = $_.ts_msk
-            if ($ts -match '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})') {
-                [datetime]::ParseExact("$($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5]):$($Matches[6])", 'yyyy-MM-dd HH:mm:ss', $null) -ge $cpuCutoff
-            } else { [datetime]$ts -ge $cpuCutoff }
-        } catch { $false }
-    }
-    if ($cpuRows -and @($cpuRows).Count -gt 0) {
-        $cpuVals = @($cpuRows | ForEach-Object { [int][math]::Round([double]$_.cpu_pct) })
-        $cpuMn  = ($cpuVals | Measure-Object -Minimum).Minimum
-        $cpuAvg = [int][math]::Round(($cpuVals | Measure-Object -Average).Average)
-        $cpuMx  = ($cpuVals | Measure-Object -Maximum).Maximum
-        $cpuLst = $cpuVals[$cpuVals.Count - 1]
-        $motionCpuLine = "${cpuMn}%/${cpuAvg}%/${cpuMx}%/${cpuLst}% (цпу)"
-    }
-}
+# ── CPU 1_motion_diff и 2_send считаются ниже, в блоках сборки stats
+#    (Get-CpuLine: фолбэк окна 10м→1ч→24ч, привязка к окну прогонов строки).
 
 # ── Кадры из diffs.csv (1_motion_diff) — показывать когда нет событий движения
 $frameCount10m = 0
@@ -371,29 +386,6 @@ if (Test-Path $diffsCsvFile) {
     } catch {}
 }
 
-# ── CPU из cpu.csv (2_send / transfer client) ────────────────────────────────
-$sendCpuLine = ""
-$sendCpuCsv = Join-Path $REPO ".output\transfer_client\meta\$today\cpu.csv"
-if (Test-Path $sendCpuCsv) {
-    $sCut = (Get-Date).AddMinutes(-10)
-    $sRows = Import-Csv $sendCpuCsv | Where-Object {
-        try {
-            $ts = $_.ts_msk
-            if ($ts -match '^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})') {
-                [datetime]::ParseExact("$($Matches[1])-$($Matches[2])-$($Matches[3]) $($Matches[4]):$($Matches[5]):$($Matches[6])", 'yyyy-MM-dd HH:mm:ss', $null) -ge $sCut
-            } else { [datetime]$ts -ge $sCut }
-        } catch { $false }
-    }
-    if ($sRows -and @($sRows).Count -gt 0) {
-        $sVals = @($sRows | ForEach-Object { [int][math]::Round([double]$_.cpu_pct) })
-        $sMn = ($sVals | Measure-Object -Minimum).Minimum
-        $sAvg = [int][math]::Round(($sVals | Measure-Object -Average).Average)
-        $sMx = ($sVals | Measure-Object -Maximum).Maximum
-        $sLst = $sVals[$sVals.Count - 1]
-        $sendCpuLine = "${sMn}%/${sAvg}%/${sMx}%/${sLst}% (цпу)"
-    }
-}
-
 # ── WIN_SVC: структурированные данные для master status.sh ───────────────────
 # Строки с префиксом "# WIN_SVC|" отфильтровываются из вывода на терминал,
 # но используются status.sh для построения таблицы сервисов в .md
@@ -403,15 +395,22 @@ $winHost    = $env:COMPUTERNAME.ToLower()
 # stats для 1_motion_diff: 10м, fallback 60м, fallback кадры из diffs.csv
 # motion_diff — непрерывный цикл: обычно «1 прогон (X файлов)», но при рестарте(ах) в окне —
 # «N прогонов» (N = число стартов «Порог:», в т.ч. из соседнего date-каталога у полуночи).
+# CPU — Get-CpuLine с окном, привязанным к окну прогонов строки (10м/1ч) и фолбэком до 24ч →
+# показывается и при простое >10м. idle-интервалы больше не собираются → передаём @().
+$motionMetaRoot = Join-Path $motionDir "meta"
 if ($count10m -gt 0) {
-    $stats10m = Fmt-Runs $motionRuns10m $count10m " (10м)" $times10m $motionCpuLine $procMs10m
+    $motionCpuLine = Get-CpuLine $motionMetaRoot 10
+    $stats10m = Fmt-Runs $motionRuns10m $count10m " (10м)" @() $motionCpuLine $procMs10m
 } elseif ($count60m -gt 0) {
-    $stats10m = Fmt-Runs $motionRuns60m $count60m " (1ч)" $times60m $motionCpuLine $procMs60m
+    $motionCpuLine = Get-CpuLine $motionMetaRoot 60
+    $stats10m = Fmt-Runs $motionRuns60m $count60m " (1ч)" @() $motionCpuLine $procMs60m
 } elseif ($frameCount10m -gt 0) {
     # нет событий движения, но кадры обрабатываются
+    $motionCpuLine = Get-CpuLine $motionMetaRoot 10
     $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine $procMs10m
 } else {
     # совсем нет движения/diffs (тихая ночь) — но счёт/кадр (из heartbeat) и CPU показываем
+    $motionCpuLine = Get-CpuLine $motionMetaRoot 10
     $pm = if ($procMs10m -ne $null) { $procMs10m } else { $procMs60m }
     $extra = @("—")
     $pf = _FmtProcMs $pm
@@ -422,6 +421,8 @@ if ($count10m -gt 0) {
 
 # stats для 2_send: 10м с таймингом + CPU (cpu.csv клиента). CPU есть даже без отправок.
 # 2_send — батчи отправки: «N прогонов (X файлов)», N = число батчей [в батче 1/K]
+# CPU — Get-CpuLine с фолбэком 10м→1ч→24ч (окно прогонов send всегда 10м).
+$sendCpuLine = Get-CpuLine $sendMetaRoot 10
 if ($sendCount10m -gt 0) {
     $sb = if ($sendBatches10m -gt 0) { $sendBatches10m } else { 1 }
     $sendStats10m = Fmt-Runs $sb $sendCount10m " (10м)" $sendTimes10m $sendCpuLine
