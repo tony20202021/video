@@ -71,7 +71,7 @@ def test_fmt_stats_burst_receive():
     # transfer: чистое время приёма файла (I/O)
     cell = ps.fmt_stats(_st(328, 10, bursts=12, min=0.1, avg=0.1, max=0.2),
                         has_timing=True, kind="burst")
-    assert cell.endswith("приём 0.1с/0.1с/0.2с (на файл)")
+    assert cell.endswith("приём 0.1с/0.1с/0.2с")
 
 
 # ─── dir_state_by_date (разбивка инференса по датам) ──────────────────────────

@@ -26,18 +26,6 @@ function Shorten-WinLog($line) {
     $msg = $msg -replace '\(client\)\s+Файлов нет в \S+', 'Файлов нет'
     return $msg.Trim()
 }
-function Build-Stats($cnt, $times, $windowSec, $suffix, $cpuLine = "") {
-    $s = "${cnt}x${suffix}"
-    if ($times.Count -gt 0) {
-        $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
-        $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
-        $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
-        $lst = [math]::Round($times[$times.Count - 1], 1)
-        $s  += "<br>${mn}с/${avg}с/${mx}с/${lst}с"
-    }
-    if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
-    return $s
-}
 
 function _Plural($n, $one, $few, $many) {
     $n100 = [math]::Abs($n) % 100
@@ -100,14 +88,14 @@ function Fmt-Runs($runs, $files, $suffix, $times, $cpuLine = "", $procMs = $null
     $s = "${runs} ${rw}${suffix} (${files} ${fw})"
     $pf = _FmtProcMs $procMs
     if ($pf -ne "") { $s += "<br>$pf" }
-    # $times — чистое время отправки файла 2_send (work_ms из '(КБ Nмс)'). idle-интервалы motion_diff
-    # ('Готово. Время' между сохранёнными кадрами, включают простой) убраны из статистики — неинтересны.
+    # $times — чистое время ОТПРАВКИ файла 2_send (work_ms из '(КБ Nмс)'); симметрично 'приём' на Linux.
+    # Единый формат с pipeline_status.py: 'ярлык мин/ср/макс ед' — 3 значения, БЕЗ 'посл'.
+    # idle-интервалы motion_diff ('Готово. Время', с простоем) из статистики убраны — неинтересны.
     if ($times.Count -gt 0) {
         $mn  = [math]::Round(($times | Measure-Object -Minimum).Minimum, 1)
         $avg = [math]::Round(($times | Measure-Object -Average).Average, 1)
         $mx  = [math]::Round(($times | Measure-Object -Maximum).Maximum, 1)
-        $lst = [math]::Round($times[$times.Count - 1], 1)
-        $s  += "<br>интервал ${mn}с/${avg}с/${mx}с/${lst}с"
+        $s  += "<br>отправка ${mn}с/${avg}с/${mx}с"
     }
     if ($cpuLine -ne "") { $s += "<br>${cpuLine}" }
     return $s
