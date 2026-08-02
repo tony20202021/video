@@ -115,6 +115,19 @@ def test_fmt_stats_zero():
     assert ps.fmt_stats(_st(0, 10), False, kind="batch") == "—"
 
 
+def test_render_md_table_columns_consistent():
+    # Регрессия: сырой '|' внутри ячейки (напр. в шапке '<мсек|сек>/кадр') markdown трактует
+    # как разделитель колонки → таблица не рендерится. Число '|' во всех строках таблицы
+    # должно совпадать (в шапке пайп обязан быть HTML-сущностью &#124;, а не литералом).
+    row = {"label": "video-yolo", "state": "active",
+           "input": "in", "output": "out", "log_work": "work", "log_wait": "wait",
+           "stats": "1 прогон (10м) (2 кадра)\nмсек/кадр 8/16/54\n11%/11%/11%/11% (цпу)"}
+    md = ps.render_md([row], "2026-08-02 00:00:00")
+    table_lines = [ln for ln in md.splitlines() if ln.startswith("|")]
+    counts = {ln.count("|") for ln in table_lines}
+    assert len(counts) == 1, f"строки таблицы с разным числом '|' (сырой пайп в ячейке?): {counts}"
+
+
 # ─── parse_stat_lines (разбор строк журнала) ──────────────────────────────────
 
 def test_parse_stat_lines_batch():
