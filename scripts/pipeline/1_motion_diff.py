@@ -370,7 +370,7 @@ def main() -> int:
     images_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
 
-    add_file_handler(meta_dir / 'run.log')
+    _run_log_fh = add_file_handler(meta_dir / 'run.log')
 
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _ffmpeg_capture_options(
         use_tcp=args.tcp, stimeout_us=args.stimeout_us,
@@ -522,6 +522,9 @@ def main() -> int:
     logger.info('')
 
     _current_date = ts_for_file()[:8]  # YYYYMMDD MSK при старте
+    # cpu.csv ведётся по дню: снапшот CpuMonitor кумулятивный, поэтому фильтруем строки по дате
+    # (ts_msk = 'YYYYMMDD_...') → meta/<день>/cpu.csv содержит только свой день.
+    _cpu_for_day = lambda rows, day: [r for r in rows if str(r[1])[:8] == day]
 
     def _flush_day_stats(date_str: str, clear: bool = True) -> None:
         """Сохранить логи за date_str в images_dir/date_str/.
@@ -569,8 +572,24 @@ def main() -> int:
 
             _today = ts_for_file()[:8]
             if _today != _current_date:
-                _flush_day_stats(_current_date)
+                # Смена суток: закрыть день и ЗАВЕСТИ НОВЫЙ meta/<день>/. Раньше meta не роллилась —
+                # прогон через полночь писал run.log/cpu.csv в каталог даты старта (каталог за новый
+                # день не появлялся), из-за чего статус терял сегодняшние строки.
+                _flush_day_stats(_current_date)              # статистика дня → images/<день>/ (+ очистка логов)
+                try:                                         # дописать cpu.csv закрытого дня в его meta/
+                    _save_cpu_csv(_cpu_for_day(cpu_monitor.snapshot(), _current_date), meta_dir)
+                except Exception as _e:
+                    logger.warning(f"  [день] cpu.csv закрытого дня не сохранён: {_e}")
                 _current_date = _today
+                meta_dir = _base / "meta" / _today           # новый каталог дня
+                meta_dir.mkdir(parents=True, exist_ok=True)
+                try:                                         # перенаправить run.log в новый каталог
+                    logging.getLogger().removeHandler(_run_log_fh)
+                    _run_log_fh.close()
+                except Exception:
+                    pass
+                _run_log_fh = add_file_handler(meta_dir / 'run.log')
+                logger.info(f"  [день] новый meta-каталог: {meta_dir}")
 
             for low_u, var_list in vars_by_low.items():
                 reader = readers.get(low_u)
@@ -658,7 +677,7 @@ def main() -> int:
             if args.csv_save_interval > 0:
                 _now = time.monotonic()
                 if _now - _last_csv_save >= args.csv_save_interval:
-                    _save_cpu_csv(cpu_monitor.snapshot(), meta_dir)
+                    _save_cpu_csv(_cpu_for_day(cpu_monitor.snapshot(), _current_date), meta_dir)
                     _last_csv_save = _now
                 if _now - _last_stats_save >= _STATS_SAVE_INTERVAL:
                     _flush_day_stats(_current_date, clear=False)  # без обнуления
@@ -713,10 +732,11 @@ def main() -> int:
                 writer.writerows(pts_log)
             logger.info(f"  pts.csv:    {len(pts_log)} записей")
 
-        _save_cpu_csv(cpu_log, meta_dir)
+        _cpu_cur = _cpu_for_day(cpu_log, _current_date)   # финальный meta = каталог последнего дня
+        _save_cpu_csv(_cpu_cur, meta_dir)
 
-        _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, meta_dir)
-        _save_pts_chart(pts_log, cpu_log, meta_dir)
+        _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir)
+        _save_pts_chart(pts_log, _cpu_cur, meta_dir)
         _save_run_stats(frame_log, pts_log, saves_log, diffs_log, meta_dir)
 
 
