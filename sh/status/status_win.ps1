@@ -242,8 +242,8 @@ if (Test-Path $logFile) {
     }
 
     # Diff-кадры (файлы) И число прогонов (стартов «Порог:») за 10м/60м.
-    # Рестарт motion_diff / переход через полночь → строки прогона попадают в РАЗНЫЕ
-    # date-каталоги → читаем 2 свежих каталога, у каждой строки своя дата (имя каталога).
+    # Читаем 2 свежих date-каталога (рестарт/полночь могут разнести строки прогона по каталогам).
+    # Дата строки НЕ выводится из имени каталога — см. ниже (motion_diff пишет один run.log через полночь).
     $cutoff   = (Get-Date).AddMinutes(-10)
     $cutoff60 = (Get-Date).AddMinutes(-60)
     $count60m = 0
@@ -254,11 +254,19 @@ if (Test-Path $logFile) {
     foreach ($d in $recentDirs) {
         $rf = Join-Path $d.FullName "run.log"
         if (-not (Test-Path $rf)) { continue }
-        try { $dIso = [datetime]::ParseExact($d.Name, "yyyyMMdd", $null).ToString("yyyy-MM-dd") } catch { continue }
+        try { $baseDate = [datetime]::ParseExact($d.Name, "yyyyMMdd", $null) } catch { continue }
+        # Дата строки НЕ из имени каталога: motion_diff пишет один run.log через полночь (сегодняшние
+        # строки лежат в каталоге за дату старта → раньше окно 10м/60м их теряло, счёт/кадр пропадал).
+        # Реальную дату берём по переходам через полночь ВНУТРИ файла: время суток пошло назад
+        # относительно предыдущей строки → следующий день (+1 к смещению).
+        $prevTod = $null; $dayOffset = 0
         foreach ($ln in (Get-Content $rf -Encoding UTF8)) {
             if ($ln -notmatch "^(\d{2}:\d{2}:\d{2})\s+INFO") { continue }
             $ts2 = $Matches[1]
-            try { $lt = [DateTime]::ParseExact("$dIso $ts2", "yyyy-MM-dd HH:mm:ss", $null) } catch { continue }
+            try { $tod = [TimeSpan]::Parse($ts2) } catch { continue }
+            if ($null -ne $prevTod -and $tod -lt $prevTod) { $dayOffset++ }
+            $prevTod = $tod
+            $lt = $baseDate.AddDays($dayOffset).Add($tod)
             $isStart = ($ln -match "Порог:")          # старт прогона motion_diff
             $isDiff  = ($ln -match "diff=")           # сохранённый diff-кадр
             # реальная обработка кадра: 'счёт/кадр: min/avg/max мс' (есть и на diff-, и на пульс-строках)
