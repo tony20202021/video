@@ -124,6 +124,11 @@ _HTML = """<!DOCTYPE html>
            border-radius: 4px; text-align: left; font-family: monospace; width: 100%; }
   .btn-class { background: #16213e; color: #eee; border-left: 4px solid #555; }
   .btn-class:hover, .btn-class.active { border-left-color: #f9ca24; background: #0f3460; color: #f9ca24; }
+  .cls-grp { display: flex; gap: 3px; }
+  .cls-grp .btn-class { flex: 1; width: auto; }
+  .btn-only { flex: 0 0 auto; width: auto; padding: 9px 12px; text-align: center;
+              background: #16213e; color: #6f6f92; border-left: 3px solid #555; }
+  .btn-only:hover { background: #0f3460; color: #f9ca24; }
   .nav-row { display: flex; gap: 6px; }
   .nav-row button { width: auto; flex: 1; }
   .btn-nav  { background: #0f3460; color: #7ec8e3; }
@@ -211,6 +216,12 @@ function toggleClass(cls) {
   saveClasses([...cur].sort());
 }
 
+function onlyClass(cls) {
+  // отметить ТОЛЬКО этот класс — снять все остальные
+  if (idx >= crops.length) return;
+  saveClasses([cls]);
+}
+
 async function skipNext() {
   // пропустить (skip — отложить, исключается из обучения) и вперёд
   await saveClasses(['skip']);
@@ -236,9 +247,10 @@ function render() {
     const key = String(i + 1);
     const color = CLASS_COLORS[i] || '#888888';
     const active = cur.has(cls);
-    return `<button class="btn-class${active?' active':''}" onclick="toggleClass('${cls}')"
+    return `<span class="cls-grp"><button class="btn-class${active?' active':''}" onclick="toggleClass('${cls}')"
       style="${active?'border-left-color:'+color+';color:'+color:''}">
-      <span style="opacity:.6">[${key}]</span> ${active?'☑':'☐'} ${cls}</button>`;
+      <span style="opacity:.6">[${key}]</span> ${active?'☑':'☐'} ${cls}</button>` +
+      `<button class="btn-only" onclick="onlyClass('${cls}')" title="только этот класс (снять остальные) · Shift+${key}">⦿</button></span>`;
   }).join('');
 
   const shortcuts = classes.map((cls, i) => `${i+1}=${cls}`).join('<br>');
@@ -260,7 +272,7 @@ function render() {
         </div>
         <button class="btn-skip" onclick="skipNext()">Пропустить (U)</button>
         <div class="shortcuts">
-          ${shortcuts} (тоггл)<br>← → = навигация · Space/Enter = вперёд<br>U = пропустить (skip)
+          ${shortcuts}<br>N = вкл/выкл · Shift+N = только этот (⦿)<br>← → = навигация · Space/Enter = вперёд<br>U = пропустить (skip)
         </div>
       </div>
       <div class="drag-handle" id="drag-handle"></div>
@@ -291,8 +303,13 @@ function probBars(filename) {
 }
 
 document.addEventListener('keydown', e => {
-  const n = parseInt(e.key);
-  if (!isNaN(n) && n >= 1 && n <= classes.length) { toggleClass(classes[n-1]); return; }
+  // e.code (Digit1/Numpad1) — стабилен к Shift (Shift+1 даёт e.key='!', но e.code='Digit1')
+  const m = e.code && e.code.match(/^(?:Digit|Numpad)([1-9])$/);
+  if (m) {
+    const n = parseInt(m[1]);
+    if (n <= classes.length) { e.shiftKey ? onlyClass(classes[n-1]) : toggleClass(classes[n-1]); }
+    return;
+  }
   if (e.key === 'ArrowRight') navigate(1);
   if (e.key === 'ArrowLeft')  navigate(-1);
   if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); navigate(1); }
@@ -363,6 +380,11 @@ _GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .cls-grp { display: inline-flex; gap: 2px; }
+  .btn-only { padding: 5px 9px; font-size: 12px; cursor: pointer; border: none; border-radius: 5px;
+              background: #16213e; color: #6f6f92; border-left: 3px solid #555; font-family: monospace; }
+  .btn-only:hover { background: #0f3460; color: #f9ca24; }
+  #modal .btn-only { padding: 8px 12px; }
   .btn-skip { background: #2d1b1b; color: #e74c3c; }
   .btn-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
@@ -584,8 +606,9 @@ function renderBulkChecks() {
             ? `background:#3a2f10;color:#f9ca24;border-left-color:#f9ca24`
             : `border-left-color:${color};opacity:.65`);
       const badge = state === 'partial' ? ` <span style="opacity:.75">${cnt}/${total}</span>` : '';
-      return `<button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
-        style="${stl}">${box} ${cls}${badge}</button>`;
+      return `<span class="cls-grp"><button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
+        style="${stl}">${box} ${cls}${badge}</button>` +
+        `<button class="btn-only" onclick="onlyBulkClass('${cls}')" title="только этот класс у всех выбранных">⦿</button></span>`;
     }).join('') +
     `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')">Пропустить</button>` +
     `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>` +
@@ -596,6 +619,12 @@ function toggleBulkClass(cls) {
   if (!selected.size) return;
   // у всех включён → снять у всех; иначе (пусто/частично) → включить всем
   applyBulk(cls, _bulkClassCount(cls) === selected.size ? 'remove' : 'add');
+}
+
+function onlyBulkClass(cls) {
+  // отметить ТОЛЬКО этот класс у всех выбранных (снять остальные)
+  if (!selected.size) return;
+  applyBulk(cls, 'set');
 }
 
 function updateBulkBar() {
@@ -630,8 +659,9 @@ function openModal(i) {
   const btns = classes.map((cls, ci) => {
     const color = CLASS_COLORS[ci] || '#888';
     const active = cur.has(cls);
-    return `<button class="btn-class${active?' active':''}" onclick="relabel('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">${active?'☑':'☐'} ${cls}</button>`;
+    return `<span class="cls-grp"><button class="btn-class${active?' active':''}" onclick="relabel('${cls}')"
+      style="${active?'border-left-color:'+color+';color:'+color:''}">${active?'☑':'☐'} ${cls}</button>` +
+      `<button class="btn-only" onclick="onlyRelabel('${cls}')" title="только этот класс">⦿</button></span>`;
   }).join('');
   document.getElementById('modal-btns').innerHTML =
     btns +
@@ -664,6 +694,7 @@ function relabel(cls) {
 
 function relabelClear() { _saveModal([]); }
 function relabelSkip() { _saveModal(['skip']); }   // пропустить (skip — отложить, не в обучение)
+function onlyRelabel(cls) { _saveModal([cls]); }   // только этот класс (снять остальные)
 
 function goLabel() {
   location.href = '/?idx=' + modalIdx;
@@ -753,6 +784,11 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
+  .cls-grp { display: inline-flex; gap: 2px; }
+  .btn-only { padding: 5px 9px; font-size: 12px; cursor: pointer; border: none; border-radius: 5px;
+              background: #16213e; color: #6f6f92; border-left: 3px solid #555; font-family: monospace; }
+  .btn-only:hover { background: #0f3460; color: #f9ca24; }
+  #modal .btn-only { padding: 8px 12px; }
   .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
   .btn-bulk-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
@@ -983,8 +1019,9 @@ function renderBulkChecks() {
             ? `background:#3a2f10;color:#f9ca24;border-left-color:#f9ca24`
             : `border-left-color:${color};opacity:.65`);
       const badge = state === 'partial' ? ` <span style="opacity:.75">${cnt}/${total}</span>` : '';
-      return `<button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
-        style="${stl}">${box} ${cls}${badge}</button>`;
+      return `<span class="cls-grp"><button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
+        style="${stl}">${box} ${cls}${badge}</button>` +
+        `<button class="btn-only" onclick="onlyBulkClass('${cls}')" title="только этот класс у всех выбранных">⦿</button></span>`;
     }).join('') +
     `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')" style="margin-left:0">Пропустить</button>` +
     `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')">Очистить всё</button>` +
@@ -994,6 +1031,12 @@ function renderBulkChecks() {
 function toggleBulkClass(cls) {
   if (!selected.size) return;
   applyBulk(cls, _bulkClassCount(cls) === selected.size ? 'remove' : 'add');
+}
+
+function onlyBulkClass(cls) {
+  // отметить ТОЛЬКО этот класс у всех выбранных (снять остальные)
+  if (!selected.size) return;
+  applyBulk(cls, 'set');
 }
 
 function updateBulkBar() {
@@ -1040,8 +1083,10 @@ function buildModalBtns() {
     const color = CLASS_COLORS[i] || '#888';
     const active = cur.has(cls);
     const mark = layout === 'v4' ? (active ? '☑ ' : '☐ ') : '';
-    return `<button class="btn-class${active?' active':''}" onclick="setCls('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">${mark}${cls}</button>`;
+    return `<span class="cls-grp"><button class="btn-class${active?' active':''}" onclick="setCls('${cls}')"
+      style="${active?'border-left-color:'+color+';color:'+color:''}">${mark}${cls}</button>` +
+      (layout === 'v4' ? `<button class="btn-only" onclick="onlyCls('${cls}')" title="только этот класс">⦿</button>` : '') +
+      `</span>`;
   }).join('');
   const extra = layout === 'v4'
     ? `<button class="btn-skip" onclick="skipCls()">Пропустить</button>` +
@@ -1072,6 +1117,7 @@ async function setCls(cls) {
 
 async function clearCls() { await _apiSetLabel(modalPath, []); }
 async function skipCls() { await _apiSetLabel(modalPath, ['skip']); }   // пропустить → skip/
+async function onlyCls(cls) { await _apiSetLabel(modalPath, [cls]); }   // только этот класс (⦿ — только v4)
 
 async function _apiSetLabel(path, list) {
   document.getElementById('modal-btns').classList.add('moving');
@@ -1351,6 +1397,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                 cur = set()
             elif action == "skip":
                 cur = {"skip"}
+            elif action == "set" and cls:       # только этот класс (снять остальные)
+                cur = {cls}
             elif action == "remove" and cls:
                 cur.discard(cls)
             elif cls:
@@ -1412,8 +1460,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
 
     @app.route("/api/label/bulk", methods=["POST"])
     def label_bulk():
-        """Батч над выбранными кропами. action: add (доб. класс) | remove | clear (очистить) |
-        skip (пометить 'skip' — отложить, исключается из обучения)."""
+        """Батч над выбранными кропами. action: add (доб. класс) | set (только этот класс —
+        снять остальные) | remove | clear (очистить) | skip (пометить 'skip' — отложить)."""
         data = request.get_json()
         files = data.get("files", [])
         action = data.get("action", "add")
@@ -1428,6 +1476,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                     cur = set()
                 elif action == "skip":
                     cur = {"skip"}
+                elif action == "set" and cls:   # только этот класс (снять остальные)
+                    cur = {cls}
                 elif action == "remove" and cls:
                     cur.discard(cls)
                 elif cls:                       # add
