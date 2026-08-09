@@ -496,6 +496,11 @@ function render() {
     (groups[key] = groups[key] || []).push(i);
   });
   const sections = sortCombos(Object.keys(groups));
+  // ВНУТРИ секции — по имени файла (камера+таймстамп), НЕ по пути на диске: crops = sorted(rglob)
+  // = по подпапке (single/<class>, multi, uncertain), а она ≠ метке секции (метки из smoothed json),
+  // из-за чего время «скакало» на границах подпапок.
+  const _bn = i => crops[i].split('/').pop();
+  Object.values(groups).forEach(a => a.sort((x, y) => _bn(x) < _bn(y) ? -1 : _bn(x) > _bn(y) ? 1 : 0));
 
   flatOrder = [];
   sections.forEach(cls => groups[cls].forEach(i => flatOrder.push(i)));
@@ -909,6 +914,9 @@ function render() {
     (groups[key] = groups[key] || []).push(rec);
   });
   const sections = sortCombos(Object.keys(groups));
+  // ВНУТРИ секции — по имени файла (камера+таймстамп), не по порядку обхода каталогов датасета
+  const _bn = r => r.path.split('/').pop();
+  Object.values(groups).forEach(a => a.sort((x, y) => _bn(x) < _bn(y) ? -1 : _bn(x) > _bn(y) ? 1 : 0));
 
   allFiles = [];
   sections.forEach(key => groups[key].forEach(rec => allFiles.push({...rec, key})));
