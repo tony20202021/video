@@ -186,6 +186,18 @@ def test_smooth_writes_csv_smoothed_class_not_labels(tmp_path):
     assert float(row["p_2_delivery"]) > 0             # probs модели сохранены
 
 
+def test_merge_zones_cam_key():
+    # SMOOTH_MERGE_ZONES: зоны d/u ОДНОЙ камеры → один ключ камеры; разные физ. камеры — раздельно
+    from common.utils.smooth_core import _parse_cam_t
+    n_d = "cam_01_9_d_20260720_085017_100000_msk.jpg"
+    n_u = "cam_01_9_u_20260720_085017_100000_msk.jpg"
+    assert _parse_cam_t(n_d)[0] == "cam_01_9_d"                    # выкл (по умолч.) — зона в ключе
+    assert _parse_cam_t(n_d, merge_zones=True)[0] == "cam_01_9"   # склейка снимает зону d
+    assert _parse_cam_t(n_u, merge_zones=True)[0] == "cam_01_9"   # u → та же камера, что d
+    assert _parse_cam_t("cam_02_9_d_20260720_085017_100000_msk.jpg",
+                        merge_zones=True)[0] == "cam_02_9"         # другая физ. камера — отдельный ключ
+
+
 def test_smooth_date_viz_writes_concats(tmp_path):
     m = _load()
     dd = _make_dir(tmp_path)

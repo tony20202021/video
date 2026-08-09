@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -92,7 +93,7 @@ def _persons_in_frame(name: str) -> int:
     return int(m.group(1)) if m else 1
 
 
-def _parse_cam_t(name: str) -> tuple[str, float] | None:
+def _parse_cam_t(name: str, merge_zones: bool = False) -> tuple[str, float] | None:
     stem = name.rsplit(".", 1)[0]
     parts = stem.split("_")
     for i, p in enumerate(parts):
@@ -101,7 +102,12 @@ def _parse_cam_t(name: str) -> tuple[str, float] | None:
             t = parts[i + 1]
             micro = parts[i + 2] if i + 2 < len(parts) and parts[i + 2].isdigit() else "0"
             sod = int(t[:2]) * 3600 + int(t[2:4]) * 60 + int(t[4:6]) + float(f"0.{micro}")
-            return "_".join(parts[:i]), sod
+            cam_parts = parts[:i]
+            # merge_zones: снять суффикс ЗОНЫ (одиночная буква d/u) → зоны одной камеры в один поток.
+            # Разные физические камеры (cam_01 vs cam_02) остаются раздельными — у них разный префикс.
+            if merge_zones and cam_parts and len(cam_parts[-1]) == 1 and cam_parts[-1].isalpha():
+                cam_parts = cam_parts[:-1]
+            return "_".join(cam_parts), sod
     return None
 
 
@@ -146,14 +152,14 @@ def _fmt_dt(t: float, date_str: str) -> tuple[str, str]:
     return f"{ti // 3600:02d}:{(ti % 3600) // 60:02d}:{ti % 60:02d}", ds
 
 
-def _frames_by_cam(rows: list[dict], ctx: _Ctx) -> dict[str, list[dict]]:
+def _frames_by_cam(rows: list[dict], ctx: _Ctx, merge_zones: bool = False) -> dict[str, list[dict]]:
     out: dict[str, list[dict]] = {}
     seen: set[str] = set()
     for r in rows:
         nm = r.get("crop", "")
         if not nm or nm in seen:
             continue
-        pr = _parse_cam_t(nm)
+        pr = _parse_cam_t(nm, merge_zones)
         if pr is None:
             continue
         seen.add(nm)
@@ -389,6 +395,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
                 guard_sec: float | None = None, min_minority_prob: float | None = None,
                 veto_prob: float | None = None, prob_window_sec: float | None = None,
                 prob_window_kmax: int | None = None, prob_window_tri: bool = False,
+                merge_zones: bool = False,
                 truth: dict | None = None, version: str = "") -> dict:
     """Сглаживает одну дату. НЕ мутирует images/ — пишет сайдкар в out_dir (default smoothed/<date>/)."""
     rows = _read_csv_rows(date_dir, cfg.csv_name)
@@ -402,7 +409,8 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
         out_dir = date_dir.parents[1] / "smoothed" / date_dir.name
 
     cfg_sig = (f"{version}|{cfg.smoother}|c{len(ctx.classes)}|gap{gap}|ps{p_stay}|gate{gate}"
-               f"|pw{prob_window_sec}|k{prob_window_kmax}|tri{int(prob_window_tri)}|t{len(truth or {})}")
+               f"|pw{prob_window_sec}|k{prob_window_kmax}|tri{int(prob_window_tri)}|mz{int(merge_zones)}"
+               f"|t{len(truth or {})}")
     wm_path = out_dir / "smooth_state.json"
     if wm_path.is_file() and (out_dir / "classifications_smoothed.csv").is_file():
         try:
@@ -421,7 +429,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
         name = r.get("crop", "")
         if not name:
             continue
-        pr = _parse_cam_t(name)
+        pr = _parse_cam_t(name, merge_zones)
         if pr is None:
             continue
         cam, t = pr
@@ -490,7 +498,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
             vdir.mkdir(parents=True, exist_ok=True)
             for _old in vdir.glob("*.jpg"):
                 _old.unlink()
-            cam_frames = _frames_by_cam(rows, ctx)
+            cam_frames = _frames_by_cam(rows, ctx, merge_zones)
             changed_names = {name: sm for (_, name, sm) in viz_targets}
             interesting = set(changed_names) | set(errors)
             for cam, frs in cam_frames.items():
@@ -577,6 +585,10 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
     ap.add_argument("--ext", default="jpg")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--poll-sec", type=float, default=120.0)
+    ap.add_argument("--merge-zones", action="store_true",
+                    default=os.environ.get("SMOOTH_MERGE_ZONES", "0").strip().lower() in ("1", "true", "yes", "on"),
+                    help="склеивать зоны d/u ОДНОЙ камеры в один поток по времени (по умолч. ВЫКЛ; "
+                         "env SMOOTH_MERGE_ZONES). Замер на v3 (9481 кропов): эффект ~в пределах шума")
     args = ap.parse_args()
 
     if not args.input_dir.exists():
@@ -586,9 +598,9 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
     prob_window = args.prob_window if args.prob_window and args.prob_window > 0 else None
     prob_window_k = args.prob_window_k if args.prob_window_k and args.prob_window_k > 0 else None
     truth = _load_truth(args.truth, set(cfg.fixed_classes) if cfg.fixed_classes else None) if args.truth else None
-    logger.info("%s smooth: gap=%.0fс p_stay=%.2f gate=%s viz=%s prob_window=%s k=%s tri=%s truth=%s",
+    logger.info("%s smooth: gap=%.0fс p_stay=%.2f gate=%s viz=%s prob_window=%s k=%s tri=%s merge_zones=%s truth=%s",
                 cfg.smoother, args.gap, args.p_stay, gate, args.viz, prob_window, prob_window_k,
-                args.prob_window_tri, len(truth) if truth else 0)
+                args.prob_window_tri, args.merge_zones, len(truth) if truth else 0)
 
     while True:
         total_changed = n_skip = 0
@@ -597,6 +609,7 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
                              include_uncertain=args.include_uncertain, max_persons=args.max_persons,
                              ext=args.ext, viz=args.viz, prob_window_sec=prob_window,
                              prob_window_kmax=prob_window_k, prob_window_tri=args.prob_window_tri,
+                             merge_zones=args.merge_zones,
                              truth=truth, version=version)
             if st.get("skipped"):
                 n_skip += 1
