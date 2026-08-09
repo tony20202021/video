@@ -124,11 +124,14 @@ _HTML = """<!DOCTYPE html>
            border-radius: 4px; text-align: left; font-family: monospace; width: 100%; }
   .btn-class { background: #16213e; color: #eee; border-left: 4px solid #555; }
   .btn-class:hover, .btn-class.active { border-left-color: #f9ca24; background: #0f3460; color: #f9ca24; }
-  .cls-grp { display: flex; gap: 3px; }
+  .cls-grp { display: flex; gap: 3px; padding: 2px; border-radius: 7px; }
   .cls-grp .btn-class { flex: 1; width: auto; }
   .btn-only { flex: 0 0 auto; width: auto; padding: 9px 12px; text-align: center;
               background: #16213e; color: #6f6f92; border-left: 3px solid #555; }
   .btn-only:hover { background: #0f3460; color: #f9ca24; }
+  .sort-toggle { font-size: 11px; color: #777; display: flex; gap: 4px; align-items: center; }
+  .btn-sort { width: auto; padding: 3px 8px; font-size: 11px; background: #1a1a2e; color: #888; border-radius: 4px; }
+  .btn-sort.sort-on { background: #0f3460; color: #7ec8e3; }
   .nav-row { display: flex; gap: 6px; }
   .nav-row button { width: auto; flex: 1; }
   .btn-nav  { background: #0f3460; color: #7ec8e3; }
@@ -193,8 +196,25 @@ async function loadState() {
   probs = d.probs || {};
   const p = new URLSearchParams(location.search).get('idx');
   if (p !== null) idx = Math.max(0, Math.min(crops.length - 1, parseInt(p)));
+  _sortCrops();
   render();
 }
+
+// Сортировка кропов: 'time' (только таймстамп YYYYMMDD_HHMMSS) | 'cam' (имя файла = камера+время).
+// Режим общий для всех экранов, хранится в localStorage.
+let sortMode = localStorage.getItem('labelui_sort') || 'time';
+function _timeKey(n){ const m = n.match(/(\d{8}_\d{6}(?:_\d+)?)/); return m ? m[1] : n; }
+function sortKey(n){ return sortMode === 'time' ? _timeKey(n) : n; }
+function _sortCrops(){
+  const cur = crops[idx];
+  crops.sort((a,b) => { const ka=sortKey(a.split('/').pop()), kb=sortKey(b.split('/').pop()); return ka<kb?-1:ka>kb?1:0; });
+  idx = Math.max(0, crops.indexOf(cur));
+}
+function sortToggleHTML(){
+  const b = (m,l)=>`<button class="btn-sort${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`;
+  return `<div class="sort-toggle">сорт: ${b('time','⏱ время')}${b('cam','камера')}</div>`;
+}
+function setSortMode(m){ if(m===sortMode) return; sortMode=m; localStorage.setItem('labelui_sort',m); _sortCrops(); render(); }
 
 function curClasses() { return (labels[crops[idx]] || []).slice(); }
 
@@ -247,10 +267,11 @@ function render() {
     const key = String(i + 1);
     const color = CLASS_COLORS[i] || '#888888';
     const active = cur.has(cls);
-    return `<span class="cls-grp"><button class="btn-class${active?' active':''}" onclick="toggleClass('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">
-      <span style="opacity:.6">[${key}]</span> ${active?'☑':'☐'} ${cls}</button>` +
-      `<button class="btn-only" onclick="onlyClass('${cls}')" title="только этот класс (снять остальные) · Shift+${key}">⦿</button></span>`;
+    return `<span class="cls-grp" style="border:1px solid ${color}66;background:${color}14">` +
+      `<button class="btn-class${active?' active':''}" onclick="toggleClass('${cls}')"
+        style="border-left-color:${color};color:${color}${active?';background:'+color+'2e;font-weight:bold':''}">
+        <span style="opacity:.6">[${key}]</span> ${active?'☑':'☐'} ${cls}</button>` +
+      `<button class="btn-only" onclick="onlyClass('${cls}')" style="border-left-color:${color};color:${color}" title="только этот класс (снять остальные) · Shift+${key}">⦿</button></span>`;
   }).join('');
 
   const shortcuts = classes.map((cls, i) => `${i+1}=${cls}`).join('<br>');
@@ -262,6 +283,7 @@ function render() {
           Кадр <b>${idx+1}</b> / ${crops.length}<br>
           <span class="labeled-count">Размечено: ${labeled}</span>
         </div>
+        ${sortToggleHTML()}
         <div class="fname">${f}</div>
         <div class="current-label">Классы: <span>${lblText}</span></div>
         ${probBars(f)}
@@ -369,6 +391,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
   #modal .btn-close { background: #2a2a4a; color: #aaa; }
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
               cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
+  .zoom-btn.sort-on { background: #0f3460; color: #7ec8e3; }
   .zoom-btn:hover { background: #3a3a6a; color: #eee; }
   #bulk-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0d1522;
               border-top: 2px solid #7ec8e3; padding: 8px 16px; display: none;
@@ -380,7 +403,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
-  .cls-grp { display: inline-flex; gap: 2px; }
+  .cls-grp { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; }
   .btn-only { padding: 5px 9px; font-size: 12px; cursor: pointer; border: none; border-radius: 5px;
               background: #16213e; color: #6f6f92; border-left: 3px solid #555; font-family: monospace; }
   .btn-only:hover { background: #0f3460; color: #f9ca24; }
@@ -404,6 +427,7 @@ _GALLERY_HTML = """<!DOCTYPE html>
     <button class="zoom-btn" onclick="zoom(-1)">−</button>
     <button class="zoom-btn" onclick="zoom(+1)">+</button>
   </span>
+  <span id="sort-toggle" style="display:flex;gap:4px;align-items:center"></span>
   <span class="stats" id="stats"></span>
 </h2>
 <div id="gallery"></div>
@@ -437,11 +461,20 @@ function zoom(d) {
   document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
 }
 
+// Сортировка (общий режим с разметчиком, localStorage): 'time' (таймстамп) | 'cam' (имя файла)
+let sortMode = localStorage.getItem('labelui_sort') || 'time';
+function _timeKey(n){ const m = n.match(/(\d{8}_\d{6}(?:_\d+)?)/); return m ? m[1] : n; }
+function sortKey(n){ return sortMode === 'time' ? _timeKey(n) : n; }
+function sortToggleHTML(){ const b=(m,l)=>`<button class="zoom-btn${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`; return b('time','⏱ время')+b('cam','камера'); }
+function renderSortToggle(){ const e=document.getElementById('sort-toggle'); if(e) e.innerHTML=sortToggleHTML(); }
+function setSortMode(m){ if(m===sortMode) return; sortMode=m; localStorage.setItem('labelui_sort',m); renderSortToggle(); render(); }
+
 async function loadState() {
   const d = await (await fetch('/api/state')).json();
   crops = d.crops; labels = d.labels; classes = d.classes;
   probs = d.probs || {};
   render();
+  renderSortToggle();
 }
 
 function probBars(filename) {
@@ -499,7 +532,7 @@ function render() {
   // ВНУТРИ секции — по имени файла (камера+таймстамп), НЕ по пути на диске: crops = sorted(rglob)
   // = по подпапке (single/<class>, multi, uncertain), а она ≠ метке секции (метки из smoothed json),
   // из-за чего время «скакало» на границах подпапок.
-  const _bn = i => crops[i].split('/').pop();
+  const _bn = i => sortKey(crops[i].split('/').pop());
   Object.values(groups).forEach(a => a.sort((x, y) => _bn(x) < _bn(y) ? -1 : _bn(x) > _bn(y) ? 1 : 0));
 
   flatOrder = [];
@@ -611,9 +644,9 @@ function renderBulkChecks() {
             ? `background:#3a2f10;color:#f9ca24;border-left-color:#f9ca24`
             : `border-left-color:${color};opacity:.65`);
       const badge = state === 'partial' ? ` <span style="opacity:.75">${cnt}/${total}</span>` : '';
-      return `<span class="cls-grp"><button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
+      return `<span class="cls-grp" style="border:1px solid ${color}66;background:${color}14"><button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
         style="${stl}">${box} ${cls}${badge}</button>` +
-        `<button class="btn-only" onclick="onlyBulkClass('${cls}')" title="только этот класс у всех выбранных">⦿</button></span>`;
+        `<button class="btn-only" onclick="onlyBulkClass('${cls}')" style="border-left-color:${color};color:${color}" title="только этот класс у всех выбранных">⦿</button></span>`;
     }).join('') +
     `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')">Пропустить</button>` +
     `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')" style="margin-left:0">Очистить всё</button>` +
@@ -664,9 +697,10 @@ function openModal(i) {
   const btns = classes.map((cls, ci) => {
     const color = CLASS_COLORS[ci] || '#888';
     const active = cur.has(cls);
-    return `<span class="cls-grp"><button class="btn-class${active?' active':''}" onclick="relabel('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">${active?'☑':'☐'} ${cls}</button>` +
-      `<button class="btn-only" onclick="onlyRelabel('${cls}')" title="только этот класс">⦿</button></span>`;
+    return `<span class="cls-grp" style="border:1px solid ${color}66;background:${color}14">` +
+      `<button class="btn-class${active?' active':''}" onclick="relabel('${cls}')"
+        style="border-left-color:${color};color:${color}${active?';background:'+color+'2e;font-weight:bold':''}">${active?'☑':'☐'} ${cls}</button>` +
+      `<button class="btn-only" onclick="onlyRelabel('${cls}')" style="border-left-color:${color};color:${color}" title="только этот класс">⦿</button></span>`;
   }).join('');
   document.getElementById('modal-btns').innerHTML =
     btns +
@@ -778,6 +812,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   #modal .moving { opacity: 0.5; pointer-events: none; }
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
               cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
+  .zoom-btn.sort-on { background: #0f3460; color: #7ec8e3; }
   .zoom-btn:hover { background: #3a3a6a; color: #eee; }
   #bulk-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0d1522;
               border-top: 2px solid #7ec8e3; padding: 8px 16px; display: none;
@@ -789,7 +824,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
               border-radius: 4px; font-family: monospace; }
   .btn-bulk-cls { background: #16213e; color: #eee; border-left: 3px solid #555; }
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
-  .cls-grp { display: inline-flex; gap: 2px; }
+  .cls-grp { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; }
   .btn-only { padding: 5px 9px; font-size: 12px; cursor: pointer; border: none; border-radius: 5px;
               background: #16213e; color: #6f6f92; border-left: 3px solid #555; font-family: monospace; }
   .btn-only:hover { background: #0f3460; color: #f9ca24; }
@@ -811,6 +846,7 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
     <button class="zoom-btn" onclick="zoom(-1)">−</button>
     <button class="zoom-btn" onclick="zoom(+1)">+</button>
   </span>
+  <span id="sort-toggle" style="display:flex;gap:4px;align-items:center"></span>
   <span class="stats" id="stats"></span>
 </h2>
 <div id="gallery"></div>
@@ -850,11 +886,20 @@ function fileClasses(path) {
   return rec ? (rec.classes || []) : [];
 }
 
+// Сортировка (общий режим с разметчиком, localStorage): 'time' (таймстамп) | 'cam' (имя файла)
+let sortMode = localStorage.getItem('labelui_sort') || 'time';
+function _timeKey(n){ const m = n.match(/(\d{8}_\d{6}(?:_\d+)?)/); return m ? m[1] : n; }
+function sortKey(n){ return sortMode === 'time' ? _timeKey(n) : n; }
+function sortToggleHTML(){ const b=(m,l)=>`<button class="zoom-btn${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`; return b('time','⏱ время')+b('cam','камера'); }
+function renderSortToggle(){ const e=document.getElementById('sort-toggle'); if(e) e.innerHTML=sortToggleHTML(); }
+function setSortMode(m){ if(m===sortMode) return; sortMode=m; localStorage.setItem('labelui_sort',m); renderSortToggle(); render(); }
+
 async function loadState() {
   const d = await (await fetch('/api/dataset')).json();
   files = d.files || []; classes = d.classes || []; layout = d.layout || 'v4';
   probs = d.probs || {};
   render();
+  renderSortToggle();
 }
 
 function comboKey(arr) { return (arr && arr.length) ? [...arr].sort().join(' + ') : '—'; }
@@ -915,7 +960,7 @@ function render() {
   });
   const sections = sortCombos(Object.keys(groups));
   // ВНУТРИ секции — по имени файла (камера+таймстамп), не по порядку обхода каталогов датасета
-  const _bn = r => r.path.split('/').pop();
+  const _bn = r => sortKey(r.path.split('/').pop());
   Object.values(groups).forEach(a => a.sort((x, y) => _bn(x) < _bn(y) ? -1 : _bn(x) > _bn(y) ? 1 : 0));
 
   allFiles = [];
@@ -1027,9 +1072,9 @@ function renderBulkChecks() {
             ? `background:#3a2f10;color:#f9ca24;border-left-color:#f9ca24`
             : `border-left-color:${color};opacity:.65`);
       const badge = state === 'partial' ? ` <span style="opacity:.75">${cnt}/${total}</span>` : '';
-      return `<span class="cls-grp"><button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
+      return `<span class="cls-grp" style="border:1px solid ${color}66;background:${color}14"><button class="btn-bulk btn-bulk-cls" onclick="toggleBulkClass('${cls}')"
         style="${stl}">${box} ${cls}${badge}</button>` +
-        `<button class="btn-only" onclick="onlyBulkClass('${cls}')" title="только этот класс у всех выбранных">⦿</button></span>`;
+        `<button class="btn-only" onclick="onlyBulkClass('${cls}')" style="border-left-color:${color};color:${color}" title="только этот класс у всех выбранных">⦿</button></span>`;
     }).join('') +
     `<button class="btn-bulk btn-bulk-skip" onclick="applyBulk(null,'skip')" style="margin-left:0">Пропустить</button>` +
     `<button class="btn-bulk btn-bulk-desel" onclick="applyBulk(null,'clear')">Очистить всё</button>` +
@@ -1091,9 +1136,10 @@ function buildModalBtns() {
     const color = CLASS_COLORS[i] || '#888';
     const active = cur.has(cls);
     const mark = layout === 'v4' ? (active ? '☑ ' : '☐ ') : '';
-    return `<span class="cls-grp"><button class="btn-class${active?' active':''}" onclick="setCls('${cls}')"
-      style="${active?'border-left-color:'+color+';color:'+color:''}">${mark}${cls}</button>` +
-      (layout === 'v4' ? `<button class="btn-only" onclick="onlyCls('${cls}')" title="только этот класс">⦿</button>` : '') +
+    return `<span class="cls-grp" style="border:1px solid ${color}66;background:${color}14">` +
+      `<button class="btn-class${active?' active':''}" onclick="setCls('${cls}')"
+        style="border-left-color:${color};color:${color}${active?';background:'+color+'2e;font-weight:bold':''}">${mark}${cls}</button>` +
+      (layout === 'v4' ? `<button class="btn-only" onclick="onlyCls('${cls}')" style="border-left-color:${color};color:${color}" title="только этот класс">⦿</button>` : '') +
       `</span>`;
   }).join('');
   const extra = layout === 'v4'
