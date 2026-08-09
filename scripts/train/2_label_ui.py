@@ -125,13 +125,16 @@ _HTML = """<!DOCTYPE html>
   .btn-class { background: #16213e; color: #eee; border-left: 4px solid #555; }
   .btn-class:hover, .btn-class.active { border-left-color: #f9ca24; background: #0f3460; color: #f9ca24; }
   .cls-grp { display: flex; gap: 3px; padding: 2px; border-radius: 7px; }
-  .cls-grp .btn-class { flex: 1; width: auto; }
+  .cls-grp .btn-class { flex: 1; width: auto; border-right: 4px solid currentColor; }
   .btn-only { flex: 0 0 auto; width: auto; padding: 9px 12px; text-align: center;
-              background: #16213e; color: #6f6f92; border-left: 3px solid #555; }
+              background: #16213e; color: #6f6f92; border-left: 3px solid #555;
+              border-right: 3px solid currentColor; }
   .btn-only:hover { background: #0f3460; color: #f9ca24; }
   .sort-toggle { font-size: 11px; color: #777; display: flex; gap: 4px; align-items: center; }
   .btn-sort { width: auto; padding: 3px 8px; font-size: 11px; background: #1a1a2e; color: #888; border-radius: 4px; }
   .btn-sort.sort-on { background: #0f3460; color: #7ec8e3; }
+  .grp-chk { color: #888; font-size: 11px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  .grp-chk input { cursor: pointer; margin: 0; }
   .nav-row { display: flex; gap: 6px; }
   .nav-row button { width: auto; flex: 1; }
   .btn-nav  { background: #0f3460; color: #7ec8e3; }
@@ -200,21 +203,31 @@ async function loadState() {
   render();
 }
 
-// Сортировка кропов: 'time' (только таймстамп YYYYMMDD_HHMMSS) | 'cam' (имя файла = камера+время).
-// Режим общий для всех экранов, хранится в localStorage.
+// Сортировка кропов: 'time' (таймстамп) | 'cam' (имя файла = камера+время) + группировка по классам
+// (по умолч. вкл; выкл → единый список без разбиения). Режимы общие для всех экранов, в localStorage.
 let sortMode = localStorage.getItem('labelui_sort') || 'time';
+let groupByClass = localStorage.getItem('labelui_group') !== '0';   // по умолчанию вкл
 function _timeKey(n){ const m = n.match(/(\d{8}_\d{6}(?:_\d+)?)/); return m ? m[1] : n; }
 function sortKey(n){ return sortMode === 'time' ? _timeKey(n) : n; }
+function _grpKey(f){
+  const v = (labels[f]||[]).filter(x=>x).sort();
+  if (!v.length) return '3';                                    // без метки — в конец
+  if (v.length===1){ const ci=classes.indexOf(v[0]); return ci>=0 ? '0'+String(ci).padStart(3,'0') : '1'+v[0]; }
+  return '1'+v.join(' + ');                                     // мульти — ранг 1, алфавит
+}
 function _sortCrops(){
   const cur = crops[idx];
-  crops.sort((a,b) => { const ka=sortKey(a.split('/').pop()), kb=sortKey(b.split('/').pop()); return ka<kb?-1:ka>kb?1:0; });
+  const key = f => (groupByClass ? _grpKey(f)+' ' : '') + sortKey(f.split('/').pop());
+  crops.sort((a,b) => { const ka=key(a), kb=key(b); return ka<kb?-1:ka>kb?1:0; });
   idx = Math.max(0, crops.indexOf(cur));
 }
 function sortToggleHTML(){
   const b = (m,l)=>`<button class="btn-sort${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`;
-  return `<div class="sort-toggle">сорт: ${b('time','⏱ время')}${b('cam','камера')}</div>`;
+  const g = `<label class="grp-chk"><input type="checkbox" ${groupByClass?'checked':''} onchange="setGroupBy(this.checked)"> группировка по классам</label>`;
+  return `<div class="sort-toggle">сорт: ${b('time','⏱ время')}${b('cam','камера')}${g}</div>`;
 }
 function setSortMode(m){ if(m===sortMode) return; sortMode=m; localStorage.setItem('labelui_sort',m); _sortCrops(); render(); }
+function setGroupBy(v){ groupByClass=v; localStorage.setItem('labelui_group', v?'1':'0'); _sortCrops(); render(); }
 
 function curClasses() { return (labels[crops[idx]] || []).slice(); }
 
@@ -392,6 +405,8 @@ _GALLERY_HTML = """<!DOCTYPE html>
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
               cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
   .zoom-btn.sort-on { background: #0f3460; color: #7ec8e3; }
+  .grp-chk { color: #999; font-size: 12px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  .grp-chk input { cursor: pointer; margin: 0; }
   .zoom-btn:hover { background: #3a3a6a; color: #eee; }
   #bulk-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0d1522;
               border-top: 2px solid #7ec8e3; padding: 8px 16px; display: none;
@@ -405,9 +420,11 @@ _GALLERY_HTML = """<!DOCTYPE html>
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
   .cls-grp { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; }
   .btn-only { padding: 5px 9px; font-size: 12px; cursor: pointer; border: none; border-radius: 5px;
-              background: #16213e; color: #6f6f92; border-left: 3px solid #555; font-family: monospace; }
+              background: #16213e; color: #6f6f92; border-left: 3px solid #555;
+              border-right: 3px solid currentColor; font-family: monospace; }
   .btn-only:hover { background: #0f3460; color: #f9ca24; }
   #modal .btn-only { padding: 8px 12px; }
+  .cls-grp .btn-class, .cls-grp .btn-bulk-cls { border-right: 3px solid currentColor; }
   .btn-skip { background: #2d1b1b; color: #e74c3c; }
   .btn-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
@@ -461,13 +478,18 @@ function zoom(d) {
   document.documentElement.style.setProperty('--tw', ZOOM_STEPS[zoomIdx] + 'px');
 }
 
-// Сортировка (общий режим с разметчиком, localStorage): 'time' (таймстамп) | 'cam' (имя файла)
+// Сортировка (общий режим с разметчиком, localStorage): 'time' | 'cam' + группировка по классам
+// (по умолч. вкл; выкл → единый список без секций).
 let sortMode = localStorage.getItem('labelui_sort') || 'time';
+let groupByClass = localStorage.getItem('labelui_group') !== '0';
 function _timeKey(n){ const m = n.match(/(\d{8}_\d{6}(?:_\d+)?)/); return m ? m[1] : n; }
 function sortKey(n){ return sortMode === 'time' ? _timeKey(n) : n; }
-function sortToggleHTML(){ const b=(m,l)=>`<button class="zoom-btn${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`; return b('time','⏱ время')+b('cam','камера'); }
+function sortToggleHTML(){ const b=(m,l)=>`<button class="zoom-btn${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`;
+  const g=`<label class="grp-chk"><input type="checkbox" ${groupByClass?'checked':''} onchange="setGroupBy(this.checked)"> группировка</label>`;
+  return b('time','⏱ время')+b('cam','камера')+g; }
 function renderSortToggle(){ const e=document.getElementById('sort-toggle'); if(e) e.innerHTML=sortToggleHTML(); }
 function setSortMode(m){ if(m===sortMode) return; sortMode=m; localStorage.setItem('labelui_sort',m); renderSortToggle(); render(); }
+function setGroupBy(v){ groupByClass=v; localStorage.setItem('labelui_group', v?'1':'0'); renderSortToggle(); render(); }
 
 async function loadState() {
   const d = await (await fetch('/api/state')).json();
@@ -524,11 +546,12 @@ function render() {
 
   // Группируем по КОМБИНАЦИИ классов (мульти-кроп — в своей группе-комбо)
   const groups = {};
-  crops.forEach((f, i) => {
-    const key = comboKey(labels[f]);
-    (groups[key] = groups[key] || []).push(i);
-  });
-  const sections = sortCombos(Object.keys(groups));
+  if (groupByClass) {
+    crops.forEach((f, i) => { const key = comboKey(labels[f]); (groups[key] = groups[key] || []).push(i); });
+  } else {
+    groups['__all__'] = crops.map((f, i) => i);   // единый список без разбиения по классам
+  }
+  const sections = groupByClass ? sortCombos(Object.keys(groups)) : ['__all__'];
   // ВНУТРИ секции — по имени файла (камера+таймстамп), НЕ по пути на диске: crops = sorted(rglob)
   // = по подпапке (single/<class>, multi, uncertain), а она ≠ метке секции (метки из smoothed json),
   // из-за чего время «скакало» на границах подпапок.
@@ -539,7 +562,7 @@ function render() {
   sections.forEach(cls => groups[cls].forEach(i => flatOrder.push(i)));
 
   document.getElementById('gallery').innerHTML = sections.map(cls => {
-    const color = comboColor(cls);
+    const color = cls === '__all__' ? '#888' : comboColor(cls);
     const tiles = groups[cls].map(i => {
       const f = crops[i];
       const name = f.split('/').pop();
@@ -553,7 +576,7 @@ function render() {
     }).join('');
     return `<div class="section">
       <div class="section-title" style="background:${color}22;color:${color}">
-        ${cls === '—' ? 'без метки' : cls} &nbsp;(${groups[cls].length})
+        ${cls === '__all__' ? 'все' : (cls === '—' ? 'без метки' : cls)} &nbsp;(${groups[cls].length})
       </div>
       <div class="grid">${tiles}</div>
     </div>`;
@@ -813,6 +836,8 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   .zoom-btn { background: #2a2a4a; color: #aaa; border: none; border-radius: 3px;
               cursor: pointer; font-size: 12px; padding: 2px 8px; font-family: monospace; }
   .zoom-btn.sort-on { background: #0f3460; color: #7ec8e3; }
+  .grp-chk { color: #999; font-size: 12px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  .grp-chk input { cursor: pointer; margin: 0; }
   .zoom-btn:hover { background: #3a3a6a; color: #eee; }
   #bulk-bar { position: fixed; bottom: 0; left: 0; right: 0; background: #0d1522;
               border-top: 2px solid #7ec8e3; padding: 8px 16px; display: none;
@@ -826,9 +851,11 @@ _DATASET_GALLERY_HTML = """<!DOCTYPE html>
   .btn-bulk-cls:hover { background: #0f3460; color: #f9ca24; }
   .cls-grp { display: inline-flex; gap: 2px; padding: 2px; border-radius: 7px; }
   .btn-only { padding: 5px 9px; font-size: 12px; cursor: pointer; border: none; border-radius: 5px;
-              background: #16213e; color: #6f6f92; border-left: 3px solid #555; font-family: monospace; }
+              background: #16213e; color: #6f6f92; border-left: 3px solid #555;
+              border-right: 3px solid currentColor; font-family: monospace; }
   .btn-only:hover { background: #0f3460; color: #f9ca24; }
   #modal .btn-only { padding: 8px 12px; }
+  .cls-grp .btn-class, .cls-grp .btn-bulk-cls { border-right: 3px solid currentColor; }
   .btn-bulk-skip { background: #2d1b1b; color: #e74c3c; }
   .btn-bulk-skip:hover { background: #4a2020; color: #ff6b6b; }
   .btn-bulk-desel { background: #2a2a4a; color: #999; margin-left: auto; }
@@ -886,13 +913,18 @@ function fileClasses(path) {
   return rec ? (rec.classes || []) : [];
 }
 
-// Сортировка (общий режим с разметчиком, localStorage): 'time' (таймстамп) | 'cam' (имя файла)
+// Сортировка (общий режим с разметчиком, localStorage): 'time' | 'cam' + группировка по классам
+// (по умолч. вкл; выкл → единый список без секций).
 let sortMode = localStorage.getItem('labelui_sort') || 'time';
+let groupByClass = localStorage.getItem('labelui_group') !== '0';
 function _timeKey(n){ const m = n.match(/(\d{8}_\d{6}(?:_\d+)?)/); return m ? m[1] : n; }
 function sortKey(n){ return sortMode === 'time' ? _timeKey(n) : n; }
-function sortToggleHTML(){ const b=(m,l)=>`<button class="zoom-btn${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`; return b('time','⏱ время')+b('cam','камера'); }
+function sortToggleHTML(){ const b=(m,l)=>`<button class="zoom-btn${sortMode===m?' sort-on':''}" onclick="setSortMode('${m}')">${l}</button>`;
+  const g=`<label class="grp-chk"><input type="checkbox" ${groupByClass?'checked':''} onchange="setGroupBy(this.checked)"> группировка</label>`;
+  return b('time','⏱ время')+b('cam','камера')+g; }
 function renderSortToggle(){ const e=document.getElementById('sort-toggle'); if(e) e.innerHTML=sortToggleHTML(); }
 function setSortMode(m){ if(m===sortMode) return; sortMode=m; localStorage.setItem('labelui_sort',m); renderSortToggle(); render(); }
+function setGroupBy(v){ groupByClass=v; localStorage.setItem('labelui_group', v?'1':'0'); renderSortToggle(); render(); }
 
 async function loadState() {
   const d = await (await fetch('/api/dataset')).json();
@@ -954,11 +986,12 @@ function render() {
 
   // Группируем по КОМБИНАЦИИ классов
   const groups = {};
-  files.forEach(rec => {
-    const key = comboKey(rec.classes);
-    (groups[key] = groups[key] || []).push(rec);
-  });
-  const sections = sortCombos(Object.keys(groups));
+  if (groupByClass) {
+    files.forEach(rec => { const key = comboKey(rec.classes); (groups[key] = groups[key] || []).push(rec); });
+  } else {
+    groups['__all__'] = files.slice();   // единый список без разбиения по классам
+  }
+  const sections = groupByClass ? sortCombos(Object.keys(groups)) : ['__all__'];
   // ВНУТРИ секции — по имени файла (камера+таймстамп), не по порядку обхода каталогов датасета
   const _bn = r => sortKey(r.path.split('/').pop());
   Object.values(groups).forEach(a => a.sort((x, y) => _bn(x) < _bn(y) ? -1 : _bn(x) > _bn(y) ? 1 : 0));
@@ -968,7 +1001,7 @@ function render() {
 
   let fi = 0;
   document.getElementById('gallery').innerHTML = sections.map(key => {
-    const color = comboColor(key);
+    const color = key === '__all__' ? '#888' : comboColor(key);
     const tiles = groups[key].map(rec => {
       const i = fi++;
       const sel = selected.has(i);
@@ -982,7 +1015,7 @@ function render() {
     }).join('');
     return `<div class="section">
       <div class="section-title" style="background:${color}22;color:${color}">
-        ${key === '—' ? 'без метки' : key} &nbsp;(${groups[key].length})
+        ${key === '__all__' ? 'все' : (key === '—' ? 'без метки' : key)} &nbsp;(${groups[key].length})
       </div>
       <div class="grid">${tiles}</div>
     </div>`;
