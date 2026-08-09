@@ -146,8 +146,12 @@ v2-метках выводят подсказку и не запускаются
    `inference/smoothed/<date>/` — **самодостаточно для разметки и downstream**:
    - `classifications_smoothed.csv` — `crop, cam, model_class, smoothed_class, changed, rel, p_<class>…`
      (`smoothed_class` в **col4** — identify читает `$4`; `rel` = путь кропа относительно `images/<date>`;
-     `p_<class>` = probs модели → CSV годится как `--probs-csv` для разметчика);
-   - `labels.json` — v2 `{rel: [smoothed_class]}`, готов к `2_label_ui --labels` и к передаче дальше;
+     `p_<class>` = probs модели → CSV годится как `--probs-csv` для разметчика). **ЕДИНСТВЕННЫЙ авторитетный
+     машинный выход сглаживания** — сглаживатель пере-генерит его свободно;
+   - **`labels.json` сглаживатель НЕ пишет.** Это файл РУЧНОЙ разметки: его создаёт/ведёт ТОЛЬКО человек
+     в `2_label_ui` (при первом сохранении). Наличие = «дату проверил человек», отсутствие = «берём авто».
+     Разметчик, когда `labels.json` нет, **сидит стартовые метки из `smoothed_class`** (CSV). Поэтому
+     любой пересчёт CSV (смена параметров/версии/рост CSV) **не затирает ручную разметку**;
    - кропы НЕ перекладываются, `images/labels.json` НЕ переписывается.
 
 **Резервный режим — HMM/Viterbi** (при `SMOOTH_PROB_WINDOW=0`): сегментация на визиты + Viterbi
@@ -242,8 +246,8 @@ vs истины** (сглаж-класс ∉ метки, в т.ч. НЕ испр
 ```
 inference/
   images/<date>/     ← НЕИЗМЕНЯЕМО (только classify): single/<class>/, multi/, uncertain/, CSV, labels.json
-  smoothed/<date>/   ← только 3b: classifications_smoothed.csv (crop,…,smoothed_class,rel,p_*), labels.json
-                        (v2 сглаженных классов — прямо в разметчик), smooth_state.json, smooth_viz/
+  smoothed/<date>/   ← 3b: classifications_smoothed.csv (crop,…,smoothed_class,rel,p_*), smooth_state.json,
+                        smooth_viz/. labels.json здесь пишет ТОЛЬКО человек (2_label_ui), не сглаживатель
   meta/<date>/<session>/ ← логи classify: ОДИН каталог на сессию сервиса (run.log дописывается);
                            новый — только при рестарте и полночи (не на каждый поллинг)
 ```
@@ -260,9 +264,10 @@ classify раскладывает `images/`; **3b НЕ трогает `images/`*
 
 **Разметка результата сглаживания.** Сайдкар самодостаточен → `./sh/train/2_label_ui.sh --smoothed
 .data/groups/v4/inference/smoothed/<date>` выведет всё сам: кропы из `images/<date>` (INPUT), «текущий
-класс» = сглаженный из `smoothed/<date>/labels.json` (LABELS), probs из того же `classifications_smoothed.csv`.
-Правки разметчика пишутся в `smoothed/<date>/labels.json` (`images/` не мутируется — основной вид UI файлы
-не двигает). Либо разметка модельного выхода — прямо на `images/labels.json` (3b его не трогает).
+класс» = ручной `smoothed/<date>/labels.json` (LABELS) ЕСЛИ он есть, иначе **сид из `smoothed_class`**
+(`classifications_smoothed.csv`), probs оттуда же. Правки разметчика пишутся в `smoothed/<date>/labels.json`
+и его пишет ТОЛЬКО разметчик — **сглаживатель labels.json не трогает**, поэтому пересчёты сглаживания не
+затирают ручную разметку. Либо разметка модельного выхода — прямо на `images/labels.json` (3b его не трогает).
 
 **Общее ядро (группы и жители).** Логика сглаживания вынесена в `src/common/utils/smooth_core.py`
 (параметризовано классами/подписями/цветами). Два тонких драйвера и **два сервиса**:

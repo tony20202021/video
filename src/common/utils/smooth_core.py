@@ -455,7 +455,6 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
     viz_n = 0
     audit, corrections, viz_targets = [], [], []
     smoothed_by_name: dict[str, str] = {}
-    sm_labels: dict[str, list] = {}          # rel(→images) → [smoothed_class]: самодостаточный labels.json
     for i, (rec, (sm_class, was_changed)) in enumerate(zip(recs, smoothed)):
         name = rec["name"]
         f = files.get(name)
@@ -470,7 +469,6 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
         for c, pv in zip(ctx.classes, rec["probs"]):
             row_out[f"p_{c}"] = round(pv, 4)
         audit.append(row_out)
-        sm_labels[rel] = [sm_class]
         if was_changed:
             viz_targets.append((i, name, sm_class))
         if cur != sm_class:
@@ -524,10 +522,10 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(audit)
-    # самодостаточный labels.json (сглаженные классы, ключи rel→images) — прямо в 2_label_ui
-    # (--labels) и дальше по пайплайну; images/ не мутируется
-    _ml.save_labels(out_dir / "labels.json", sm_labels,
-                    task=("identify" if cfg.smoother == "identity" else "classify"))
+    # labels.json сглаживатель НЕ пишет: сглаженные классы уже в classifications_smoothed.csv
+    # (col4 smoothed_class). labels.json — файл РУЧНОЙ разметки: его пишет ТОЛЬКО человек в 2_label_ui
+    # (разметчик сидит стартовые метки из CSV, если labels.json нет), поэтому пересчёт CSV сколько
+    # угодно раз не затирает ручную разметку.
     _write_watermark(out_dir, csv_rows=len(rows), eligible=len(recs), changed=changed, sig=cfg_sig, smoother=cfg.smoother)
     n_next = sum(1 for a in audit if a["smoothed_class"] in ctx.downstream_classes)
     return {"date": date_dir.name, "rows": len(rows), "eligible": len(recs), "changed": changed,

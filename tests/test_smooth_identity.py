@@ -66,19 +66,20 @@ def test_identity_smooths_and_rescues_unknown(tmp_path):
     assert st["rescued_uncertain"] == 1   # cur=unknown_resident посчитан как спасённый
 
 
-def test_identity_writes_selfsufficient_labels(tmp_path):
-    # то же ядро → сайдкар identity тоже даёт labels.json (person_id) + p_<person> в CSV
+def test_identity_writes_csv_smoothed_class_not_labels(tmp_path):
+    # то же ядро → identity пишет smoothed_class (person) в CSV + p_<person>, но labels.json НЕ пишет
     import csv as _csv
-    from common.utils import multilabel as _ml
     m = _load4b()
     dd = _make(tmp_path)
     sm = tmp_path / "smoothed" / "20260720"
     m.smooth_date(dd, gap=60, p_stay=0.95, gate=None, prob_window_sec=3.0)
 
-    lbl = _ml.load_labels(sm / "labels.json")
-    # unknown-кроп сглажен в жителя, ключ rel→images (папка unknown_resident/)
-    assert lbl["unknown_resident/cam_01_9_d_20260720_085001_100000_msk.jpg"] == ["141_resident_man_1"]
+    assert not (sm / "labels.json").exists()                 # labels.json — файл ручной разметки, не сглаживателя
 
+    byname = {r["crop"]: r for r in
+              _csv.DictReader(open(sm / "classifications_smoothed.csv", encoding="utf-8"))}
+    # unknown-кроп сглажен в жителя
+    assert byname["cam_01_9_d_20260720_085001_100000_msk.jpg"]["smoothed_class"] == "141_resident_man_1"
     header = next(_csv.reader(open(sm / "classifications_smoothed.csv", encoding="utf-8")))
     assert header[3] == "smoothed_class"                     # col4 не сдвинулся (identify.sh $4)
     assert "p_141_resident_man_1" in header and "rel" in header

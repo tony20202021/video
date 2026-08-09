@@ -163,26 +163,25 @@ def test_smooth_date_writes_watermark(tmp_path):
     assert st["csv_rows"] == 5 and st["eligible"] == 5 and st["smoother"] == "groups"
 
 
-def test_smooth_writes_selfsufficient_labels_and_probs(tmp_path):
-    # сглаживание пишет самодостаточный labels.json (для 2_label_ui) + обогащает CSV (rel + p_*)
+def test_smooth_writes_csv_smoothed_class_not_labels(tmp_path):
+    # сглаживатель пишет smoothed_class в CSV (col4) + rel/p_*, но labels.json НЕ пишет
+    # (labels.json — файл РУЧНОЙ разметки: 2_label_ui сидит стартовые метки из CSV, когда его нет)
     import csv as _csv
-    from common.utils import multilabel as _ml
     m = _load()
     dd = _make_dir(tmp_path)
     sm = _smoothed(tmp_path)
     m.smooth_date(dd, gap=60, p_stay=0.95, gate=None, include_uncertain=True)
 
-    # labels.json со СГЛАЖЕННЫМ классом, ключ = путь rel→images (как ждёт разметчик/пайплайн)
-    lbl = _ml.load_labels(sm / "labels.json")
-    rel_delivery = "single/2_delivery/cam_01_9_d_20260720_085002_100000_msk.jpg"
-    assert lbl[rel_delivery] == ["1_resident"]        # доставка сглажена в resident
-    assert lbl["single/1_resident/cam_01_9_d_20260720_085000_100000_msk.jpg"] == ["1_resident"]
+    # labels.json сглаживатель НЕ создаёт
+    assert not (sm / "labels.json").exists()
 
-    # CSV обогащён: rel + p_<class>, а smoothed_class ОСТАЛСЯ в col4 (identify.sh читает $4)
+    # smoothed_class в col4 (identify.sh читает $4); CSV обогащён rel + p_<class>
+    rel_delivery = "single/2_delivery/cam_01_9_d_20260720_085002_100000_msk.jpg"
     header = next(_csv.reader(open(sm / "classifications_smoothed.csv", encoding="utf-8")))
     assert header[3] == "smoothed_class"
     assert "rel" in header and "p_1_resident" in header and "p_4_guest" in header
     row = _sm_map(sm)["cam_01_9_d_20260720_085002_100000_msk.jpg"]
+    assert row["smoothed_class"] == "1_resident"      # доставка сглажена в resident
     assert row["rel"] == rel_delivery
     assert float(row["p_2_delivery"]) > 0             # probs модели сохранены
 

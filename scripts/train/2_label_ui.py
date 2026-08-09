@@ -1239,6 +1239,29 @@ def _load_probs(csv_path: Path, classes: list[str]) -> dict[str, dict[str, float
     return result
 
 
+def _load_smoothed_seed(csv_path: Path) -> dict[str, list]:
+    """Стартовые метки из classifications_smoothed.csv: {crop(basename): [smoothed_class]}.
+    Нужно, чтобы разметчик показывал авто-сглаживание, когда labels.json ещё нет: сглаживатель
+    labels.json больше НЕ пишет (он избыточен — smoothed_class уже в CSV), labels.json создаёт
+    только человек при сохранении."""
+    import csv as _csv
+    if not csv_path.is_file():
+        return {}
+    seed: dict[str, list] = {}
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            for row in _csv.DictReader(f):
+                crop = row.get("crop", "")
+                sm = (row.get("smoothed_class", "") or "").strip()
+                if crop and sm:
+                    lbl = _clean_label_set([sm])
+                    if lbl:
+                        seed[crop] = lbl
+    except Exception:
+        pass
+    return seed
+
+
 def _dataset_layout(dataset_dir: Path) -> str:
     """'v4' если есть labels.json / single/ / multi/ (multi-label), иначе 'legacy' (подпапки=классы)."""
     if ((dataset_dir / "labels.json").is_file() or (dataset_dir / "single").is_dir()
@@ -1329,7 +1352,8 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
                dataset_dir: Path | None = None,
                image_exts: set[str] | None = None,
                allowed_ips: IpAllowlist | None = None,
-               probs: dict | None = None) -> None:
+               probs: dict | None = None,
+               seed_labels: dict | None = None) -> None:
     from flask import Flask, abort, jsonify, request, send_file, Response
     import logging
     import shutil as _shutil
@@ -1376,6 +1400,14 @@ def run_server(input_dir: Path, port: int, labels_path: Path,
         if key not in labels or (isabs and not _key_from_abs.get(key, False)):
             labels[key] = _clean_label_set(v)
             _key_from_abs[key] = isabs
+
+    # Сид из авто-сглаживания (classifications_smoothed.csv): для кропов БЕЗ ручной метки показываем
+    # smoothed_class. labels.json пишет ТОЛЬКО человек (сглаживатель его больше не пишет), поэтому
+    # ручная разметка не затирается пересчётами. Человеческая метка (выше) имеет приоритет над сидом.
+    for k, v in (seed_labels or {}).items():
+        key = _stripped_to_crop.get(_re_scene.sub("", Path(k).name))
+        if key is not None and key not in labels:
+            labels[key] = list(v)
 
     _classes = classes or []
     _valid_set = set(_classes)
@@ -1615,10 +1647,13 @@ def main() -> int:
     allowed_ips = parse_allowed_ips(os.environ.get("ALLOWED_IPS", ""))
 
     probs: dict | None = None
+    seed_labels: dict = {}
     if args.probs_csv:
         csv_path = args.probs_csv
         probs = _load_probs(csv_path, classes)
-        print(f"Вероятности: {csv_path}  ({len(probs)} записей)")
+        seed_labels = _load_smoothed_seed(csv_path)   # сглаженные классы как старт разметки (labels.json нет)
+        print(f"Вероятности: {csv_path}  ({len(probs)} записей)"
+              + (f"  · сид меток из smoothed_class: {len(seed_labels)}" if seed_labels else ""))
     elif args.probs:
         csv_path = labels_path.parent / "classifications.csv"
         probs = _load_probs(csv_path, classes)
@@ -1630,7 +1665,8 @@ def main() -> int:
                dataset_dir=resolved_dataset,
                image_exts=image_exts,
                allowed_ips=allowed_ips,
-               probs=probs)
+               probs=probs,
+               seed_labels=seed_labels)
     return 0
 
 

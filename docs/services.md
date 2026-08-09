@@ -209,8 +209,9 @@ video-classify  →  .data/groups/v4/inference/images/{date}/
                    classifications.csv  labels.json   (poll 60s)
     ▼
 video-smooth    images/ НЕ трогает → сайдкар .data/groups/v4/inference/smoothed/{date}/:
-                classifications_smoothed.csv (crop,…,smoothed_class[col4],rel,p_*), labels.json (v2 —
-                самодостаточно для разметки: 2_label_ui.sh --smoothed …), smooth_state.json, smooth_viz/
+                classifications_smoothed.csv (crop,…,smoothed_class[col4],rel,p_*) — авторитетный машинный
+                выход; smooth_state.json, smooth_viz/. labels.json сглаживатель НЕ пишет — это файл РУЧНОЙ
+                разметки (2_label_ui сидит из smoothed_class, если labels.json нет; пересчёт его не затирает)
                 (Viterbi/HMM или бегущее окно; poll 120s)
     ▼
 video-identify  вход: кропы со smoothed_class ∈ {1_resident,4_guest} из smoothed/{date}/CSV,
