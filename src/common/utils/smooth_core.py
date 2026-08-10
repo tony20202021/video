@@ -14,7 +14,6 @@ import argparse
 import csv
 import json
 import logging
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -586,15 +585,16 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
     ap.add_argument("--ext", default="jpg")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--poll-sec", type=float, default=120.0)
+    # флаги-режимы: дефолт False, управление через .env → _build_args в 3b/4b .sh (передают флаг per-poll).
+    # НЕ брать env как argparse-default: store_true не выключается из CLI, а .sh экспортирует env лишь при
+    # старте → stale-значение мешало бы выключить флаг без рестарта.
     ap.add_argument("--merge-zones", action="store_true",
-                    default=os.environ.get("SMOOTH_MERGE_ZONES", "0").strip().lower() in ("1", "true", "yes", "on"),
                     help="склеивать зоны d/u ОДНОЙ камеры в один поток по времени (по умолч. ВЫКЛ; "
-                         "env SMOOTH_MERGE_ZONES). Замер на v3 (9481 кропов): эффект ~в пределах шума")
+                         "в проде через .env SMOOTH_MERGE_ZONES). С Viterbi эффект ~в пределах шума")
     ap.add_argument("--hard-vote", action="store_true",
-                    default=os.environ.get("SMOOTH_HARD_VOTE", "0").strip().lower() in ("1", "true", "yes", "on"),
                     help="ЖЁСТКИЙ ГОЛОС: 1 класс на весь визит = argmax среднего probs (вместо Viterbi/окна; "
-                         "env SMOOTH_HARD_VOTE). Замер v3/v4: лучший (11.6%/16.3%) вместе с --merge-zones; "
-                         "БЕЗ склейки топит меньшинства")
+                         "в проде через .env SMOOTH_HARD_VOTE, по умолч. ВЫКЛ). ⚠️ opt-in для экспериментов: "
+                         "на независимой истине хуже Viterbi и топит меньшинства (см. docs/ml.md)")
     args = ap.parse_args()
 
     if not args.input_dir.exists():

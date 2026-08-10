@@ -102,6 +102,34 @@ def test_dir_state_by_date_empty_nondate_hidden(tmp_path):
     assert "ИТОГО: 1 (1 дат)" in out
 
 
+def test_dir_state_by_date_smoothed_counts_csv_not_viz(tmp_path):
+    # сайдкар сглаживания: кропы = строки classifications_smoothed.csv, а НЕ viz-конкаты (*.jpg)
+    root = tmp_path / "v4" / "inference" / "smoothed"
+    d = root / "20260720"
+    (d / "smooth_viz").mkdir(parents=True)
+    for i in range(3):                                    # 3 viz-конката — НЕ должны считаться кропами
+        (d / "smooth_viz" / f"v{i}.jpg").write_bytes(b"x")
+    # 5 кропов = 5 строк данных + заголовок
+    (d / "classifications_smoothed.csv").write_text(
+        "crop,cam,model_class,smoothed_class\n" + "\n".join(f"c{i}.jpg,cam,1,1" for i in range(5)) + "\n",
+        encoding="utf-8")
+    assert ps._is_inference_images(root) is True
+    out = ps.dir_state_by_date(root)
+    assert "2026-07-20: 5" in out                          # 5 кропов из CSV, не 3 viz-картинки
+    assert "ИТОГО: 5 (1 дат)" in out
+
+
+def test_dir_state_by_date_images_still_counts_jpg(tmp_path):
+    # images/<date>/ (без classifications_smoothed.csv) — считаем физические кропы *.jpg как раньше
+    root = tmp_path / "v4" / "inference" / "images"
+    d = root / "20260720"
+    (d / "single" / "1_resident").mkdir(parents=True)
+    for i in range(4):
+        (d / "single" / "1_resident" / f"c{i}.jpg").write_bytes(b"x")
+    out = ps.dir_state_by_date(root)
+    assert "2026-07-20: 4" in out
+
+
 def test_dir_state_by_date_dispatch(tmp_path):
     # не-инференс каталог → плоский счётчик (со словом «кат.»), инференс → по датам
     flat = tmp_path / "2_yolo_boxes_files" / "images"

@@ -74,7 +74,7 @@ SERVICES = [
         "label":      "classify-smooth",   # отображаемое имя (systemd-юнит остаётся video-smooth)
         "in_label":   f".data/groups/{GROUPS_VER}/inference/  images/  (classifications.csv)",
         "in_dir":     REPO / f".data/groups/{GROUPS_VER}/inference/images",
-        "out_label":  f"groups/{GROUPS_VER}/inference/  smoothed/",
+        "out_label":  f"groups/{GROUPS_VER}/inference/  smoothed/  (classifications_smoothed.csv)",
         "out_dir":    REPO / f".data/groups/{GROUPS_VER}/inference/smoothed",
         "log_work":   r"Готово|сглажено",
         "log_wait":   r"Изменений нет|ожидание",
@@ -97,7 +97,7 @@ SERVICES = [
         "label":      "identify-smooth",   # отображаемое имя (systemd-юнит остаётся video-smooth-identity)
         "in_label":   f"residents/{RESIDENTS_VER}/inference/  images/  (identifications.csv)",
         "in_dir":     REPO / f".data/residents/{RESIDENTS_VER}/inference/images",
-        "out_label":  f"residents/{RESIDENTS_VER}/inference/  smoothed/",
+        "out_label":  f"residents/{RESIDENTS_VER}/inference/  smoothed/  (classifications_smoothed.csv)",
         "out_dir":    REPO / f".data/residents/{RESIDENTS_VER}/inference/smoothed",
         "log_work":   r"Готово|сглажено",
         "log_wait":   r"Изменений нет|ожидание",
@@ -166,10 +166,26 @@ def _is_inference_images(directory: Path | None) -> bool:
             and directory.parent.name == "inference")
 
 
+def _date_item_count(d: Path) -> int:
+    """Число КРОПОВ за дату. Для сайдкара сглаживания (smoothed/<date>/) реальные кропы —
+    строки classifications_smoothed.csv; в самом каталоге лежат только CSV + viz-конкаты
+    (smooth_viz/*.jpg), поэтому .jpg (это НЕ кропы, а визуализации исправлений) не считаем.
+    Иначе (images/<date>/) — физические кропы *.jpg по подпапкам классов."""
+    csv_sm = d / "classifications_smoothed.csv"
+    if csv_sm.is_file():
+        try:
+            with open(csv_sm, encoding="utf-8") as f:
+                return max(0, sum(1 for _ in f) - 1)      # строки минус заголовок
+        except OSError:
+            return 0
+    return sum(1 for _ in d.rglob("*.jpg"))
+
+
 def dir_state_by_date(directory: Path | None) -> str:
-    """Разбивка *.jpg по папкам-датам YYYYMMDD/ + чистый итог по датам. Полный список: видно
-    накопление к след. обучению. Не-даты (dataset/ и пр.) НЕ прячем, а показываем отдельной
-    строкой с пометкой [!] — чтобы сразу видеть лишнее/залётное. '—' если пусто."""
+    """Разбивка кропов по папкам-датам YYYYMMDD/ + чистый итог по датам. Полный список: видно
+    накопление к след. обучению. Кропы: для images/ — физические *.jpg, для smoothed/ — строки
+    classifications_smoothed.csv (в сайдкаре нет кропов, только CSV+viz). Не-даты (dataset/ и пр.)
+    НЕ прячем, а показываем отдельной строкой с пометкой [!] — чтобы сразу видеть лишнее/залётное."""
     if directory is None or not directory.is_dir():
         return "—"
     dated: list[tuple[str, int]] = []
@@ -178,7 +194,7 @@ def dir_state_by_date(directory: Path | None) -> str:
         for d in sorted(directory.iterdir()):
             if not d.is_dir():
                 continue
-            n = sum(1 for _ in d.rglob("*.jpg"))
+            n = _date_item_count(d)
             if _DATE_RE.match(d.name):
                 dated.append((d.name, n))
             elif n > 0:                      # не-дата с картинками = лишнее → показать

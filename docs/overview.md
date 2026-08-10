@@ -231,6 +231,7 @@ video/
     setup.md              — Python, conda, окружение, requirements.txt
     cameras.md            — камеры, сетевой доступ, скрипты
     ml.md                 — ML пайплайн, датасет, обучение
+    eval_datasets.md      — каталоги для замеров методов/гиперпараметров сглаживания (+надёжность истины)
     transfer.md           — передача файлов клиент → сервер
     testing.md            — тестирование
   .env                    — RTSP URL, секреты, пути к моделям (в .gitignore)
