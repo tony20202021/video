@@ -11,7 +11,8 @@
     <run_name>/               — по одному на каждый входной прогон
       <cam>/
         <img>_yolo.jpg        — кадр с рамками (только при детекции)
-        crops/
+        crops/                — имя: <кадр>_p<idx>of<N>_conf<c>_b<x1>-<y1>-<x2>-<y2>.jpg
+                                (бокс детекции в имени → сохраняется с кропом для трекинга по персонам)
     detections.csv            — все новые детекции: image_ts, run, cam, file, x1..y2, conf
     timeline_chart.png        — сводный график: события из входных прогонов + новые YOLO
     cpu.csv / cpu_chart.png   — загрузка ЦПУ только на переобработку
@@ -707,8 +708,12 @@ def main() -> int:
                         x1c = max(0, x1 - px);  y1c = max(0, y1 - py)
                         x2c = min(w, x2 + px);  y2c = min(h, y2 + py)
                         if x2c > x1c and y2c > y1c:
+                            # Бокс ДЕТЕКЦИИ (x1..y2, до паддинга) в имя кропа → сохраняется вместе с кропом
+                            # (classifications.csv несёт crop-имя) для последующего трекинга по персонам.
+                            # После _conf, парсеры (_conf/_pNofM/cam) не привязаны к концу — безопасно.
                             crop_name = (f"{img_path.stem}"
-                                         f"_p{idx}of{len(detections)}_conf{conf:.2f}.jpg")
+                                         f"_p{idx}of{len(detections)}_conf{conf:.2f}"
+                                         f"_b{x1}-{y1}-{x2}-{y2}.jpg")
                             _imwrite(crops_dir / crop_name, frame[y1c:y2c, x1c:x2c])
 
                     # mono_approx for chart
