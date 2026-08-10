@@ -32,7 +32,7 @@ fi
 #   LABELS    = smoothed/<date>/labels.json                   сглаженные классы — их и ведём разметкой
 #   PROBS_CSV = smoothed/<date>/classifications_smoothed.csv  там же p_* (probs)
 #   DATASET   = <vX>/dataset                                  набор классов
-SMOOTHED="${SMOOTHED:-$REPO/.data/groups/v4/inference/smoothed/20260720}"
+SMOOTHED="${SMOOTHED:-$REPO/.data/groups/v4/inference/smoothed/20260731}"
 INPUT=""; LABELS=""; DATASET=""; PROBS_CSV=""
 
 # # residents: SMOOTHED="$REPO/.data/residents/v1/inference/smoothed/20260714"
