@@ -70,6 +70,7 @@ _build_args() {
     [[ "$tri" == "1" ]] && ARGS+=("--prob-window-tri")
     [[ "$mz" == "1" ]] && ARGS+=("--merge-zones")
     [[ "$hv" == "1" ]] && ARGS+=("--hard-vote")
+    return 0     # иначе последний ложный [[ ]] && … вернёт 1 → set -e убьёт сервис (флаги=0)
 }
 
 echo "=== 3b_smooth_groups ==="
