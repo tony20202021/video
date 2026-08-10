@@ -107,11 +107,16 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
                     veto_prob: float | None = None,
                     prob_window_sec: float | None = None,
                     prob_window_tri: bool = False,
-                    prob_window_kmax: int | None = None) -> list[tuple[str, bool]]:
+                    prob_window_kmax: int | None = None,
+                    hard_vote: bool = False) -> list[tuple[str, bool]]:
     """Сглаживает предсказания по времени. records: [{'cam', 't', 'probs': [по classes]}].
     Возвращает (smoothed_class, changed) в ПОРЯДКЕ ВХОДА, changed = класс изменился vs argmax модели.
 
-    prob_window_sec: если задан — РЕЖИМ БЕГУЩЕГО ОКНА (замер на 20260720: 8.0%→3.5%, лучше по ВСЕМ
+    hard_vote: если True — РЕЖИМ ЖЁСТКОГО ГОЛОСА (замер v3/v4: 11.6%/16.3% ошибок со склейкой зон,
+    лучший из всех + бьёт baseline по recall всех 4 классов): на ВЕСЬ визит один класс = argmax
+    среднего probs визита (Viterbi/окно/gate/предохранители НЕ применяются — приоритетный режим).
+    БЕЗ склейки зон топит меньшинства (ЖКХ recall 48→35) — включать вместе с merge_zones.
+    prob_window_sec: иначе если задан — РЕЖИМ БЕГУЩЕГО ОКНА (замер на 20260720: 8.0%→3.5%, лучше по ВСЕМ
     классам): внутри визита классическое бегущее окно (window_average) — probs каждого кадра →
     среднее соседей в ±window_sec/2 (и ≤ prob_window_kmax кадров), затем argmax
     (Viterbi/gate/предохранители НЕ применяются — они для HMM-режима).
@@ -142,6 +147,12 @@ def smooth_sequence(records: list[dict], classes: list[str], *,
         cam_ctx = ctx_by_cam.get(cam, [])
         for visit in segment_visits(times, gap_sec):
             vi = [idxs[j] for j in visit]
+            if hard_vote:                                # жёсткий голос: 1 класс на ВЕСЬ визит (argmax среднего probs)
+                Pv = np.array([records[i]["probs"] for i in vi], dtype=float)
+                cls_idx = int(Pv.mean(0).argmax())
+                for pos, i in enumerate(vi):
+                    out[i] = (classes[cls_idx], cls_idx != int(Pv[pos].argmax()))
+                continue
             if prob_window_sec is not None:              # режим бегущего окна: усреднить probs → argmax
                 Praw = np.array([records[i]["probs"] for i in vi], dtype=float)
                 vtimes = [records[i]["t"] for i in vi]

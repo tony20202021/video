@@ -186,6 +186,43 @@ def test_smooth_writes_csv_smoothed_class_not_labels(tmp_path):
     assert float(row["p_2_delivery"]) > 0             # probs модели сохранены
 
 
+def test_hard_vote_one_class_per_visit(tmp_path):
+    # SMOOTH_HARD_VOTE: весь визит → 1 класс = argmax среднего probs (доставка-одиночка тонет в резиденте)
+    m = _load()
+    dd = _make_dir(tmp_path)   # 4×resident + 1×delivery@085002 в одном визите (gap большой)
+    sm = _smoothed(tmp_path)
+    st = m.smooth_date(dd, gap=60, p_stay=0.9, gate=None, include_uncertain=True, hard_vote=True)
+    assert st["eligible"] == 5
+    byname = _sm_map(sm)
+    # среднее probs визита → resident доминирует → ВСЕ 5 кадров = resident (в т.ч. доставка и uncertain)
+    assert {r["smoothed_class"] for r in byname.values()} == {"1_resident"}
+    # cfg_sig различает hard_vote → повторный прогон без флага пересглаживает (не пропуск)
+    st2 = m.smooth_date(dd, gap=60, p_stay=0.9, gate=None, include_uncertain=True, hard_vote=False)
+    assert not st2.get("skipped")
+
+
+def test_hard_vote_merge_zones_separate_cameras(tmp_path):
+    # hard_vote + merge_zones: зоны d/u ОДНОЙ камеры голосуют одним потоком; РАЗНЫЕ физкамеры — раздельно.
+    m = _load()
+    dd = tmp_path / "images" / "20260720"
+    _write_dir(dd, [
+        # cam_01: d-зона резидент + u-зона доставка → один поток, среднее → резидент доминирует
+        ("cam_01_9_d_20260720_090000_100000_msk.jpg", "1_resident", [0.9, 0.05, 0.03, 0.02]),
+        ("cam_01_9_u_20260720_090001_100000_msk.jpg", "2_delivery", [0.3, 0.6, 0.05, 0.05]),
+        # cam_02: отдельная физкамера, сплошь доставка → её голос НЕ смешивается с cam_01
+        ("cam_02_9_d_20260720_090000_100000_msk.jpg", "2_delivery", [0.1, 0.85, 0.03, 0.02]),
+        ("cam_02_9_d_20260720_090001_100000_msk.jpg", "2_delivery", [0.12, 0.83, 0.03, 0.02]),
+    ])
+    m.smooth_date(dd, gap=60, p_stay=0.9, gate=None, include_uncertain=True,
+                  hard_vote=True, merge_zones=True)
+    byname = _sm_map(_smoothed(tmp_path))
+    # cam_01 (d+u склеены): среднее resident>delivery → оба кадра резидент
+    assert byname["cam_01_9_d_20260720_090000_100000_msk.jpg"]["smoothed_class"] == "1_resident"
+    assert byname["cam_01_9_u_20260720_090001_100000_msk.jpg"]["smoothed_class"] == "1_resident"
+    # cam_02 голосует отдельно → доставка сохранена (склейка НЕ утопила её в резиденте cam_01)
+    assert byname["cam_02_9_d_20260720_090000_100000_msk.jpg"]["smoothed_class"] == "2_delivery"
+
+
 def test_merge_zones_cam_key():
     # SMOOTH_MERGE_ZONES: зоны d/u ОДНОЙ камеры → один ключ камеры; разные физ. камеры — раздельно
     from common.utils.smooth_core import _parse_cam_t

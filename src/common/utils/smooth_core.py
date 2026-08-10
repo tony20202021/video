@@ -395,7 +395,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
                 guard_sec: float | None = None, min_minority_prob: float | None = None,
                 veto_prob: float | None = None, prob_window_sec: float | None = None,
                 prob_window_kmax: int | None = None, prob_window_tri: bool = False,
-                merge_zones: bool = False,
+                merge_zones: bool = False, hard_vote: bool = False,
                 truth: dict | None = None, version: str = "") -> dict:
     """Сглаживает одну дату. НЕ мутирует images/ — пишет сайдкар в out_dir (default smoothed/<date>/)."""
     rows = _read_csv_rows(date_dir, cfg.csv_name)
@@ -410,7 +410,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
 
     cfg_sig = (f"{version}|{cfg.smoother}|c{len(ctx.classes)}|gap{gap}|ps{p_stay}|gate{gate}"
                f"|pw{prob_window_sec}|k{prob_window_kmax}|tri{int(prob_window_tri)}|mz{int(merge_zones)}"
-               f"|t{len(truth or {})}")
+               f"|hv{int(hard_vote)}|t{len(truth or {})}")
     wm_path = out_dir / "smooth_state.json"
     if wm_path.is_file() and (out_dir / "classifications_smoothed.csv").is_file():
         try:
@@ -458,7 +458,8 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
         guard_sec=guard_sec, protect_class=ctx.resident_class,
         minority_classes=[c for c in ctx.classes if c != ctx.resident_class],
         min_minority_prob=min_minority_prob, context=[], veto_prob=veto_prob,
-        prob_window_sec=prob_window_sec, prob_window_kmax=prob_window_kmax, prob_window_tri=prob_window_tri)
+        prob_window_sec=prob_window_sec, prob_window_kmax=prob_window_kmax, prob_window_tri=prob_window_tri,
+        hard_vote=hard_vote)
 
     viz_n = 0
     audit, corrections, viz_targets = [], [], []
@@ -489,7 +490,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
 
     if viz and (viz_targets or errors):
         vdir = viz_dir or (out_dir / "smooth_viz")
-        sig = f"{len(rows)}:{version}:pw{prob_window_sec}:k{prob_window_kmax}:tri{int(prob_window_tri)}:t{len(errors)}"
+        sig = f"{len(rows)}:{version}:pw{prob_window_sec}:k{prob_window_kmax}:tri{int(prob_window_tri)}:hv{int(hard_vote)}:t{len(errors)}"
         marker = vdir / ".viz_rows"
         prev = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
         if prev == sig and any(vdir.glob("*.jpg")):
@@ -589,6 +590,11 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
                     default=os.environ.get("SMOOTH_MERGE_ZONES", "0").strip().lower() in ("1", "true", "yes", "on"),
                     help="склеивать зоны d/u ОДНОЙ камеры в один поток по времени (по умолч. ВЫКЛ; "
                          "env SMOOTH_MERGE_ZONES). Замер на v3 (9481 кропов): эффект ~в пределах шума")
+    ap.add_argument("--hard-vote", action="store_true",
+                    default=os.environ.get("SMOOTH_HARD_VOTE", "0").strip().lower() in ("1", "true", "yes", "on"),
+                    help="ЖЁСТКИЙ ГОЛОС: 1 класс на весь визит = argmax среднего probs (вместо Viterbi/окна; "
+                         "env SMOOTH_HARD_VOTE). Замер v3/v4: лучший (11.6%/16.3%) вместе с --merge-zones; "
+                         "БЕЗ склейки топит меньшинства")
     args = ap.parse_args()
 
     if not args.input_dir.exists():
@@ -598,9 +604,9 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
     prob_window = args.prob_window if args.prob_window and args.prob_window > 0 else None
     prob_window_k = args.prob_window_k if args.prob_window_k and args.prob_window_k > 0 else None
     truth = _load_truth(args.truth, set(cfg.fixed_classes) if cfg.fixed_classes else None) if args.truth else None
-    logger.info("%s smooth: gap=%.0fс p_stay=%.2f gate=%s viz=%s prob_window=%s k=%s tri=%s merge_zones=%s truth=%s",
+    logger.info("%s smooth: gap=%.0fс p_stay=%.2f gate=%s viz=%s prob_window=%s k=%s tri=%s merge_zones=%s hard_vote=%s truth=%s",
                 cfg.smoother, args.gap, args.p_stay, gate, args.viz, prob_window, prob_window_k,
-                args.prob_window_tri, args.merge_zones, len(truth) if truth else 0)
+                args.prob_window_tri, args.merge_zones, args.hard_vote, len(truth) if truth else 0)
 
     while True:
         total_changed = n_skip = 0
@@ -609,7 +615,7 @@ def run_service(cfg: SmoothCfg, *, version: str = "", desc: str = "") -> int:
                              include_uncertain=args.include_uncertain, max_persons=args.max_persons,
                              ext=args.ext, viz=args.viz, prob_window_sec=prob_window,
                              prob_window_kmax=prob_window_k, prob_window_tri=args.prob_window_tri,
-                             merge_zones=args.merge_zones,
+                             merge_zones=args.merge_zones, hard_vote=args.hard_vote,
                              truth=truth, version=version)
             if st.get("skipped"):
                 n_skip += 1

@@ -52,18 +52,22 @@ done
 
 # Аргументы python из .env (SMOOTH_*) — читаются ЗАНОВО каждый поллинг → правки конфига без рестарта.
 _build_args() {
-    local gap p_stay gate maxp viz pw pwk tri
+    local gap p_stay gate maxp viz pw pwk tri mz hv
     gap="$(_ef SMOOTH_GAP_SEC 5)";   p_stay="$(_ef SMOOTH_P_STAY 0.95)"
     gate="$(_ef SMOOTH_GATE 0.8)";   maxp="$(_ef SMOOTH_MAX_PERSONS 1)"
     viz="$(_ef SMOOTH_VIZ 1)";       pw="$(_ef SMOOTH_PROB_WINDOW 0)"
     pwk="$(_ef SMOOTH_PROB_WINDOW_K 0)"
     tri="$(_ef SMOOTH_PROB_WINDOW_TRI 0)"
+    mz="$(_ef SMOOTH_MERGE_ZONES 0)"             # склейка зон d/u: тот же житель в один поток
+    hv="$(_ef SMOOTH_HARD_VOTE 0)"               # жёсткий голос: 1 житель на визит (общий флаг с 3b)
     ARGS=("$IMAGES" "--gap" "$gap" "--p-stay" "$p_stay" "--max-persons" "$maxp")
     [[ -n "$gate" ]] && ARGS+=("--gate" "$gate")
     [[ "$viz" == "1" ]] && ARGS+=("--viz")
     [[ -n "$pw" && "$pw" != "0" ]] && ARGS+=("--prob-window" "$pw")
     [[ -n "$pwk" && "$pwk" != "0" ]] && ARGS+=("--prob-window-k" "$pwk")
     [[ "$tri" == "1" ]] && ARGS+=("--prob-window-tri")
+    [[ "$mz" == "1" ]] && ARGS+=("--merge-zones")
+    [[ "$hv" == "1" ]] && ARGS+=("--hard-vote")
 }
 
 echo "=== 4b_smooth_identity ==="
