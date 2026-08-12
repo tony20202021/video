@@ -263,6 +263,33 @@ fi
 # Удалить промежуточный файл pipeline_status.py
 [[ -n "$LINUX_MD" && -f "$LINUX_MD" ]] && rm -f "$LINUX_MD"
 
+# ── Графики стадий → OUT_DIR (best-effort: сбой НЕ ломает статус) ──────────────
+# Имена с префиксом ${TS_FILE} — группируются по прогону рядом с ${TS_FILE}.md.
+CHART_PREFIX="$OUT_DIR/${TS_FILE}"
+_charts=()
+# conda-python: plot_meta_charts тянет camera_run → cv2 + matplotlib (системный python3 их не имеет)
+_PY="$HOME/miniconda3/envs/conda_video/bin/python"; [[ -x "$_PY" ]] || _PY=python3
+# Сервер: YOLO — CPU/утилизация/FPS/длительности (единственная стадия с cpu.csv+run.log)
+_ymeta=$(ls -d "$REPO/.output/pipeline/2_yolo_boxes_files/meta/"2026* 2>/dev/null | tail -1 || true)
+if [[ -n "${_ymeta:-}" ]] && \
+   "$_PY" "$REPO/scripts/utils/plot_meta_charts.py" "$_ymeta" --out "${CHART_PREFIX}_linux_yolo.png" >/dev/null 2>&1; then
+    _charts+=("${TS_FILE}_linux_yolo.png")
+fi
+# Камера CAMERAS_3: charts.png (cpu/fps) + pts_chart.png (дрейф времени PTS) — motion_diff пишет их
+# сам каждые ~5 мин; тянем готовые по scp (pts-дрейф строит только motion_diff, не plot_meta_charts).
+# Каталог дня берём по дате сервера — в норме совпадает с камерой; при рассинхроне scp просто не найдёт (graceful).
+if [[ -n "${cam3_out:-}" && -n "$TS_CAMERAS_3" ]]; then
+    _cbase="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/meta/$(date +%Y%m%d)"
+    scp -o ConnectTimeout=10 -o BatchMode=yes "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/charts.png" \
+        "${CHART_PREFIX}_cam3_cpu_fps.png" >/dev/null 2>&1 && _charts+=("${TS_FILE}_cam3_cpu_fps.png")
+    scp -o ConnectTimeout=10 -o BatchMode=yes "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/pts_chart.png" \
+        "${CHART_PREFIX}_cam3_pts_drift.png" >/dev/null 2>&1 && _charts+=("${TS_FILE}_cam3_pts_drift.png")
+fi
+
 echo ""
 echo "  → $MD_OUT"
+if (( ${#_charts[@]} )); then
+    echo "  Графики → $OUT_DIR :"
+    for _c in "${_charts[@]}"; do echo "    • $_c"; done
+fi
 echo ""
