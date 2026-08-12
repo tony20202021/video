@@ -633,6 +633,8 @@ scripts/train/
   dataset_v2_from_inference.py — стратегии 1,2,3,5,7,8
   dataset_v2_from_prev.py      — стратегии 4,7 (устаревший, оставлен для совместимости)
   dataset_fill_minor.py        — стратегия F
+  build_groups_v4.py           — сборка v4 (multi-label) из v3/dataset + v3/inference (все метки + дедуп резидентов)
+  build_groups_v5.py           — сборка v5: датасет + СГЛАЖЕННЫЕ метки инференса (обобщение v4-скрипта)
 ```
 
 Полная сборка одной командой:
@@ -648,6 +650,25 @@ scripts/train/
 
 `--dataset` заменяет старый `--prev`: запускает инференс модели, затем обрабатывает
 все стратегии. `--prev` оставлен для обратной совместимости (только стрт 4,7).
+
+### Датасет v5 (build_groups_v5.py)
+
+Для multi-label (v4+) стратегийный конвейер выше не применялся — v4 собран `build_groups_v4.py`
+(**все размеченные ∪ дедуп резидентов** farthest-point), а не отбором стратегий. При ПОЛНОЙ ручной
+ревизии разметки это верный путь (берём всё, прореживаем только доминирующего резидента).
+
+**v5** собран обобщённым `build_groups_v5.py` из **v4/dataset + СГЛАЖЕННЫХ меток**
+(`v4/inference/smoothed/*/labels.json` — их ведёт разметчик `2_label_ui`; файлы кропов лежат в sibling
+`images/<date>/<rel>`). Дедуп резидентов: farthest-point pixel-diff, окно 30с, K=5. Источники
+параметризованы (`--src-dataset`, `--src-inference`).
+
+Баланс **v5: 16119 кропов** (single 15553, multi 566) — resident 9513 / delivery 2261 / utilities 1439 /
+guest 3472 (минориты ×1.4–3.6 к v4; резидент прорежен 29088→8947). Запуск:
+`python scripts/train/build_groups_v5.py [--dry-run]`.
+
+**Baseline v4_1 на v5** (перед обучением v5_1, `.data/groups/v5/eval_v4_1_on_v5.json`): macro-F1 **0.737**
+— res F1 0.85 / del 0.70 / utl 0.75 / gst 0.65 (слабы гость/доставка recall). Модель v5_1 (обучение на v5,
+BCE, pos_weight boost миноритов) должна это побить.
 
 ### Структура данных
 
