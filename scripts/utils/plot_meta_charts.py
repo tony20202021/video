@@ -13,7 +13,9 @@
 Строит в <meta_dir> (или --out):
   meta_charts.png — 2–3 панели с общей осью времени:
     • ЦПУ%/утилизация/частота  (из cpu.csv, стиль camera_run.draw_cpu_on_ax)
-    • интервалы между сохранёнными кадрами (из run.log, 'Готово. Время: N с.')
+    • средняя панель:
+        – ВРЕМЯ ОБРАБОТКИ кадра (yolo_timing.csv, inference_ms) — если есть; иначе
+        – интервалы между сохранёнными кадрами (из run.log, 'Готово. Время: N с.')
     • реальный fps захвата (из frames.csv, если есть) — по камерам, бин 2 с
 
 ВАЖНО: 'Готово. Время: N с.' в motion_diff — это ВРЕМЯ С ПРОШЛОГО СОХРАНЁННОГО КАДРА
@@ -99,6 +101,31 @@ def parse_run_log_durations(text: str) -> list:
     return out
 
 
+def load_timing_csv(path: Path) -> list:
+    """yolo_timing.csv → [[mono_s(float), inference_ms(float), sleep_ms(float)], ...].
+
+    inference_ms — чистое ВРЕМЯ ОБРАБОТКИ одного кадра (детекция YOLO), а НЕ интервал
+    между кадрами. mono_s = секунды от старта процесса (та же шкала, что cpu.csv →
+    общая ось «минуты от старта»). Пишется scripts/pipeline/2_yolo_boxes_files.py."""
+    rows: list = []
+    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    for ln in lines[1:]:                       # пропускаем заголовок
+        p = ln.split(",")
+        if len(p) < 2:
+            continue
+        try:
+            mono = float(p[0])
+            inf = float(p[1])
+        except ValueError:
+            continue
+        try:
+            slp = float(p[2]) if len(p) > 2 and p[2] != "" else 0.0
+        except ValueError:
+            slp = 0.0
+        rows.append([mono, inf, slp])
+    return rows
+
+
 def _unwrap_midnight(t_secs: list) -> list:
     """Если прогон пересёк полночь (t падает) — прибавляем 86400 к последующим."""
     out, add, prev = [], 0.0, None
@@ -169,9 +196,12 @@ def _short_cam(url_id: str) -> str:
 
 def build_charts(cpu_log: list, durations: list, out_path: Path,
                  frames: "list | None" = None, heartbeat_s: float = 599.0,
-                 fps_bin: float = 5.0) -> dict:
-    """Фигура из 2–3 панелей (ЦПУ + интервалы сохранений + опц. fps захвата),
-    общая ось «минуты от старта». Возвращает словарь со статистикой."""
+                 fps_bin: float = 5.0, timing: "list | None" = None) -> dict:
+    """Фигура из 2–3 панелей (ЦПУ + средняя панель + опц. fps захвата),
+    общая ось «минуты от старта». Возвращает словарь со статистикой.
+
+    Средняя панель: если есть timing (yolo_timing.csv) — ВРЕМЯ ОБРАБОТКИ кадра
+    (inference_ms), иначе — интервалы между сохранёнными кадрами (run.log)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -201,8 +231,35 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
         stats["cpu_avg"] = round(sum(cvals) / len(cvals), 1)
         stats["cpu_max"] = round(max(cvals), 1)
 
-    # ── Длительности (run.log) ──
-    if durations:
+    # ── Средняя панель: ВРЕМЯ ОБРАБОТКИ кадра (yolo_timing.csv) ──
+    # Приоритет над run.log-интервалами: для серверного YOLO интересно именно время
+    # детекции на кадр, а не «тишина» между сохранениями (это не real-time поток).
+    if timing:
+        tmono = [r[0] for r in timing]
+        inf   = [r[1] for r in timing]
+        x = [t / 60.0 for t in tmono]              # та же шкала от старта, что cpu.csv
+        ax_dur.scatter(x, inf, s=10, color="#2255cc", alpha=0.5, zorder=5,
+                       label=f"инференс кадра, мс ({len(inf)} кадров)")
+        if inf:
+            avg = sum(inf) / len(inf)
+            srt = sorted(inf)
+            p95 = srt[min(len(srt) - 1, int(len(srt) * 0.95))]
+            ax_dur.axhline(avg, color="orange", linestyle="--", linewidth=0.9,
+                           label=f"среднее {avg:.0f} мс ({1000/avg:.1f} кадр/с потолок)")
+            ax_dur.axhline(p95, color="#cc3333", linestyle=":", linewidth=0.9,
+                           label=f"p95 {p95:.0f} мс  (макс {max(inf):.0f})")
+            stats["inf_avg_ms"] = round(avg, 1)
+            stats["inf_p95_ms"] = round(p95, 1)
+            stats["inf_max_ms"] = round(max(inf), 1)
+            stats["timing_samples"] = len(inf)
+        ax_dur.set_ylabel("время YOLO-инференса, мс")
+        ax_dur.set_title("Время обработки кадра YOLO (yolo_timing.csv, inference_ms) — "
+                         "чистая детекция на кадр, без адаптивной паузы sleep_ms")
+        ax_dur.legend(loc="upper right", fontsize=8)
+        ax_dur.grid(True, which="both", linestyle="--", alpha=0.3)
+
+    # ── Длительности (run.log) — когда нет yolo_timing.csv (напр. motion_diff) ──
+    elif durations:
         t_raw = _unwrap_midnight([t for t, _ in durations])
         dur = [d for _, d in durations]
         if run_start is not None:
@@ -291,9 +348,12 @@ def main() -> int:
         if log_path and Path(log_path).exists() else [])
     frames = (load_frames_csv(frames_path)
               if frames_path and Path(frames_path).exists() else [])
+    timing_path = args.meta_dir / "yolo_timing.csv" if args.meta_dir else None
+    timing = (load_timing_csv(timing_path)
+              if timing_path and Path(timing_path).exists() else [])
 
-    if not cpu_log and not durations:
-        print("нет данных: cpu.csv и run.log пусты/отсутствуют", file=sys.stderr)
+    if not cpu_log and not durations and not timing:
+        print("нет данных: cpu.csv, run.log и yolo_timing.csv пусты/отсутствуют", file=sys.stderr)
         return 1
 
     base_dir = args.out or (args.meta_dir if args.meta_dir
@@ -304,12 +364,18 @@ def main() -> int:
         base_dir.mkdir(parents=True, exist_ok=True)
         out_path = base_dir / "meta_charts.png"
 
-    stats = build_charts(cpu_log, durations, out_path, frames=frames, fps_bin=args.fps_bin)
+    stats = build_charts(cpu_log, durations, out_path, frames=frames,
+                         fps_bin=args.fps_bin, timing=timing)
     print(f"cpu.csv: {stats.get('cpu_samples', 0)} замеров"
           f" (avg {stats.get('cpu_avg', '—')}% / max {stats.get('cpu_max', '—')}%)")
-    print(f"run.log: {stats.get('events', 0)} сохранений"
-          f" (интервал между движениями avg {stats.get('gap_avg_work', '—')} с,"
-          f" min {stats.get('gap_min_work', '—')} / max {stats.get('gap_max_work', '—')})")
+    if timing:
+        print(f"yolo_timing.csv: {stats.get('timing_samples', 0)} кадров, "
+              f"инференс avg {stats.get('inf_avg_ms', '—')} мс / "
+              f"p95 {stats.get('inf_p95_ms', '—')} / max {stats.get('inf_max_ms', '—')}")
+    else:
+        print(f"run.log: {stats.get('events', 0)} сохранений"
+              f" (интервал между движениями avg {stats.get('gap_avg_work', '—')} с,"
+              f" min {stats.get('gap_min_work', '—')} / max {stats.get('gap_max_work', '—')})")
     if stats.get("fps_avg"):
         print(f"frames.csv: {len(frames)} кадров, реальный fps захвата {stats['fps_avg']}")
     print(f"→ {stats['out']}")

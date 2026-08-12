@@ -601,21 +601,28 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
 
         ax = axes[ax_idx][0]
         drift_pts = [p - m for p, m in zip(pts_clean, mono_s)]
-        ax.scatter(mono, drift_pts, color="#cc5500", s=2, marker="^", alpha=0.2)
-        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
+        ax.scatter(mono, drift_pts, color="#cc5500", s=2, marker="^", alpha=0.2,
+                   label="PTS − mono (с): пила = кадры приходят пачками (буфер камеры/сети); "
+                         "PTS съёмки убегает вперёд быстрее, чем идёт mono приёма, потом "
+                         "пауза-сброс. Амплитуда ≈ глубина буфера, ограничена (не растёт)")
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--", label="0 = приём успевает за съёмкой")
         ax.set_ylabel("с")
         ax.set_title(f"{url_id} — дрейф PTS − mono (с); разрывов PTS сшито: {n_breaks}")
+        ax.legend(loc="upper left", fontsize=8)
         ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
         ax.grid(True, linestyle="--", alpha=0.35)
         ax_idx += 1
 
         ax = axes[ax_idx][0]
         drift_wall = [w - m for w, m in zip(wall_s, mono_s)]
-        ax.scatter(mono, drift_wall, color="#228833", s=8, marker="s", alpha=0.6)
-        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
+        ax.scatter(mono, drift_wall, color="#228833", s=8, marker="s", alpha=0.6,
+                   label="wall − mono (с): расхождение стенных часов (ts_msk) и монотонных; "
+                         "около 0 и без тренда = часы идут ровно, джиттер записи метки")
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--", label="0 = часы синхронны")
         ax.set_ylabel("с")
         ax.set_xlabel("время от старта, с")
         ax.set_title(f"{url_id} — дрейф wall − mono (с)")
+        ax.legend(loc="upper left", fontsize=8)
         ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
         ax.grid(True, linestyle="--", alpha=0.35)
         ax_idx += 1
@@ -801,8 +808,12 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
 
         import matplotlib.lines as _mlines
         legend_handles = [
+            _mlines.Line2D([], [], color="#44aa44", marker="*", linestyle="none",
+                           markersize=9,
+                           label="интервал между кадрами (мс): выше = дольше пауза "
+                                 "до кадра (столл/реконнект RTSP)"),
             _mlines.Line2D([], [], color="blue", linestyle="--", linewidth=0.8,
-                           label=f"среднее {mean_iv:.0f} мс"),
+                           label=f"среднее {mean_iv:.0f} мс  ({1000/mean_iv:.1f} fps)"),
         ]
         if n_events > 0:
             ev_label = (f"YOLO-детекция ({n_events})" if event_type == "yolo"
@@ -826,7 +837,8 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
                 color = _CAM_COLORS[ci % len(_CAM_COLORS)]
                 ax.scatter(dt, dv, color=color, s=16, alpha=0.45, label=cam,
                            marker=_MARKERS[ci % len(_MARKERS)])
-            ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0)
+            ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0,
+                       label=f"порог diff={threshold} (выше → кадр сохраняется)")
             ax.text(0, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
             ax.set_ylabel("diff")
             ax.set_xlim(_x_left, t_max * 1.02)
