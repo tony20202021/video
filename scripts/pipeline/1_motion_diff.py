@@ -76,7 +76,7 @@ from common.utils.motion_utils import (
     skip_url as _skip_url,
     stem_from_var as _stem_from_env_var,
 )
-from common.utils.time_msk import ts_cam_for_file, ts_for_dir, ts_for_file
+from common.utils.time_msk import ts_cam_for_file, ts_file_from_epoch, ts_for_dir, ts_for_file
 import logging
 from common.utils.log_setup import setup_logging, add_file_handler
 
@@ -436,6 +436,9 @@ def main() -> int:
     last_heartbeat: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
     last_save_time: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
     prev_pts: dict[str, float] = {lu: -1.0 for lu in low_unique}
+    # Якорь PTS→wall-clock для штампа по времени СЪЁМКИ кадра: {url: (pts0_мс, pc0_эпоха)}.
+    # Сбрасывается при реконнекте (pts падает). Иммунно к задержке доставки/столлам (в отличие от wall-clock).
+    pts_anchor: dict[str, tuple[float, float]] = {}
     _MAX_LOW_IMPLAUSIBLE = 40
     _low_implausible: dict[str, int] = defaultdict(int)
 
@@ -467,8 +470,9 @@ def main() -> int:
             return None
         return datetime.fromtimestamp(calib.ntp_unix + (time.monotonic() - calib.received_at))
 
-    def _ts(calib=None) -> str:
-        pc = ts_for_file()
+    def _ts(calib=None, base_ts=None) -> str:
+        # base_ts — метка по PTS-времени СЪЁМКИ кадра (см. cap_ts в цикле); если None — wall-clock (фолбэк).
+        pc = base_ts if base_ts is not None else ts_for_file()
         if args.cam_ts:
             cam_dt = _cam_now(calib)
             if cam_dt is not None:
@@ -623,6 +627,18 @@ def main() -> int:
                     continue
                 _low_implausible[low_u] = 0
 
+                # Штамп по времени СЪЁМКИ кадра (PTS = CAP_PROP_POS_MSEC), а не по времени обработки.
+                # Якорь (pts0, pc0) на URL → cap_epoch = pc0 + (pts−pts0); сброс при реконнекте (pts упал).
+                # Иммунно к задержке доставки/столлам: буферизованный кадр получает своё истинное время.
+                if _pts and _pts > 0:
+                    _a = pts_anchor.get(low_u)
+                    if _a is None or _pts < _a[0] - 500:      # первый кадр / реконнект (pts сброшен)
+                        _a = (_pts, time.time())
+                        pts_anchor[low_u] = _a
+                    cap_ts = ts_file_from_epoch(_a[1] + (_pts - _a[0]) / 1000.0)
+                else:
+                    cap_ts = ts_for_file()                    # фолбэк: pts недоступен
+
                 _now = time.monotonic()
                 for vn in var_list:
                     frame_u = apply_crop_optional(frame_l, crop_by_cam[vn])
@@ -641,7 +657,7 @@ def main() -> int:
                     if diff > threshold:
                         calib = rtcp_workers[low_u].get_calib() if rtcp_workers else None
                         stem = _stem_from_env_var(vn)
-                        fname = f"{stem}_{_ts(calib)}_diff{diff:.1f}.jpg"
+                        fname = f"{stem}_{_ts(calib, cap_ts)}_diff{diff:.1f}.jpg"
                         _imwrite(_cam_dir(vn) / "diff" / fname, frame_u)
                         frame_log[-1][5] = "diff"
                         saves_log.append([round(_now - t_start, 4), _ts_str, vn, "diff"])
@@ -666,7 +682,7 @@ def main() -> int:
                     last_heartbeat[vn] = now
                     calib = rtcp_workers[low_u].get_calib() if rtcp_workers else None
                     stem = _stem_from_env_var(vn)
-                    hb_name = f"{stem}_{_ts(calib)}_heartbeat.jpg"
+                    hb_name = f"{stem}_{_ts(calib, cap_ts)}_heartbeat.jpg"
                     _imwrite(_cam_dir(vn) / hb_name, hb)
                     frame_log[-1][5] = "heartbeat"
                     saves_log.append([round(time.monotonic() - t_start, 4), ts_for_file(), vn, "heartbeat"])

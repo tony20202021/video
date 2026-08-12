@@ -24,6 +24,12 @@ def ts_iso() -> str:
     return now_msk().isoformat()
 
 
+def ts_file_from_epoch(epoch: float) -> str:
+    """Метка времени для имён файлов из Unix-эпохи (сек) в MSK: YYYYMMDD_HHMMSS_ffffff_msk.
+    Используется для штампа по PTS-времени СЪЁМКИ кадра (а не времени обработки)."""
+    return datetime.fromtimestamp(epoch, MSK).strftime("%Y%m%d_%H%M%S_%f_msk")
+
+
 def ts_cam_for_file(cam_dt: "datetime | None") -> str:
     """
     Метка времени камеры для имён файлов: cam_YYYYMMDD_HHMMSS
