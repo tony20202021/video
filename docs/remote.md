@@ -198,6 +198,60 @@ git clean -fd        # затем удалить untracked-файлы
   звать по полному пути `C:\Work\git\cmd\git.exe`. Актуальное состояние — столбец «git» в таблице
   выше и `TS_*_GIT` в `.env`.
 
+## Выполнение команд и управление процессами на Windows по SSH
+
+Практические грабли (проверено в работе с CAMERAS_3/DEVELOP через Tailscale SSH из Linux).
+
+### Кодировка вывода
+Windows cmd/PowerShell отдают кириллицу в **cp866** → в Linux-терминале «крякозябры» (ASCII/числа читаются).
+Приём: срезать не-печатное — `ssh ... "..." | sed 's/[^[:print:][:space:]]//g'`, а в команду вставлять
+ASCII-маркеры (`'PYCOUNT=' + (Get-Process python).Count`), чтобы грепать по ним. Либо `chcp 65001` в начале.
+
+### Кавычки и `$_`
+Внешняя ssh-строка в двойных кавычках → локальный **zsh раскрывает `$_`, `$env:`** ДО отправки.
+- Избегать `$_`: упрощённый синтаксис `Where-Object CommandLine -match 'X'` (без scriptblock и `$_`).
+- Внутренние `"` PowerShell экранировать как `\"`; напр. `-Filter \"Name='python.exe'\"`.
+- Экранировать `\$` где нужен буквальный `$` (`\$env:USERPROFILE`). Либо внешние **одинарные** кавычки для ssh-строки.
+
+### Self-match в запросах процессов
+`Get-CimInstance Win32_Process | Where CommandLine -match 'python'` матчит и СВОЙ запрос (его командная строка
+содержит паттерн) → счётчик завышен на 1-2. Фильтровать по образу: `-Filter "Name='python.exe'"` (исключает powershell/cmd).
+
+### Персистентность процессов ⚠️
+`Start-Process` / `cmd start` / любой фоновый процесс, запущенный ЧЕРЕЗ SSH, **НЕ переживает закрытие SSH-сессии**
+(Windows OpenSSH убивает job сессии — проверено, PYCOUNT=0 после выхода). Для постоянного процесса — **scheduled task**:
+```
+schtasks /Create /TN <Имя> /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File <путь.ps1>" /SC ONCE /ST 23:59 /RU SYSTEM /F
+schtasks /Run /TN <Имя>
+```
+`/RU SYSTEM` — без пароля (у `1_motion_diff.ps1` есть SYSTEM-фолбэк поиска conda). Задача живёт в своей сессии.
+Управление: `schtasks /Query|/End|/Run /TN <Имя>`; `/Change /DISABLE` — чтобы не поднималась на boot/wake.
+(Классификатор Claude может блокировать создание task как «эскалацию персистентности» — нужна явная авторизация.)
+
+### Сначала проверить синхронно
+Детач прячет ошибки старта. Убедиться, что `.ps1`→python стартует: запустить СИНХРОННО с длительностью —
+`ssh ... "powershell -File ...\1_motion_diff.ps1 8"` (8 сек) — баннер/baseline/traceback видно прямо в выводе.
+
+### Управление пайплайном камеры
+- **watchdog** (`VideoWatchdog`, scheduled task) сторожит `1_motion_diff.ps1` + `2_send.ps1`, респавн каждые 30с.
+  Убить процесс мало — watchdog поднимет; durable-стоп: `schtasks /End` **+** `/Change /DISABLE` (иначе wake-триггер вернёт).
+- **Захват БЕЗ отправки** (напр. на время обучения на сервере): watchdog off + отдельная SYSTEM-task только на
+  `1_motion_diff.ps1` (как выше). Файлы копятся в `.output/pipeline/1_motion_diff/images/` (transfer их не шлёт/не удаляет).
+- **НЕ запускать два motion_diff одновременно** на одну камеру — A31 отдаёт один субпоток, второй клиент голодает.
+
+### Ресурсы машин (для тяжёлых задач, ~2026-08)
+| Машина | CPU | RAM | Заметка |
+|--------|-----|-----|---------|
+| Linux-сервер (VDS) | **1 ядро** | 3.8ГБ | обучение CNN медленно + тесно; стоп idle-сервисов освобождает мало (модели не загружены) |
+| DEVELOP | 2 ядра | ~8ГБ | вдвое быстрее, без OOM; нужна перекачка датасета по Tailscale |
+| CAMERAS_1/3 | ноуты | — | только захват/отправка |
+
+### Sudo на сервере (systemctl)
+`systemctl` требует пароль. Для управления сервисами из автоматизации — временное NOPASSWD-правило
+(вернуть/удалить после): `echo -e 'Defaults:tony !use_pty\ntony ALL=(ALL) NOPASSWD: /usr/bin/systemctl, /bin/systemctl, /usr/bin/rm /etc/sudoers.d/tony-systemctl' | sudo tee /etc/sudoers.d/tony-systemctl`.
+
+---
+
 ## Добавление новой Windows-машины
 
 Чеклист для подключения нового Windows-клиента к инфраструктуре.
