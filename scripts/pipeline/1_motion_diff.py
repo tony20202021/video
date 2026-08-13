@@ -368,8 +368,6 @@ def main() -> int:
     # СЕРВЕР из CSV (status.sh → 1_motion_diff.py --regen-from). MOTION_RENDER_CHARTS=1 — вернуть на камеру.
     _raw_rc = (os.environ.get("MOTION_RENDER_CHARTS") or "").strip().lower()
     render_charts = _raw_rc in ("1", "true", "yes", "on")
-    logger.info("Рендер графиков в motion_diff: %s (MOTION_RENDER_CHARTS)",
-                "ВКЛ" if render_charts else "ВЫКЛ — строит сервер из CSV")
 
     _base      = args.output or DEFAULT_OUTPUT_PARENT
     _today     = ts_for_file()[:8]
@@ -379,6 +377,8 @@ def main() -> int:
     meta_dir.mkdir(parents=True, exist_ok=True)
 
     _run_log_fh = add_file_handler(meta_dir / 'run.log')
+    logger.info("Рендер графиков в motion_diff: %s (MOTION_RENDER_CHARTS)",
+                "ВКЛ" if render_charts else "ВЫКЛ — строит сервер из CSV")
 
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = _ffmpeg_capture_options(
         use_tcp=args.tcp, stimeout_us=args.stimeout_us,

@@ -278,16 +278,20 @@ fi
 # Камера CAMERAS_3: charts.png (cpu/fps) + pts_chart.png (дрейф PTS). Рендер ПЕРЕНЕСЁН НА СЕРВЕР —
 # камеру не грузим matplotlib (motion_diff пишет только CSV при MOTION_RENDER_CHARTS=0). Тянем лёгкие CSV
 # по scp и строим графики здесь через 1_motion_diff.py --regen-from (best-effort: сбой НЕ ломает статус).
+# ВАЖНО: периодический флеш кладёт frames/diffs/pts/saves.csv в images/<день>/, а cpu.csv — в meta/<день>/.
 # Каталог дня — по дате сервера; при рассинхроне scp не найдёт (graceful).
 if [[ -n "${cam3_out:-}" && -n "$TS_CAMERAS_3" ]]; then
-    _cbase="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/meta/$(date +%Y%m%d)"
+    _cday="$(date +%Y%m%d)"
+    _cimg="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/images/${_cday}"
+    _cmeta="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/meta/${_cday}"
     _ctmp="$(mktemp -d)"
-    for _f in cpu frames diffs pts saves; do
+    for _f in frames diffs pts saves; do
         scp -o ConnectTimeout=10 -o BatchMode=yes \
-            "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/$_f.csv" "$_ctmp/" >/dev/null 2>&1 || true
+            "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cimg/$_f.csv" "$_ctmp/" >/dev/null 2>&1 || true
     done
     scp -o ConnectTimeout=10 -o BatchMode=yes \
-        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/run_params.json" "$_ctmp/" >/dev/null 2>&1 || true
+        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cmeta/cpu.csv" \
+        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cmeta/run_params.json" "$_ctmp/" >/dev/null 2>&1 || true
     if [[ -f "$_ctmp/frames.csv" && -f "$_ctmp/saves.csv" ]] && \
        "$_PY" "$REPO/scripts/pipeline/1_motion_diff.py" --regen-from "$_ctmp" >/dev/null 2>&1; then
         [[ -f "$_ctmp/charts.png" ]]    && cp "$_ctmp/charts.png"    "${CHART_PREFIX}_cam3_cpu_fps.png"  && _charts+=("${TS_FILE}_cam3_cpu_fps.png")
