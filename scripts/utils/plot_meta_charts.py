@@ -102,11 +102,12 @@ def parse_run_log_durations(text: str) -> list:
 
 
 def load_timing_csv(path: Path) -> list:
-    """yolo_timing.csv → [[mono_s(float), inference_ms(float), sleep_ms(float)], ...].
+    """yolo_timing.csv → [[mono_s(float), inference_ms(float), sleep_ms(float), ts_msk(str)], ...].
 
-    inference_ms — чистое ВРЕМЯ ОБРАБОТКИ одного кадра (детекция YOLO), а НЕ интервал
-    между кадрами. mono_s = секунды от старта процесса (та же шкала, что cpu.csv →
-    общая ось «минуты от старта»). Пишется scripts/pipeline/2_yolo_boxes_files.py."""
+    inference_ms — чистое ВРЕМЯ ОБРАБОТКИ одного кадра (детекция YOLO), а НЕ интервал.
+    ts_msk (wall-clock) — ось накопленного за день графика: mono_s сбрасывается каждый per-poll
+    прогон yolo, а ts_msk непрерывен. Старый 3-кол формат (без ts_msk) читается тоже (ts_msk='').
+    Пишется scripts/pipeline/2_yolo_boxes_files.py."""
     rows: list = []
     lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
     for ln in lines[1:]:                       # пропускаем заголовок
@@ -122,7 +123,8 @@ def load_timing_csv(path: Path) -> list:
             slp = float(p[2]) if len(p) > 2 and p[2] != "" else 0.0
         except ValueError:
             slp = 0.0
-        rows.append([mono, inf, slp])
+        ts = p[3] if len(p) > 3 else ""
+        rows.append([mono, inf, slp, ts])
     return rows
 
 
@@ -222,10 +224,18 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
     ax_cpu, ax_dur = axcol[0], axcol[1]
     ax_fps = axcol[2] if has_fps else None
 
-    # ── ЦПУ (mono_s → минуты) ──
+    # Накопленный за день режим (per-poll сервисы копят cpu.csv/yolo_timing.csv append-ом):
+    # ось по ts_msk = «время суток, ч». Иначе (motion_diff/старый формат) — «минуты от старта».
+    accum = bool(timing) and any(len(r) > 3 and r[3] for r in timing)
+    _xlabel = "время суток, ч" if accum else "время от старта, мин"
+
+    # ── ЦПУ ──
     stats: dict = {"cpu_samples": len(cpu_log), "events": len(durations)}
     if cpu_log:
-        cpu_min = [[r[0] / 60.0, r[1], r[2], r[3], r[4], r[5]] for r in cpu_log]
+        if accum:
+            cpu_min = [[ts_msk_to_sec(r[1]) / 3600.0, r[1], r[2], r[3], r[4], r[5]] for r in cpu_log]
+        else:
+            cpu_min = [[r[0] / 60.0, r[1], r[2], r[3], r[4], r[5]] for r in cpu_log]
         draw_cpu_on_ax(ax_cpu, cpu_min, title="ЦПУ (из cpu.csv)", show_mean=True)
         cvals = [r[2] for r in cpu_log]
         stats["cpu_avg"] = round(sum(cvals) / len(cvals), 1)
@@ -235,9 +245,11 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
     # Приоритет над run.log-интервалами: для серверного YOLO интересно именно время
     # детекции на кадр, а не «тишина» между сохранениями (это не real-time поток).
     if timing:
-        tmono = [r[0] for r in timing]
         inf   = [r[1] for r in timing]
-        x = [t / 60.0 for t in tmono]              # та же шкала от старта, что cpu.csv
+        if accum:
+            x = [ts_msk_to_sec(r[3]) / 3600.0 for r in timing]   # время суток, ч (накопление за день)
+        else:
+            x = [r[0] / 60.0 for r in timing]                    # минуты от старта (старый формат)
         ax_dur.scatter(x, inf, s=10, color="#2255cc", alpha=0.5, zorder=5,
                        label=f"инференс кадра, мс ({len(inf)} кадров)")
         if inf:
@@ -313,7 +325,7 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
         ax_fps.grid(True, linestyle="--", alpha=0.3)
         stats["fps_avg"] = fps_avgs
 
-    axcol[-1].set_xlabel("время от старта, мин")
+    axcol[-1].set_xlabel(_xlabel)
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()

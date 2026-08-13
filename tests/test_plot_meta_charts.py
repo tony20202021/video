@@ -109,6 +109,34 @@ def test_load_timing_csv_skips_bad_rows(tmp_path):
     assert rows[1][2] == 0.0             # sleep_ms по умолчанию
 
 
+def test_load_timing_csv_with_ts_msk(tmp_path):
+    # новый 4-кол формат: ts_msk в КОНЦЕ (ось накопленного за день графика); r[1]/r[2] не сдвинуты
+    p = tmp_path / "yolo_timing.csv"
+    p.write_text(
+        "mono_s,inference_ms,sleep_ms,ts_msk\n"
+        "0.5,182.3,900.0,20260813_070322_100000\n",
+        encoding="utf-8",
+    )
+    rows = pmc.load_timing_csv(p)
+    assert rows[0][1] == pytest.approx(182.3)          # inference_ms на месте
+    assert rows[0][3] == "20260813_070322_100000"      # ts_msk
+    # старый 3-кол формат → ts_msk пустой (backward-compat)
+    p.write_text("mono_s,inference_ms,sleep_ms\n1.0,200.0,0.0\n", encoding="utf-8")
+    assert pmc.load_timing_csv(p)[0][3] == ""
+
+
+def test_save_cpu_csv_append(tmp_path):
+    from common.utils.camera_run import save_cpu_csv
+    _row = lambda t: [float(t), f"20260813_0800{t:02d}_0", 20.0, 2400, 2400, 30]
+    save_cpu_csv([_row(1), _row(2)], tmp_path, append=True)   # файла нет → заголовок + 2
+    save_cpu_csv([_row(3)], tmp_path, append=True)            # append → +1 (заголовок не дублируется)
+    lines = (tmp_path / "cpu.csv").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 4                                    # 1 заголовок + 3 строки
+    assert lines[0].startswith("mono_s")
+    save_cpu_csv([_row(9)], tmp_path)                         # append=False (дефолт) → перезапись
+    assert len((tmp_path / "cpu.csv").read_text(encoding="utf-8").splitlines()) == 2
+
+
 def test_unwrap_midnight():
     # 23:59:58 → 00:00:02  должно стать 86402 (не откат назад)
     out = pmc._unwrap_midnight([86398.0, 86399.0, 2.0, 3.0])

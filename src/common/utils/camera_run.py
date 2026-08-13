@@ -500,16 +500,20 @@ def draw_cpu_on_ax(ax, cpu_log: list, *,
 
 # ─── cpu.csv ──────────────────────────────────────────────────────────────────
 
-def save_cpu_csv(cpu_log: list, out_dir: Path) -> None:
-    """Сохраняет cpu.csv со стандартным заголовком (6 колонок)."""
+def save_cpu_csv(cpu_log: list, out_dir: Path, append: bool = False) -> None:
+    """Сохраняет cpu.csv (6 колонок). append=True — ДОПИСЫВАТЬ (для per-poll сервисов,
+    которые реинвокаются каждый поллинг: накопление за день по ts_msk); заголовок — раз."""
     import csv as _csv
     if not cpu_log:
         return
-    with open(out_dir / "cpu.csv", "w", newline="", encoding="utf-8") as f:
+    path = out_dir / "cpu.csv"
+    do_append = append and path.exists()
+    with open(path, "a" if do_append else "w", newline="", encoding="utf-8") as f:
         w = _csv.writer(f)
-        w.writerow(["mono_s", "ts_msk", "cpu_pct", "freq_mhz_pdh", "freq_mhz_step", "cpu_utility_pct"])
+        if not do_append:
+            w.writerow(["mono_s", "ts_msk", "cpu_pct", "freq_mhz_pdh", "freq_mhz_step", "cpu_utility_pct"])
         w.writerows(cpu_log)
-    logger.info("cpu.csv:    %d замеров", len(cpu_log))
+    logger.info("cpu.csv:    %d замеров (%s)", len(cpu_log), "append" if do_append else "write")
 
 
 def compute_per_frame_log(ms_values) -> str:

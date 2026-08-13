@@ -524,19 +524,14 @@ def main() -> int:
     _periodic_stop = threading.Event()
 
     def _periodic_cpu_save() -> None:
+        # cpu.csv/yolo_timing.csv копятся за день append-ом в финальном save (per-poll реинвок).
+        # Тут НЕ перезаписываем их — только освежаем cpu_chart.png текущего прогона (на случай долгой пачки).
         while not _periodic_stop.wait(timeout=60.0):
             _snap = cpu_monitor.snapshot()
             if not _snap:
                 continue
             try:
-                _save_cpu_csv(_snap, meta_dir)
-                _tsnap = list(timing_log)
-                if _tsnap:
-                    with open(meta_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as _f:
-                        _w = csv.writer(_f)
-                        _w.writerow(["mono_s", "inference_ms", "sleep_ms"])
-                        _w.writerows(_tsnap)
-                _save_cpu_chart(_snap, meta_dir / "cpu_chart.png", _tsnap or None)
+                _save_cpu_chart(_snap, meta_dir / "cpu_chart.png", list(timing_log) or None)
             except Exception:
                 pass
 
@@ -589,7 +584,7 @@ def main() -> int:
 
     all_detections:       list[list] = []
     run_data:             list[dict] = []
-    timing_log:           list[list] = []  # [mono_s, inference_ms, sleep_ms]
+    timing_log:           list[list] = []  # [mono_s, inference_ms, sleep_ms, ts_msk]
     grand_total_checked   = 0
     grand_total_detected  = 0
     grand_total_deleted   = 0
@@ -684,8 +679,11 @@ def main() -> int:
                 _inference_ms = (time.monotonic() - _t_yolo_start) * 1000
 
                 _slept_ms = _yolo_limiter.sleep(_t_yolo_start)
+                # ts_msk (wall-clock) В КОНЦЕ — ось накопленного за день графика (per-poll реинвок);
+                # r[1]/r[2] (inf/sleep) не сдвигаются → существующие читатели не ломаются.
                 timing_log.append([round(_t_yolo_start - t_start, 3),
-                                    round(_inference_ms, 1), round(_slept_ms, 1)])
+                                    round(_inference_ms, 1), round(_slept_ms, 1),
+                                    datetime.now(MSK).strftime("%Y%m%d_%H%M%S_%f")])
                 _msg = _yolo_limiter.adapt(_inference_ms, _slept_ms)
                 if _msg:
                     logger.info(_msg)
@@ -780,13 +778,23 @@ def main() -> int:
     else:
         logger.info("Детекций не найдено.")
 
-    _save_cpu_csv(cpu_log, meta_dir)
+    _save_cpu_csv(cpu_log, meta_dir, append=True)   # копим за день (per-poll реинвок), ось по ts_msk
 
-    # yolo_timing.csv
+    # yolo_timing.csv — ДОПИСЫВАЕМ за день; ось графика по ts_msk (mono_s сбрасывается каждый прогон).
     if timing_log:
-        with open(meta_dir / "yolo_timing.csv", "w", newline="", encoding="utf-8") as f:
+        _th = ["mono_s", "inference_ms", "sleep_ms", "ts_msk"]
+        _tp = meta_dir / "yolo_timing.csv"
+        _same = False
+        if _tp.exists():
+            try:
+                _first = _tp.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+                _same = bool(_first) and _first[0].split(",") == _th   # старый 3-кол формат → перезапишем начисто
+            except Exception:
+                _same = False
+        with open(_tp, "a" if _same else "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
-            w.writerow(["mono_s", "inference_ms", "sleep_ms"])
+            if not _same:
+                w.writerow(_th)
             w.writerows(timing_log)
 
     # Charts
