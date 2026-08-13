@@ -513,15 +513,15 @@ def save_cpu_csv(cpu_log: list, out_dir: Path) -> None:
 
 
 def compute_per_frame_log(ms_values) -> str:
-    """Строка ' счёт/кадр: min/avg/max мс' по ЧИСТОМУ времени вычисления кадра (только счёт,
+    """Строка ' мсек/кадр: min/avg/max' по ЧИСТОМУ времени вычисления кадра (только счёт,
     без сна адаптивного лимитера и без батч-оверхеда). Показывает, справляется ли ЦПУ.
-    Пустой список → '' (нечего добавлять)."""
+    Единица (мс) — в самой метке 'мсек/кадр'; парно к 'сек/кадр' (I/O). Пустой список → ''."""
     if not ms_values:
         return ""
     mn = min(ms_values)
     mx = max(ms_values)
     av = sum(ms_values) / len(ms_values)
-    return f"  счёт/кадр: {mn:.0f}/{av:.0f}/{mx:.0f} мс"
+    return f"  мсек/кадр: {mn:.0f}/{av:.0f}/{mx:.0f}"
 
 
 # ─── pts_chart.png ────────────────────────────────────────────────────────────
@@ -602,10 +602,8 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
         ax = axes[ax_idx][0]
         drift_pts = [p - m for p, m in zip(pts_clean, mono_s)]
         ax.scatter(mono, drift_pts, color="#cc5500", s=2, marker="^", alpha=0.2,
-                   label="PTS − mono (с): пила = кадры приходят пачками (буфер камеры/сети); "
-                         "PTS съёмки убегает вперёд быстрее, чем идёт mono приёма, потом "
-                         "пауза-сброс. Амплитуда ≈ глубина буфера, ограничена (не растёт)")
-        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--", label="0 = приём успевает за съёмкой")
+                   label="PTS − mono (с): пила ≈ глубина буфера (кадры пачками)")
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
         ax.set_ylabel("с")
         ax.set_title(f"{url_id} — дрейф PTS − mono (с); разрывов PTS сшито: {n_breaks}")
         ax.legend(loc="upper left", fontsize=8)
@@ -616,9 +614,8 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
         ax = axes[ax_idx][0]
         drift_wall = [w - m for w, m in zip(wall_s, mono_s)]
         ax.scatter(mono, drift_wall, color="#228833", s=8, marker="s", alpha=0.6,
-                   label="wall − mono (с): расхождение стенных часов (ts_msk) и монотонных; "
-                         "около 0 и без тренда = часы идут ровно, джиттер записи метки")
-        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--", label="0 = часы синхронны")
+                   label="wall − mono (с): расхождение стенных и mono часов")
+        ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
         ax.set_ylabel("с")
         ax.set_xlabel("время от старта, с")
         ax.set_title(f"{url_id} — дрейф wall − mono (с)")
@@ -632,7 +629,7 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
         draw_cpu_on_ax(ax, cpu_log, title="CPU usage, %")
         ax.set_xlabel("время от старта, с")
 
-    plt.tight_layout()
+    plt.tight_layout(rect=(0, 0, 1, 0.97))   # резерв под suptitle (не налезает)
     path = out_dir / "pts_chart.png"
     plt.savefig(str(path), dpi=120)
     plt.close()
@@ -810,8 +807,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         legend_handles = [
             _mlines.Line2D([], [], color="#44aa44", marker="*", linestyle="none",
                            markersize=9,
-                           label="интервал между кадрами (мс): выше = дольше пауза "
-                                 "до кадра (столл/реконнект RTSP)"),
+                           label="интервал между кадрами, мс (рост = столл/реконнект)"),
             _mlines.Line2D([], [], color="blue", linestyle="--", linewidth=0.8,
                            label=f"среднее {mean_iv:.0f} мс  ({1000/mean_iv:.1f} fps)"),
         ]
@@ -838,7 +834,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
                 ax.scatter(dt, dv, color=color, s=16, alpha=0.45, label=cam,
                            marker=_MARKERS[ci % len(_MARKERS)])
             ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0,
-                       label=f"порог diff={threshold} (выше → кадр сохраняется)")
+                       label=f"порог diff={threshold}")
             ax.text(0, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
             ax.set_ylabel("diff")
             ax.set_xlim(_x_left, t_max * 1.02)
@@ -916,7 +912,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         _ax.xaxis.set_major_locator(_x_loc)
     axes[-1][0].set_xlabel("время МСК")
 
-    plt.tight_layout()
+    plt.tight_layout(rect=(0, 0, 1, 0.97))   # резерв под suptitle (не налезает)
     chart_path = out_dir / "charts.png"
     plt.savefig(str(chart_path), dpi=120)
     plt.close()

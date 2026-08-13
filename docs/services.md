@@ -204,11 +204,11 @@ video-transfer  →  .output/transfer/diff/
 video-yolo      →  .output/pipeline/2_yolo_boxes_files/images/
                    (исходники удаляются, poll 60s)
     ▼
-video-classify  →  .data/groups/v4/inference/images/{date}/
+video-classify  →  .data/groups/v5/inference/images/{date}/
                    single/{1_resident,2_delivery,3_utilities,4_guest}/ multi/ uncertain/
                    classifications.csv  labels.json   (poll 60s)
     ▼
-video-smooth    images/ НЕ трогает → сайдкар .data/groups/v4/inference/smoothed/{date}/:
+video-smooth    images/ НЕ трогает → сайдкар .data/groups/v5/inference/smoothed/{date}/:
                 classifications_smoothed.csv (crop,…,smoothed_class[col4],rel,p_*) — авторитетный машинный
                 выход; smooth_state.json, smooth_viz/. labels.json сглаживатель НЕ пишет — это файл РУЧНОЙ
                 разметки (2_label_ui сидит из smoothed_class, если labels.json нет; пересчёт его не затирает)
@@ -229,7 +229,7 @@ video-smooth-identity   ТО ЖЕ ядро smooth_core, что у video-smooth, 
                 (классы-жители из p_* колонок identifications.csv — открытый набор; poll 120s)
 ```
 
-Версии каталогов (`v4`, `v1`) берутся из `.env`: `GROUPS_VER`, `RESIDENTS_VER`.
+Версии каталогов (`v5`, `v1`) берутся из `.env`: `GROUPS_VER`, `RESIDENTS_VER`.
 
 **Синхронизация smooth→identify.** Без неё identify успевает опознать «ложного резидента»
 (ошибку классификатора) до того, как smooth пересчитает класс → неверная личность не откатывается
@@ -310,8 +310,9 @@ sudo systemctl stop    video-yolo
 1. `N прогонов (X кадров/файлов)` — см. ниже;
 2. **`мсек/кадр min/avg/max`** — ЧИСТОЕ время вычисления кадра (только счёт, без сна
    адаптивного лимитера и батч-оверхеда) → видно, успевает ли ЦПУ; min/max по окну, avg взвешен
-   по кадрам. Источник — строка лога `счёт/кадр: …` (пишут пайплайн-скрипты через
-   `camera_run.compute_per_frame_log`; в логе единица `мс`, в отчёте — `мсек/кадр`).
+   по кадрам. Источник — строка лога `мсек/кадр: …` (пишут пайплайн-скрипты через
+   `camera_run.compute_per_frame_log`; единая метка `мсек/кадр` и в логе, и в отчёте — парно к `сек/кадр`.
+   Парсеры отчёта принимают и прежнюю метку `счёт/кадр: … мс` — логи ещё не перевыпущенных машин).
    У `video-transfer` и Windows `2_send` вместо этого `сек/кадр min/avg/max` (I/O приёма/отправки файла).
    Всё — ЧИСТОЕ время операции, единый формат `<мсек|сек>/кадр мин/ср/макс` (единица впереди, 3 значения;
    ярлык-операция не пишется — тип виден по ряду сервиса); idle-интервалы (с простоем) **не показываются**;
@@ -342,7 +343,7 @@ sudo systemctl stop    video-yolo
 Модели и пороги задаются в `.env`:
 
 ```dotenv
-CLASSIFY_MODEL=.models/classify/v3_1.onnx
+CLASSIFY_MODEL=.models/classify/v5_1.onnx
 IDENTIFY_MODEL=.models/identify/v5.onnx
 DETECT_MODEL=.models/detect/yolov8n.onnx
 

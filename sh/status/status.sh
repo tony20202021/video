@@ -275,15 +275,25 @@ if [[ -n "${_ymeta:-}" ]] && \
    "$_PY" "$REPO/scripts/utils/plot_meta_charts.py" "$_ymeta" --out "${CHART_PREFIX}_linux_yolo.png" >/dev/null 2>&1; then
     _charts+=("${TS_FILE}_linux_yolo.png")
 fi
-# Камера CAMERAS_3: charts.png (cpu/fps) + pts_chart.png (дрейф времени PTS) — motion_diff пишет их
-# сам каждые ~5 мин; тянем готовые по scp (pts-дрейф строит только motion_diff, не plot_meta_charts).
-# Каталог дня берём по дате сервера — в норме совпадает с камерой; при рассинхроне scp просто не найдёт (graceful).
+# Камера CAMERAS_3: charts.png (cpu/fps) + pts_chart.png (дрейф PTS). Рендер ПЕРЕНЕСЁН НА СЕРВЕР —
+# камеру не грузим matplotlib (motion_diff пишет только CSV при MOTION_RENDER_CHARTS=0). Тянем лёгкие CSV
+# по scp и строим графики здесь через 1_motion_diff.py --regen-from (best-effort: сбой НЕ ломает статус).
+# Каталог дня — по дате сервера; при рассинхроне scp не найдёт (graceful).
 if [[ -n "${cam3_out:-}" && -n "$TS_CAMERAS_3" ]]; then
     _cbase="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/meta/$(date +%Y%m%d)"
-    scp -o ConnectTimeout=10 -o BatchMode=yes "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/charts.png" \
-        "${CHART_PREFIX}_cam3_cpu_fps.png" >/dev/null 2>&1 && _charts+=("${TS_FILE}_cam3_cpu_fps.png")
-    scp -o ConnectTimeout=10 -o BatchMode=yes "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/pts_chart.png" \
-        "${CHART_PREFIX}_cam3_pts_drift.png" >/dev/null 2>&1 && _charts+=("${TS_FILE}_cam3_pts_drift.png")
+    _ctmp="$(mktemp -d)"
+    for _f in cpu frames diffs pts saves; do
+        scp -o ConnectTimeout=10 -o BatchMode=yes \
+            "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/$_f.csv" "$_ctmp/" >/dev/null 2>&1 || true
+    done
+    scp -o ConnectTimeout=10 -o BatchMode=yes \
+        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cbase/run_params.json" "$_ctmp/" >/dev/null 2>&1 || true
+    if [[ -f "$_ctmp/frames.csv" && -f "$_ctmp/saves.csv" ]] && \
+       "$_PY" "$REPO/scripts/pipeline/1_motion_diff.py" --regen-from "$_ctmp" >/dev/null 2>&1; then
+        [[ -f "$_ctmp/charts.png" ]]    && cp "$_ctmp/charts.png"    "${CHART_PREFIX}_cam3_cpu_fps.png"  && _charts+=("${TS_FILE}_cam3_cpu_fps.png")
+        [[ -f "$_ctmp/pts_chart.png" ]] && cp "$_ctmp/pts_chart.png" "${CHART_PREFIX}_cam3_pts_drift.png" && _charts+=("${TS_FILE}_cam3_pts_drift.png")
+    fi
+    rm -rf "$_ctmp"
 fi
 
 echo ""

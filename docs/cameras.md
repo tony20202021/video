@@ -135,7 +135,7 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
           <cam>_<UTC>_heartbeat.jpg    — периодический снимок (по таймеру)
       frames.csv, diffs.csv, saves.csv, pts.csv
       cpu.csv                          — 5 колонок: mono_s, ts_msk, cpu_pct, freq_mhz_pdh, freq_mhz_step
-      charts.png, pts_chart.png
+      charts.png, pts_chart.png       — по умолчанию рендерит СЕРВЕР из CSV (MOTION_RENDER_CHARTS=0)
       run_stats.json, run_params.json, run.log
   5_1_diff_yolo_boxes_low/
     run_<UTC>/
@@ -149,7 +149,7 @@ CAM_01_URL=rtsp://<IP>:554/user=...&password=...&channel=1&stream=1.sdp?real_str
           crops/                       — вырезанные кропы по bbox
       frames.csv, diffs.csv, saves.csv, pts.csv
       cpu.csv                          — 5 колонок (см. выше)
-      charts.png, pts_chart.png
+      charts.png, pts_chart.png       — по умолчанию рендерит СЕРВЕР из CSV (MOTION_RENDER_CHARTS=0)
       run_stats.json, run_params.json, run.log
   5_2_yolo_boxes_files/
     run_<UTC>/
@@ -296,9 +296,9 @@ MOTION_DIFF_THRESHOLD=3.3
 |------|----------|
 | `run_params.json` | Параметры запуска (модель, conf, nms, threshold, ...) |
 | `run_stats.json` | Метрики качества: duration, fps, кадры ok/bad, реконнекты, интервалы, save counts |
-| `charts.png` | Интервалы кадров + дифы + сохранения + CPU по времени |
-| `pts_chart.png` | Метки времени (mono/wall/PTS) + дрейф + CPU внизу |
-| `frames.csv`, `diffs.csv`, `saves.csv`, `pts.csv`, `cpu.csv` | Сырые данные для анализа |
+| `charts.png` | Интервалы кадров + дифы + сохранения + CPU по времени. **Рендер по умолчанию на СЕРВЕРЕ** (не грузим камеру): `status.sh` тянет CSV и строит через `1_motion_diff.py --regen-from`. На камере создаётся только при `MOTION_RENDER_CHARTS=1` |
+| `pts_chart.png` | Метки времени (mono/wall/PTS) + дрейф + CPU внизу. См. `charts.png` — рендер на сервере из CSV |
+| `frames.csv`, `diffs.csv`, `saves.csv`, `pts.csv`, `cpu.csv` | Сырые данные для анализа (**единственный выход motion_diff при `MOTION_RENDER_CHARTS=0`**; из них сервер строит графики) |
 
 #### Скрипты запуска
 

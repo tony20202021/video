@@ -172,7 +172,7 @@ def test_parse_stat_lines_batch():
 
 
 def test_parse_stat_lines_compute():
-    # чистое время вычисления кадра из 'счёт/кадр: min/avg/max мс'
+    # backward-compat: прежняя метка 'счёт/кадр: min/avg/max мс' (логи не перевыпущенных машин)
     lines = [
         "Jul 19 08:39:23 h bash[1]: 08:39:23  INFO  1 батч (10 кадров)  Готово. Время: 3.0 с.  счёт/кадр: 8/20/50 мс  images=/x",
         "Jul 19 08:45:10 h bash[1]: 08:45:10  INFO  1 батч (30 кадров)  Готово. Время: 9.0 с.  счёт/кадр: 5/30/90 мс  images=/x",
@@ -182,6 +182,33 @@ def test_parse_stat_lines_compute():
     assert st["cmin"] == 5            # min из минимумов (8, 5)
     assert st["cmax"] == 90           # max из максимумов (50, 90)
     assert st["cavg"] == 28           # взвеш. по кадрам: (20*10 + 30*30)/40 = 27.5 → 28
+
+
+def test_parse_stat_lines_compute_new_label():
+    # новая метка 'мсек/кадр: min/avg/max' (без суффикса ' мс' — единица в самой метке)
+    lines = [
+        "Jul 19 08:39:23 h bash[1]: 08:39:23  INFO  1 батч (10 кадров)  Готово. Время: 3.0 с.  мсек/кадр: 8/20/50  images=/x",
+        "Jul 19 08:45:10 h bash[1]: 08:45:10  INFO  1 батч (30 кадров)  Готово. Время: 9.0 с.  мсек/кадр: 5/30/90  images=/x",
+    ]
+    st = ps.parse_stat_lines(lines, r"Готово\. Время:", has_timing=True)
+    assert st["frames"] == 40
+    assert st["cmin"] == 5
+    assert st["cmax"] == 90
+    assert st["cavg"] == 28
+
+
+def test_compute_per_frame_log_label_and_roundtrip():
+    # эмиттер пишет единую метку 'мсек/кадр' (парно к 'сек/кадр'), без старого 'счёт'
+    from common.utils.camera_run import compute_per_frame_log
+    s = compute_per_frame_log([8.0, 20.0, 50.0])
+    assert "мсек/кадр:" in s
+    assert "счёт" not in s
+    # round-trip: строку эмиттера парсер понимает
+    line = f"08:39:23  INFO  1 батч (3 кадров)  Готово. Время: 3.0 с.{s}"
+    st = ps.parse_stat_lines([line], r"Готово\. Время:", has_timing=True)
+    assert st["cmin"] == 8
+    assert st["cmax"] == 50
+    assert compute_per_frame_log([]) == ""
 
 
 def test_parse_stat_lines_bursts():

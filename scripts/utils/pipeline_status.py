@@ -312,7 +312,7 @@ def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
       count   — число совпавших событий (прогонов/приёмов);
       times   — 'Время: N с' как есть. Для transfer (строка = 1 файл) это чистое время ПРИЁМА
                 файла (I/O) → min/avg/max. Для батч-сервисов «Время» = весь батч (не показываем);
-      cmin/cavg/cmax — ЧИСТОЕ время вычисления КАДРА, мс (из 'счёт/кадр: min/avg/max мс' — только
+      cmin/cavg/cmax — ЧИСТОЕ время вычисления КАДРА, мс (из 'мсек/кадр: min/avg/max' — только
                 счёт, без сна лимитера и батч-оверхеда). Показывает, успевает ли ЦПУ. cavg —
                 среднее, взвешенное по кадрам батча; cmin/cmax — по всему окну;
       frames  — сумма «X кадров» из '1 батч (X кадров)' (батч-сервисы);
@@ -321,8 +321,8 @@ def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
     count = 0
     times: list[float] = []       # 'Время: N' (transfer: приём файла, сек)
     frames = 0
-    c_mins: list[float] = []      # счёт/кадр min по батчам
-    c_maxs: list[float] = []      # счёт/кадр max по батчам
+    c_mins: list[float] = []      # мсек/кадр min по батчам
+    c_maxs: list[float] = []      # мсек/кадр max по батчам
     c_wsum = 0.0                  # Σ(avg_батча × кадров) для взвешенного среднего
     c_frames = 0
     ts_secs: list[int] = []
@@ -337,7 +337,8 @@ def parse_stat_lines(lines, stats_pat: str, has_timing: bool) -> dict:
                 m = re.search(r"Время:\s*([\d.,]+)\s*с", line)
                 if m:
                     times.append(float(m.group(1).replace(",", ".")))
-            cm = re.search(r"счёт/кадр:\s*([\d.]+)/([\d.]+)/([\d.]+)\s*мс", line)
+            # приним. и новую метку 'мсек/кадр', и старую 'счёт/кадр' (логи ещё не перевыпущенных машин)
+            cm = re.search(r"(?:счёт|мсек)/кадр:\s*([\d.]+)/([\d.]+)/([\d.]+)(?:\s*мс)?", line)
             if cm:
                 cmn, cav, cmx = (float(x) for x in cm.groups())
                 c_mins.append(cmn)

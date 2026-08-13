@@ -7,8 +7,8 @@
 | Задача | Модель | Размер | Скорость на CPU | Статус |
 |--------|--------|--------|-----------------|--------|
 | Детекция людей | YOLOv8n | ~13 MB | ~20–40 мс/кадр | **Готово** `.models/detect/yolov8n.onnx` |
-| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Активна** `.models/classify/v3_1.onnx` (датасет v3, 10 015 файлов) |
-| Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | Нужно обучить |
+| Классификация группы (Модель 1) | MobileNetV3-Small | ~6 MB | ~5–10 мс/crop | **Активна** `.models/classify/v5_1.onnx` (датасет v5, multi-label, 16 119 файлов, val macro-F1 0.85) |
+| Идентификация жителя (Модель 2) | MobileNetV3-Small | ~10 MB | ~5–10 мс/crop | **Активна (слабая, дообучается)** `.models/identify/v5.onnx` |
 
 ---
 
@@ -667,8 +667,12 @@ guest 3472 (минориты ×1.4–3.6 к v4; резидент прореже�
 `python scripts/train/build_groups_v5.py [--dry-run]`.
 
 **Baseline v4_1 на v5** (перед обучением v5_1, `.data/groups/v5/eval_v4_1_on_v5.json`): macro-F1 **0.737**
-— res F1 0.85 / del 0.70 / utl 0.75 / gst 0.65 (слабы гость/доставка recall). Модель v5_1 (обучение на v5,
-BCE, pos_weight boost миноритов) должна это побить.
+— res F1 0.85 / del 0.70 / utl 0.75 / gst 0.65 (слабы гость/доставка recall).
+
+**Итог v5_1 (обучена 2026-08-12, задеплоена).** BCE + pos_weight boost миноритов, 15 эпох, best **val macro-F1 0.846**
+(`.models/classify/v5_1.json`). Сравнение с v4_1 на независимом корпусе v3+v4 images (`eval_v4v5_cmp.json`, N=9419):
+**macro-F1 0.553→0.632**, все классы вверх без регресса — res 0.94→0.95, **del 0.55→0.74**, **utl 0.16→0.25**, gst 0.56→0.59
+(минориты — главный выигрыш). Активирована: `.env` `CLASSIFY_MODEL=.models/classify/v5_1.onnx`, `GROUPS_VER=v5`.
 
 ### Структура данных
 
@@ -966,14 +970,15 @@ RESIDENTS_VER=v1   # → .data/residents/v1/scene_pool/
 | `.data/groups/v1` | `v1_1.onnx` | `v1_2.onnx` |
 | `.data/groups/v2` | `v2_1.onnx` (3 996 файлов) | `v2_2.onnx`, `v2_3.onnx` |
 | `.data/groups/v3` | `v3_1.onnx` (10 015 файлов, 30 эпох) | `v3_2.onnx` |
-| `.data/groups/v4` | **`v4_1.onnx`** ← текущая (7 253 файла, 15 эпох, multi-label, macro-F1 0.767 / mAP 0.94) | `v4_2.onnx` |
+| `.data/groups/v4` | `v4_1.onnx` (7 253 файла, 15 эпох, multi-label, macro-F1 0.767 / mAP 0.94) | `v4_2.onnx` |
+| `.data/groups/v5` | **`v5_1.onnx`** ← текущая (16 119 файлов, 15 эпох, multi-label, val macro-F1 0.85 / mAP 0.96) | `v5_2.onnx` |
 | export.zip (без версии) | `v4.onnx` (legacy, single-number ≠ `v4_1`) | `v5.onnx` |
 
 CLI:
 ```bash
 python scripts/train/0_model_versions.py list
-python scripts/train/0_model_versions.py activate v4_1   # → обновляет CLASSIFY_MODEL в .env
-python scripts/train/0_model_versions.py info v4_1
+python scripts/train/0_model_versions.py activate v5_1   # → обновляет CLASSIFY_MODEL в .env
+python scripts/train/0_model_versions.py info v5_1
 ```
 
 `activate` обновляет строку `CLASSIFY_MODEL=` в `.env` (единственный источник правды для активной модели).
@@ -1152,9 +1157,9 @@ fine-tune на датасете групп (1_resident / 2_delivery / 3_utilitie
     yolov8n.onnx        — детекция людей (пайплайн)
     yolov8n-pose.pt     — pose estimation (filter_residents: доля тела в кадре)
   classify/
-    v3_1.onnx           — Модель 1 (активная): датасет v3, 10 015 файлов
-    v3_1.json           — манифест: метрики, confusion matrix, история эпох
-    v2_3.onnx           — Модель 1 (предыдущая): датасет v2, 3 996 файлов
+    v5_1.onnx           — Модель 1 (активная): датасет v5, multi-label, 16 119 файлов, val macro-F1 0.85
+    v5_1.json           — манифест: метрики, пороги на класс, история эпох
+    v4_1.onnx           — Модель 1 (предыдущая): датасет v4, 7 253 файла, multi-label
     backbone.pt         — только features (PyTorch) для инициализации Модели 2
   downloaded/
     yolov8n.pt          — исходные веса YOLOv8n (промежуточный, setup_models.py)
@@ -1172,7 +1177,7 @@ fine-tune на датасете групп (1_resident / 2_delivery / 3_utilitie
 
 ```dotenv
 # Модели ML
-CLASSIFY_MODEL=.models/classify/v3_1.onnx
+CLASSIFY_MODEL=.models/classify/v5_1.onnx
 IDENTIFY_MODEL=.models/identify/v5.onnx
 DETECT_MODEL=.models/detect/yolov8n.onnx
 

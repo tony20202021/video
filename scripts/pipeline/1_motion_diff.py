@@ -363,6 +363,14 @@ def main() -> int:
             heartbeat_sec = 600.0
             heartbeat_from = "встроенное 600 с"
 
+    # Рендер графиков (charts.png/pts_chart.png) внутри motion_diff — ТЯЖЁЛЫЙ matplotlib раз в ~5 мин,
+    # растёт к вечеру (перерисовывает весь день). По умолчанию ВЫКЛ: камеру не грузим, графики строит
+    # СЕРВЕР из CSV (status.sh → 1_motion_diff.py --regen-from). MOTION_RENDER_CHARTS=1 — вернуть на камеру.
+    _raw_rc = (os.environ.get("MOTION_RENDER_CHARTS") or "").strip().lower()
+    render_charts = _raw_rc in ("1", "true", "yes", "on")
+    logger.info("Рендер графиков в motion_diff: %s (MOTION_RENDER_CHARTS)",
+                "ВКЛ" if render_charts else "ВЫКЛ — строит сервер из CSV")
+
     _base      = args.output or DEFAULT_OUTPUT_PARENT
     _today     = ts_for_file()[:8]
     images_dir = _base / "images"
@@ -564,7 +572,7 @@ def main() -> int:
     _STATS_SAVE_INTERVAL = max(300.0, args.csv_save_interval * 5)
 
     # ЧИСТОЕ время ОБРАБОТКИ кадра (gray+diff, без ожидания RTSP-чтения) — скользящее окно;
-    # его min/avg/max пишем в строки save/heartbeat как 'счёт/кадр: … мс' (как yolo/classify/identify).
+    # его min/avg/max пишем в строки save/heartbeat как 'мсек/кадр: …' (как yolo/classify/identify).
     _proc_ms: list[float] = []
     _PROC_WINDOW = 600          # последние ~50с при ~12 fps
 
@@ -665,7 +673,7 @@ def main() -> int:
                         last_save_time[vn] = _now
                         logger.info(f"  {fname}  diff={diff:.2f}  Готово. Время: {_interval:.1f} с.{_compute_per_frame_log(_proc_ms)}")
 
-                # чистое время ОБРАБОТКИ этого кадра (gray+diff, без ожидания чтения) → окно для счёт/кадр
+                # чистое время ОБРАБОТКИ этого кадра (gray+diff, без ожидания чтения) → окно для мсек/кадр
                 _proc_ms.append((time.monotonic() - _now) * 1000.0)
                 if len(_proc_ms) > _PROC_WINDOW:
                     del _proc_ms[:-_PROC_WINDOW]
@@ -751,8 +759,9 @@ def main() -> int:
         _cpu_cur = _cpu_for_day(cpu_log, _current_date)   # финальный meta = каталог последнего дня
         _save_cpu_csv(_cpu_cur, meta_dir)
 
-        _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir)
-        _save_pts_chart(pts_log, _cpu_cur, meta_dir)
+        if render_charts:   # по умолчанию ВЫКЛ — графики строит сервер (см. MOTION_RENDER_CHARTS)
+            _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir)
+            _save_pts_chart(pts_log, _cpu_cur, meta_dir)
         _save_run_stats(frame_log, pts_log, saves_log, diffs_log, meta_dir)
 
 

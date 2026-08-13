@@ -92,8 +92,8 @@
 | Backend (FastAPI) | **В разработке** | `/status` работает, `/events` `/persons` `/cameras` — стабы |
 | Web App | **В разработке** | Базовый HTML-интерфейс |
 | Android App | **Запланировано** | |
-| ML классификация группы | **Запланировано** | MobileNetV3-Small, модель не обучена |
-| ML идентификация жителя | **Запланировано** | MobileFaceNet, модель не обучена |
+| ML классификация группы (Модель 1) | **Активна** | MobileNetV3-Small, multi-label, `v5_1` (датасет v5, 16 119 файлов, val macro-F1 0.85) |
+| ML идентификация жителя (Модель 2) | **Активна (слабая, дообучается)** | MobileNetV3-Small, `identify/v5.onnx` |
 | MongoDB (схема) | **Запланировано** | Схема описана в `database.md`, код не написан |
 
 ---
@@ -222,8 +222,8 @@ video/
         inference/        — результаты 3_classify_groups: images/YYYYMMDD/<class>/, meta/YYYYMMDD/
   .models/
     detect/yolov8n.onnx   — детекция людей (~13 MB)
-    classify/v1_1.onnx    — Модель 1 (активная: датасет v1, прогон 1, val_acc 79%)
-    classify/v1_1.json    — манифест модели
+    classify/v5_1.onnx    — Модель 1 (активная: датасет v5, multi-label, val macro-F1 0.85)
+    classify/v5_1.json    — манифест модели (метрики, пороги на класс, история эпох)
     classify/backbone.pt  — backbone для инициализации Модели 2
     identify/v*.onnx      — Модель 2 (идентификатор жителей)
   docs/

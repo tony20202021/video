@@ -248,7 +248,7 @@ if (Test-Path $logFile) {
     $cutoff60 = (Get-Date).AddMinutes(-60)
     $count60m = 0
     $runs10m  = 0; $runs60m  = 0
-    $procMs10m = $null; $procMs60m = $null   # последняя тройка 'счёт/кадр' (реальная обработка) в окне
+    $procMs10m = $null; $procMs60m = $null   # последняя тройка 'мсек/кадр' (реальная обработка) в окне
     $metaRoot2  = Join-Path $motionDir "meta"
     $recentDirs = if (Test-Path $metaRoot2) { Get-ChildItem $metaRoot2 -Directory | Sort-Object Name -Descending | Select-Object -First 2 } else { @() }
     foreach ($d in $recentDirs) {
@@ -256,7 +256,7 @@ if (Test-Path $logFile) {
         if (-not (Test-Path $rf)) { continue }
         try { $baseDate = [datetime]::ParseExact($d.Name, "yyyyMMdd", $null) } catch { continue }
         # Дата строки НЕ из имени каталога: motion_diff пишет один run.log через полночь (сегодняшние
-        # строки лежат в каталоге за дату старта → раньше окно 10м/60м их теряло, счёт/кадр пропадал).
+        # строки лежат в каталоге за дату старта → раньше окно 10м/60м их теряло, мсек/кадр пропадал).
         # Реальную дату берём по переходам через полночь ВНУТРИ файла: время суток пошло назад
         # относительно предыдущей строки → следующий день (+1 к смещению).
         $prevTod = $null; $dayOffset = 0
@@ -269,9 +269,10 @@ if (Test-Path $logFile) {
             $lt = $baseDate.AddDays($dayOffset).Add($tod)
             $isStart = ($ln -match "Порог:")          # старт прогона motion_diff
             $isDiff  = ($ln -match "diff=")           # сохранённый diff-кадр
-            # реальная обработка кадра: 'счёт/кадр: min/avg/max мс' (есть и на diff-, и на пульс-строках)
+            # реальная обработка кадра: 'мсек/кадр: min/avg/max' (есть и на diff-, и на пульс-строках)
             $pm = $null
-            if ($ln -match 'счёт/кадр:\s*([\d.,]+)/([\d.,]+)/([\d.,]+)\s*мс') {
+            # приним. и новую метку 'мсек/кадр', и старую 'счёт/кадр' (логи ещё не перевыпущенных машин)
+            if ($ln -match '(?:счёт|мсек)/кадр:\s*([\d.,]+)/([\d.,]+)/([\d.,]+)(?:\s*мс)?') {
                 $pm = @([double]($Matches[1] -replace ',','.'), [double]($Matches[2] -replace ',','.'), [double]($Matches[3] -replace ',','.'))
             }
             if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++ }; if ($isStart) { $runs10m++ }; if ($pm) { $procMs10m = $pm } }
@@ -405,7 +406,7 @@ if ($count10m -gt 0) {
     $motionCpuLine = Get-CpuLine $motionMetaRoot 10
     $stats10m = Fmt-Runs $motionRuns10m $frameCount10m " (10м)" @() $motionCpuLine $procMs10m
 } else {
-    # совсем нет движения/diffs (тихая ночь) — но счёт/кадр (из heartbeat) и CPU показываем
+    # совсем нет движения/diffs (тихая ночь) — но мсек/кадр (из heartbeat) и CPU показываем
     $motionCpuLine = Get-CpuLine $motionMetaRoot 10
     $pm = if ($procMs10m -ne $null) { $procMs10m } else { $procMs60m }
     $extra = @("—")
