@@ -538,13 +538,16 @@ def main() -> int:
     # (ts_msk = 'YYYYMMDD_...') → meta/<день>/cpu.csv содержит только свой день.
     _cpu_for_day = lambda rows, day: [r for r in rows if str(r[1])[:8] == day]
 
-    def _flush_day_stats(date_str: str, clear: bool = True) -> None:
-        """Сохранить логи за date_str в images_dir/date_str/.
+    _flushed: dict = {}   # имя.csv → сколько строк лога уже на диске (для инкрементальной дозаписи)
 
-        clear=True (смена суток / конец прогона) — записать и обнулить.
-        clear=False (периодически во время прогона) — записать без обнуления,
-        чтобы frames.csv/diffs.csv были доступны на диске у ИДУЩЕГО прогона
-        (иначе они появлялись только при смене суток или в самом конце)."""
+    def _flush_day_stats(date_str: str, clear: bool = True) -> None:
+        """Сохранить логи за date_str в images_dir/date_str/ ИНКРЕМЕНТАЛЬНО.
+
+        Дописывает только НОВЫЕ строки с прошлого сброса (O(new)), а НЕ переписывает
+        весь файл. Иначе рост frames/diffs/pts.csv (десятки МБ к вечеру) давал синхронный
+        стойл захвата, растущий за день (замер: 1.5с@16:01 → 11с@23:56, ровно каждые 300с).
+        Первый сброс прогона — перезапись начисто (+заголовок); дальше append.
+        clear=True (смена суток/конец прогона) — дописать остаток и обнулить лог (+сброс индекса)."""
         if not date_str or not (saves_log or frame_log or diffs_log or pts_log):
             return
         day_dir = images_dir / date_str
@@ -555,13 +558,21 @@ def main() -> int:
             ("diffs.csv",  ["mono_s", "ts_msk", "cam", "diff"],                         diffs_log),
             ("pts.csv",    ["mono_s", "ts_msk", "url_id", "pts_ms"],                    pts_log),
         ]:
-            if _log:
-                with open(day_dir / _name, "w", newline="", encoding="utf-8") as _f:
+            if not _log:
+                continue
+            _done = _flushed.get(_name, 0)
+            _new = _log[_done:]
+            if _new:
+                _fresh = _done == 0          # первый сброс прогона → 'w'+заголовок; далее 'a'
+                with open(day_dir / _name, "w" if _fresh else "a", newline="", encoding="utf-8") as _f:
                     _w = csv.writer(_f)
-                    _w.writerow(_hdr)
-                    _w.writerows(_log)
-                if clear:
-                    _log.clear()
+                    if _fresh:
+                        _w.writerow(_hdr)
+                    _w.writerows(_new)
+                _flushed[_name] = len(_log)
+            if clear:
+                _log.clear()
+                _flushed[_name] = 0
         if clear:
             logger.info(f"  [день] {date_str} → статистика → {day_dir}")
 
