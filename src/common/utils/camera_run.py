@@ -550,6 +550,22 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
         except Exception:
             return 0.0
 
+    # Ось X = ВРЕМЯ СУТОК: raw mono → HH:MM:SS через опорный первый кадр. У per-day файла за
+    # сутки процесс мог стартовать накануне (mono 1-го кадра велик) → метки «от старта» путают.
+    def _sod(ts: str) -> float:
+        try:
+            _p = ts.split("_"); _t = _p[1]
+            _mc = int(_p[2]) if len(_p) > 2 and _p[2].isdigit() else 0
+            return int(_t[:2]) * 3600 + int(_t[2:4]) * 60 + int(_t[4:6]) + _mc / 1e6
+        except Exception:
+            return 0.0
+    _g_mono0 = pts_log[0][0]
+    _g_sod0  = _sod(pts_log[0][1])
+    def _x_tod(x, _pos):
+        _tot = int(_g_sod0 + (x - _g_mono0)) % 86400
+        return f"{_tot // 3600:02d}:{(_tot % 3600) // 60:02d}:{_tot % 60:02d}"
+    _x_fmt = _ticker.FuncFormatter(_x_tod)
+
     by_url: dict[str, list] = defaultdict(list)
     for row in pts_log:
         by_url[row[2]].append(row)
@@ -621,7 +637,7 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
                    label="wall − mono (с): расхождение стенных и mono часов")
         ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
         ax.set_ylabel("с")
-        ax.set_xlabel("время от старта, с")
+        ax.set_xlabel("время суток")
         ax.set_title(f"{url_id} — дрейф wall − mono (с)")
         ax.legend(loc="upper left", fontsize=8)
         ax.yaxis.set_major_locator(_ticker.MaxNLocator(8))
@@ -631,7 +647,10 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
     if cpu_log:
         ax = axes[ax_idx][0]
         draw_cpu_on_ax(ax, cpu_log, title="CPU usage, %")
-        ax.set_xlabel("время от старта, с")
+        ax.set_xlabel("время суток")
+
+    for _row in axes:                        # ось X всех панелей → время суток (HH:MM:SS)
+        _row[0].xaxis.set_major_formatter(_x_fmt)
 
     plt.tight_layout(rect=(0, 0, 1, 0.97))   # резерв под suptitle (не налезает)
     path = out_dir / "pts_chart.png"
