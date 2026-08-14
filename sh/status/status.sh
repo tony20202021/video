@@ -285,11 +285,13 @@ if [[ -n "${cam3_out:-}" && -n "$TS_CAMERAS_3" ]]; then
     _cimg="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/images/${_cday}"
     _cmeta="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/meta/${_cday}"
     _ctmp="$(mktemp -d)"
+    # -c aes128-gcm: у камеры (Pentium N3710) есть AES-NI → замер: 2.5 vs 1.2 МБ/с и пик CPU 51% vs 69%
+    # относительно дефолтного chacha20. Компрессия (-C) наоборот грузит CPU, throttle (-l) только замедляет.
     for _f in frames diffs pts saves; do
-        scp -o ConnectTimeout=10 -o BatchMode=yes \
+        scp -c aes128-gcm@openssh.com -o ConnectTimeout=10 -o BatchMode=yes \
             "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cimg/$_f.csv" "$_ctmp/" >/dev/null 2>&1 || true
     done
-    scp -o ConnectTimeout=10 -o BatchMode=yes \
+    scp -c aes128-gcm@openssh.com -o ConnectTimeout=10 -o BatchMode=yes \
         "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cmeta/cpu.csv" \
         "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cmeta/run_params.json" "$_ctmp/" >/dev/null 2>&1 || true
     if [[ -f "$_ctmp/frames.csv" && -f "$_ctmp/saves.csv" ]] && \
