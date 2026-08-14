@@ -699,6 +699,9 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     _all_monos = ([r[0] for r in frame_log] + [r[0] for r in diffs_log]
                   + [r[0] for r in saves_log] + [r[0] for r in cpu_log])
     t_max = max(_all_monos, default=1)
+    # mono ПЕРВОГО кадра файла: у per-day файла за сутки процесс мог стартовать накануне
+    # (mono0 велик) → без сдвига данные жмутся вправо, а метки времени суток врут. Ось = mono−mono0.
+    _mono0 = min(_all_monos, default=0.0)
 
     def _ts_parts(ts_str: str):
         try:
@@ -720,7 +723,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     _t0_ts    = _t0_first
     _t0_parts = _ts_parts(_t0_ts)
     _t0_abs   = (_t0_parts[0]*3600 + _t0_parts[1]*60 + _t0_parts[2]) if _t0_parts else 0
-    _x_left   = -(_t0_abs % 60)
+    _x_left   = _mono0 - (int(_t0_abs) % 60)   # левый край = первый кадр, выровнен на минуту
 
     _tick_range = t_max * 1.02 - _x_left
     _tick_step  = next((s for s in [60, 120, 180, 300, 600, 900, 1800]
@@ -739,7 +742,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     _tick_labels: list[str] = []
     _last_day_label = -1
     for _tp in _tick_positions:
-        _total = int(_t0_abs + _tp)
+        _total = int(_t0_abs + _tp - _mono0)   # tp относительно mono0 → реальное время суток
         _day   = _total // 86400          # 0 = день старта, 1 = следующий, …
         _hh    = (_total % 86400) // 3600
         _mm    = (_total % 3600) // 60
