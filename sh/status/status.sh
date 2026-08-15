@@ -279,27 +279,37 @@ fi
 # камеру не грузим matplotlib (motion_diff пишет только CSV при MOTION_RENDER_CHARTS=0). Тянем лёгкие CSV
 # по scp и строим графики здесь через 1_motion_diff.py --regen-from (best-effort: сбой НЕ ломает статус).
 # ВАЖНО: периодический флеш кладёт frames/diffs/pts/saves.csv в images/<день>/, а cpu.csv — в meta/<день>/.
-# Каталог дня — по дате сервера; при рассинхроне scp не найдёт (graceful).
-if [[ -n "${cam3_out:-}" && -n "$TS_CAMERAS_3" ]]; then
-    _cday="$(date +%Y%m%d)"
-    _cimg="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/images/${_cday}"
-    _cmeta="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff/meta/${_cday}"
-    _ctmp="$(mktemp -d)"
-    # -c aes128-gcm: у камеры (Pentium N3710) есть AES-NI → замер: 2.5 vs 1.2 МБ/с и пик CPU 51% vs 69%
-    # относительно дефолтного chacha20. Компрессия (-C) наоборот грузит CPU, throttle (-l) только замедляет.
+# СЕГОДНЯ + ВЧЕРА: сразу после полуночи сегодняшний график почти пуст, а вчера = весь день (ось «время суток»).
+# -c aes128-gcm: у камеры (Pentium N3710) есть AES-NI → 2.5 vs 1.2 МБ/с и пик CPU 51% vs 69% vs дефолтный chacha20.
+_cam3_render() {   # <дата YYYYMMDD> <out_cpu.png> <out_pts.png> — тянет CSV дня и строит cam3-графики
+    local _day="$1" _ocpu="$2" _opts="$3" _f
+    local _b="${TS_CAMERAS_3_REPO//\\//}/.output/pipeline/1_motion_diff"
+    local _t; _t="$(mktemp -d)"
     for _f in frames diffs pts saves; do
         scp -c aes128-gcm@openssh.com -o ConnectTimeout=10 -o BatchMode=yes \
-            "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cimg/$_f.csv" "$_ctmp/" >/dev/null 2>&1 || true
+            "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_b/images/${_day}/$_f.csv" "$_t/" >/dev/null 2>&1 || true
     done
     scp -c aes128-gcm@openssh.com -o ConnectTimeout=10 -o BatchMode=yes \
-        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cmeta/cpu.csv" \
-        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_cmeta/run_params.json" "$_ctmp/" >/dev/null 2>&1 || true
-    if [[ -f "$_ctmp/frames.csv" && -f "$_ctmp/saves.csv" ]] && \
-       "$_PY" "$REPO/scripts/pipeline/1_motion_diff.py" --regen-from "$_ctmp" >/dev/null 2>&1; then
-        [[ -f "$_ctmp/charts.png" ]]    && cp "$_ctmp/charts.png"    "${CHART_PREFIX}_cam3_cpu_fps.png"  && _charts+=("${TS_FILE}_cam3_cpu_fps.png")
-        [[ -f "$_ctmp/pts_chart.png" ]] && cp "$_ctmp/pts_chart.png" "${CHART_PREFIX}_cam3_pts_drift.png" && _charts+=("${TS_FILE}_cam3_pts_drift.png")
+        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_b/meta/${_day}/cpu.csv" \
+        "$TS_CAMERAS_3_USER@$TS_CAMERAS_3:$_b/meta/${_day}/run_params.json" "$_t/" >/dev/null 2>&1 || true
+    if [[ -f "$_t/frames.csv" && -f "$_t/saves.csv" ]] && \
+       "$_PY" "$REPO/scripts/pipeline/1_motion_diff.py" --regen-from "$_t" >/dev/null 2>&1; then
+        [[ -f "$_t/charts.png" ]]    && cp "$_t/charts.png"    "$_ocpu"
+        [[ -f "$_t/pts_chart.png" ]] && cp "$_t/pts_chart.png" "$_opts"
     fi
-    rm -rf "$_ctmp"
+    rm -rf "$_t"
+}
+if [[ -n "${cam3_out:-}" && -n "$TS_CAMERAS_3" ]]; then
+    # СЕГОДНЯ — всегда (данные растут за день)
+    _cam3_render "$(date +%Y%m%d)" "${CHART_PREFIX}_cam3_cpu_fps.png" "${CHART_PREFIX}_cam3_pts_drift.png"
+    [[ -f "${CHART_PREFIX}_cam3_cpu_fps.png" ]]   && _charts+=("${TS_FILE}_cam3_cpu_fps.png")
+    [[ -f "${CHART_PREFIX}_cam3_pts_drift.png" ]] && _charts+=("${TS_FILE}_cam3_pts_drift.png")
+    # ВЧЕРА — раз в сутки (кэш в OUT_DIR по дате): вчерашние данные статичны, не тянем ~50МБ CSV на каждый запуск
+    _yd="$(date -d 'yesterday' +%Y%m%d 2>/dev/null || date -v-1d +%Y%m%d)"
+    _yc_cpu="$OUT_DIR/_cam3_prev_${_yd}_cpu_fps.png"; _yc_pts="$OUT_DIR/_cam3_prev_${_yd}_pts_drift.png"
+    [[ -f "$_yc_cpu" ]] || _cam3_render "$_yd" "$_yc_cpu" "$_yc_pts"
+    [[ -f "$_yc_cpu" ]] && cp "$_yc_cpu" "${CHART_PREFIX}_cam3_cpu_fps_prev.png"   && _charts+=("${TS_FILE}_cam3_cpu_fps_prev.png")
+    [[ -f "$_yc_pts" ]] && cp "$_yc_pts" "${CHART_PREFIX}_cam3_pts_drift_prev.png" && _charts+=("${TS_FILE}_cam3_pts_drift_prev.png")
 fi
 
 echo ""
