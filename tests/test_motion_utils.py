@@ -15,9 +15,56 @@ from common.utils.motion_utils import (
     prepare_gray,
     read_hi_save_frame,
     redact_url,
+    resolve_cap_ts,
     skip_url,
     stem_from_var,
 )
+
+
+# ─── resolve_cap_ts (штамп времени съёмки: PTS-якорь + дрейф-гард) ───────────────
+
+def test_resolve_cap_ts_first_frame_anchors_to_wall():
+    # первый кадр (anchor=None) → якорь ставится на (pts, wall), время = wall
+    epoch, anchor, reanchored = resolve_cap_ts(1000.0, 500.0, None, drift_max_sec=60)
+    assert anchor == (1000.0, 500.0)
+    assert epoch == pytest.approx(500.0)
+    assert reanchored is False
+
+
+def test_resolve_cap_ts_normal_advance_uses_pts():
+    # PTS растёт 1:1 с wall, дрейфа нет → время по PTS-якорю, якорь не меняется
+    anchor = (1000.0, 100.0)               # pts0=1000мс, wall0=100с
+    epoch, new_anchor, reanchored = resolve_cap_ts(1500.0, 100.5, anchor, drift_max_sec=60)
+    assert epoch == pytest.approx(100.5)   # 100.0 + (1500-1000)/1000
+    assert new_anchor == anchor
+    assert reanchored is False
+
+
+def test_resolve_cap_ts_frozen_pts_reanchors_to_wall():
+    # PTS замер (1000мс), а wall ушёл на 120с вперёд → дрейф 120с > 60 → переякорь на wall
+    anchor = (1000.0, 100.0)
+    epoch, new_anchor, reanchored = resolve_cap_ts(1000.0, 220.0, anchor, drift_max_sec=60)
+    assert reanchored is True
+    assert epoch == pytest.approx(220.0)
+    assert new_anchor == (1000.0, 220.0)
+
+
+def test_resolve_cap_ts_pts_drop_resets_anchor():
+    # PTS упал (реконнект: 40мс << anchor.pts−500) → новый якорь на wall, время = wall
+    anchor = (60000.0, 100.0)
+    epoch, new_anchor, reanchored = resolve_cap_ts(40.0, 900.0, anchor, drift_max_sec=60)
+    assert new_anchor == (40.0, 900.0)
+    assert epoch == pytest.approx(900.0)
+    assert reanchored is False
+
+
+def test_resolve_cap_ts_no_pts_uses_wall():
+    # PTS недоступен (<=0) → время по wall, якорь не трогаем
+    anchor = (1000.0, 100.0)
+    epoch, new_anchor, reanchored = resolve_cap_ts(0.0, 777.0, anchor, drift_max_sec=60)
+    assert epoch == pytest.approx(777.0)
+    assert new_anchor == anchor
+    assert reanchored is False
 
 
 # ─── redact_url ───────────────────────────────────────────────────────────────

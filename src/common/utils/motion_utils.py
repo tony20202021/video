@@ -29,6 +29,30 @@ def skip_url(url: str) -> bool:
     return not u or u.startswith("#") or ("<" in u and ">" in u) or not u.lower().startswith("rtsp://")
 
 
+def resolve_cap_ts(pts_ms: float, wall_epoch: float,
+                   anchor: "tuple[float, float] | None",
+                   drift_max_sec: float) -> "tuple[float, tuple[float, float] | None, bool]":
+    """Время СЪЁМКИ кадра (unix-epoch) для имени файла — по PTS-якорю с дрейф-гардом.
+
+    Имя штампуется по PTS съёмки (CAP_PROP_POS_MSEC): epoch = anchor_wall + (pts − anchor_pts).
+    Якорь (pts0, wall0) фиксируется на первом кадре и при реконнекте (pts упал > 500мс).
+    НО у нестабильного субпотока PTS «рваный/замерзает» → epoch уезжает от реального времени на
+    ЧАСЫ (кадры при этом ЖИВЫЕ — проверено по OSD камеры). ДРЕЙФ-ГАРД: если |wall − pts_epoch| >
+    drift_max_sec, якорь протух → переякориваемся на wall и штампуем по wall (для live-потока
+    wall ≈ истинная съёмка в пределах секунд). Переякорь чище реконнекта — не рвёт поток.
+
+    Возвращает (cap_epoch, new_anchor, reanchored). Сырой pts_ms остаётся в pts.csv для диагностики.
+    """
+    if pts_ms and pts_ms > 0:
+        if anchor is None or pts_ms < anchor[0] - 500:      # первый кадр / реконнект (pts сброшен)
+            anchor = (pts_ms, wall_epoch)
+        pts_epoch = anchor[1] + (pts_ms - anchor[0]) / 1000.0
+        if abs(wall_epoch - pts_epoch) > drift_max_sec:     # дрейф протух → переякорь на wall
+            return wall_epoch, (pts_ms, wall_epoch), True
+        return pts_epoch, anchor, False
+    return wall_epoch, anchor, False                        # pts недоступен → wall
+
+
 def ffmpeg_capture_options(
     *,
     use_tcp: bool,

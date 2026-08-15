@@ -73,6 +73,7 @@ from common.utils.motion_utils import (
     open_cap as _open_cap,
     prepare_gray as _prepare_gray,
     redact_url,
+    resolve_cap_ts as _resolve_cap_ts,
     skip_url as _skip_url,
     stem_from_var as _stem_from_env_var,
 )
@@ -457,8 +458,13 @@ def main() -> int:
     threshold_by_cam: dict[str, float] = {vn: _zone_threshold(vn) for vn, _ in opened_vars}
     prev_pts: dict[str, float] = {lu: -1.0 for lu in low_unique}
     # Якорь PTS→wall-clock для штампа по времени СЪЁМКИ кадра: {url: (pts0_мс, pc0_эпоха)}.
-    # Сбрасывается при реконнекте (pts падает). Иммунно к задержке доставки/столлам (в отличие от wall-clock).
+    # Сбрасывается при реконнекте (pts падает). ДРЕЙФ-ГАРД (resolve_cap_ts): у нестабильного субпотока
+    # PTS «рваный/замерзает» → штамп уезжает на часы, хотя кадры ЖИВЫЕ (проверено по OSD камеры) —
+    # если |wall−pts_epoch| > MOTION_PTS_DRIFT_MAX_SEC, переякориваемся на wall. Сырой PTS → в pts.csv.
     pts_anchor: dict[str, tuple[float, float]] = {}
+    _pts_reanchors: dict[str, int] = defaultdict(int)
+    _pts_drift_log_t: dict[str, float] = {}
+    _PTS_DRIFT_MAX = float(os.environ.get("MOTION_PTS_DRIFT_MAX_SEC", "60") or 60)
     _MAX_LOW_IMPLAUSIBLE = 40
     _low_implausible: dict[str, int] = defaultdict(int)
 
@@ -662,17 +668,20 @@ def main() -> int:
                     continue
                 _low_implausible[low_u] = 0
 
-                # Штамп по времени СЪЁМКИ кадра (PTS = CAP_PROP_POS_MSEC), а не по времени обработки.
-                # Якорь (pts0, pc0) на URL → cap_epoch = pc0 + (pts−pts0); сброс при реконнекте (pts упал).
-                # Иммунно к задержке доставки/столлам: буферизованный кадр получает своё истинное время.
-                if _pts and _pts > 0:
-                    _a = pts_anchor.get(low_u)
-                    if _a is None or _pts < _a[0] - 500:      # первый кадр / реконнект (pts сброшен)
-                        _a = (_pts, time.time())
-                        pts_anchor[low_u] = _a
-                    cap_ts = ts_file_from_epoch(_a[1] + (_pts - _a[0]) / 1000.0)
-                else:
-                    cap_ts = ts_for_file()                    # фолбэк: pts недоступен
+                # Штамп по времени СЪЁМКИ кадра (PTS = CAP_PROP_POS_MSEC) с ДРЕЙФ-ГАРДОМ: PTS этого
+                # субпотока «рваный/замерзает» → якорь протухает, штамп уезжает на часы, хотя поток
+                # ЖИВОЙ (проверено по OSD). resolve_cap_ts: если |wall−pts_epoch|>порога — переякорь
+                # на wall и штамп по wall. Сырой _pts уже записан в pts_log/pts.csv (диагностика дрейфа).
+                _wall = time.time()
+                _cap_epoch, pts_anchor[low_u], _reanchored = _resolve_cap_ts(
+                    _pts, _wall, pts_anchor.get(low_u), _PTS_DRIFT_MAX)
+                cap_ts = ts_file_from_epoch(_cap_epoch)
+                if _reanchored:
+                    _pts_reanchors[low_u] += 1
+                    if _wall - _pts_drift_log_t.get(low_u, 0.0) > 60:   # не спамить: раз в минуту на URL
+                        _pts_drift_log_t[low_u] = _wall
+                        logger.warning("  [!] PTS-дрейф > %.0fс — штамп по wall, переякорь (%d) %s",
+                                       _PTS_DRIFT_MAX, _pts_reanchors[low_u], low_u)
 
                 _now = time.monotonic()
                 for vn in var_list:
