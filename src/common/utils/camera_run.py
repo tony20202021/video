@@ -666,8 +666,12 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
                 title: str = "camera run",
                 event_type: str = "yolo",
                 save_colors: "dict | None" = None,
-                save_levels: "dict | None" = None) -> None:
-    """Строит и сохраняет совмещённый PNG: интервалы кадров + дифы + сохранения + ЦПУ."""
+                save_levels: "dict | None" = None,
+                thresholds: "dict | None" = None) -> None:
+    """Строит и сохраняет совмещённый PNG: интервалы кадров + дифы + сохранения + ЦПУ.
+
+    thresholds — по-зонный порог diff {cam_stem: value}. Если задан и у зон РАЗНЫЕ пороги —
+    на diff-панелях рисуется линия на каждую зону в её цвете; иначе один общий `threshold`."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -854,17 +858,29 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         p95 = float(_np.percentile(all_diffs, 95)) if all_diffs else threshold * 10
 
         def _draw_diffs_ax(ax, ylim=None):
-            for ci, (cam, rows) in enumerate(sorted(by_cam.items())):
+            cams_sorted = sorted(by_cam.items())
+            cam_color: dict = {}
+            for ci, (cam, rows) in enumerate(cams_sorted):
                 dt    = [r[0] for r in rows]
                 dv    = [r[3] for r in rows]
                 color = _CAM_COLORS[ci % len(_CAM_COLORS)]
+                cam_color[cam] = color
                 ax.scatter(dt, dv, color=color, s=16, alpha=0.45, label=cam,
                            marker=_MARKERS[ci % len(_MARKERS)])
-            ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0,
-                       label=f"порог diff={threshold}")
-            # подпись у левого края ОСИ (а не x=0: у per-day файла _x_left велик,
-            # поэтому текст в x=0 улетал за левое поле фигуры)
-            ax.text(_x_left, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
+            # Пороги diff: ПО ЗОНАМ (если заданы и различаются) — линия на каждую зону в ЕЁ цвете,
+            # чтобы видеть какой порог к какой зоне; иначе одна общая линия (подпись у левого края ОСИ:
+            # x=0 у per-day файла улетал за левое поле, т.к. _x_left велик).
+            _zt = {cam: float(thresholds.get(cam, threshold)) for cam, _ in cams_sorted} if thresholds else {}
+            if _zt and len(set(_zt.values())) > 1:
+                for cam, thr in _zt.items():
+                    _c = cam_color.get(cam, "red")
+                    ax.axhline(thr, color=_c, linestyle="--", linewidth=1.2, alpha=0.9)
+                    ax.text(_x_left, thr * 1.03, f"порог {cam.split('_')[-1]}={thr:g}",
+                            fontsize=8, color=_c)
+            else:
+                ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0,
+                           label=f"порог diff={threshold}")
+                ax.text(_x_left, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
             ax.set_ylabel("diff")
             ax.set_xlim(_x_left, t_max * 1.02)
             if ylim is not None:

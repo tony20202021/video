@@ -90,12 +90,13 @@ _S4_SAVE_COLORS = {"baseline": "#888888", "diff": "#cc3333", "heartbeat": "#8844
 _S4_SAVE_LEVELS = {"baseline": 1, "diff": 2, "heartbeat": 3, "raw": 4}
 
 
-def _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, out_dir):
+def _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, out_dir, thresholds=None):
     _save_charts_base(frame_log, cpu_log, saves_log, diffs_log, threshold, out_dir,
                       title="4_motion_diff_low",
                       event_type="diff",
                       save_colors=_S4_SAVE_COLORS,
-                      save_levels=_S4_SAVE_LEVELS)
+                      save_levels=_S4_SAVE_LEVELS,
+                      thresholds=thresholds)
 
 
 # ─── Вспомогательные классы ───────────────────────────────────────────────────
@@ -254,14 +255,17 @@ def _regen_charts(run_dir: Path) -> None:
                  for r in _load("pts.csv") if len(r) >= 4]
 
     threshold = 10.0
+    thresholds = None
     params_path = run_dir / "run_params.json"
     if params_path.exists():
         try:
-            threshold = float(_json.loads(params_path.read_text(encoding="utf-8")).get("threshold", 10.0))
+            _params = _json.loads(params_path.read_text(encoding="utf-8"))
+            threshold = float(_params.get("threshold", 10.0))
+            thresholds = _params.get("thresholds") or None   # {стем зоны: порог} — по-зонные линии
         except Exception:
             pass
 
-    _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, run_dir)
+    _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, run_dir, thresholds=thresholds)
     _save_pts_chart(pts_log, cpu_log, run_dir)
     _save_run_stats(frame_log, pts_log, saves_log, diffs_log, run_dir)
     osd_log = _regen_osd_from_images(run_dir)
@@ -480,6 +484,9 @@ def main() -> int:
         "started_at_msk": _ts_iso(),
         "script": "4_motion_diff_low.py",
         "threshold": threshold,
+        # ПО-ЗОННЫЕ пороги (стем зоны → порог) для графика: regen на сервере не знает камерный .env,
+        # поэтому несём их здесь. Если у зон разные пороги — на графике будет линия на каждую зону.
+        "thresholds": {_stem_from_env_var(vn): thr for vn, thr in threshold_by_cam.items()},
         "heartbeat_sec": heartbeat_sec,
         "tcp": args.tcp,
         "duration_sec": args.duration,
@@ -796,7 +803,8 @@ def main() -> int:
         _save_cpu_csv(_cpu_cur, meta_dir)
 
         if render_charts:   # по умолчанию ВЫКЛ — графики строит сервер (см. MOTION_RENDER_CHARTS)
-            _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir)
+            _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir,
+                         thresholds={_stem_from_env_var(vn): thr for vn, thr in threshold_by_cam.items()})
             _save_pts_chart(pts_log, _cpu_cur, meta_dir)
         _save_run_stats(frame_log, pts_log, saves_log, diffs_log, meta_dir)
 
