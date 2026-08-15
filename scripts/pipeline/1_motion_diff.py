@@ -444,6 +444,17 @@ def main() -> int:
     last_good_frame: dict[str, np.ndarray | None] = {vn: None for vn, _ in opened_vars}
     last_heartbeat: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
     last_save_time: dict[str, float] = {vn: time.monotonic() for vn, _ in opened_vars}
+    # Порог diff ПО ЗОНЕ: env <VAR_без_URL>_MOTION_THRESHOLD переопределяет глобальный для этой кроп-зоны.
+    # По умолчанию = глобальный (нагрузка не растёт). Верхняя зона (U) даёт меньше diff → можно понизить её
+    # порог, чтобы плотнее ловить человека наверху — ценой большего числа сохранённых кадров.
+    def _zone_threshold(vn: str) -> float:
+        base = vn[:-4] if vn.endswith("_URL") else vn
+        raw = (os.environ.get(base + "_MOTION_THRESHOLD") or "").strip()
+        try:
+            return float(raw) if raw else threshold
+        except ValueError:
+            return threshold
+    threshold_by_cam: dict[str, float] = {vn: _zone_threshold(vn) for vn, _ in opened_vars}
     prev_pts: dict[str, float] = {lu: -1.0 for lu in low_unique}
     # Якорь PTS→wall-clock для штампа по времени СЪЁМКИ кадра: {url: (pts0_мс, pc0_эпоха)}.
     # Сбрасывается при реконнекте (pts падает). Иммунно к задержке доставки/столлам (в отличие от wall-clock).
@@ -490,6 +501,10 @@ def main() -> int:
 
     duration_desc = f"{args.duration:.0f} сек" if args.duration > 0 else "бесконечно"
     logger.info(f"Порог:     {threshold}  [{threshold_from}]")
+    _zt_over = {vn: t for vn, t in threshold_by_cam.items() if t != threshold}
+    if _zt_over:
+        logger.info("Пороги по зонам (override .env): %s",
+                    ", ".join(f"{vn}={t}" for vn, t in _zt_over.items()))
     logger.info(f"Пульс:     {heartbeat_sec} сек  [{heartbeat_from}]")
     logger.info(f"Длит.:     {duration_desc}")
     logger.info(f"Вывод:     images={images_dir}  meta={meta_dir}")
@@ -674,7 +689,7 @@ def main() -> int:
                     diffs_log.append([round(_now - t_start, 4), _ts_str, vn, round(diff, 3)])
                     prev_gray[vn] = gray
 
-                    if diff > threshold:
+                    if diff > threshold_by_cam[vn]:
                         calib = rtcp_workers[low_u].get_calib() if rtcp_workers else None
                         stem = _stem_from_env_var(vn)
                         fname = f"{stem}_{_ts(calib, cap_ts)}_diff{diff:.1f}.jpg"
