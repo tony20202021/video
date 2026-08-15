@@ -248,6 +248,7 @@ if (Test-Path $logFile) {
     $cutoff60 = (Get-Date).AddMinutes(-60)
     $count60m = 0
     $runs10m  = 0; $runs60m  = 0
+    $drift10m = 0; $drift60m = 0             # срабатывания дрейф-гарда PTS ('[!] PTS-дрейф' → штамп по wall)
     $procMs10m = $null; $procMs60m = $null   # последняя тройка 'мсек/кадр' (реальная обработка) в окне
     $metaRoot2  = Join-Path $motionDir "meta"
     $recentDirs = if (Test-Path $metaRoot2) { Get-ChildItem $metaRoot2 -Directory | Sort-Object Name -Descending | Select-Object -First 2 } else { @() }
@@ -261,7 +262,7 @@ if (Test-Path $logFile) {
         # относительно предыдущей строки → следующий день (+1 к смещению).
         $prevTod = $null; $dayOffset = 0
         foreach ($ln in (Get-Content $rf -Encoding UTF8)) {
-            if ($ln -notmatch "^(\d{2}:\d{2}:\d{2})\s+INFO") { continue }
+            if ($ln -notmatch "^(\d{2}:\d{2}:\d{2})\s+(?:INFO|WARNING)") { continue }   # WARNING нужен для '[!] PTS-дрейф'
             $ts2 = $Matches[1]
             try { $tod = [TimeSpan]::Parse($ts2) } catch { continue }
             if ($null -ne $prevTod -and $tod -lt $prevTod) { $dayOffset++ }
@@ -269,14 +270,15 @@ if (Test-Path $logFile) {
             $lt = $baseDate.AddDays($dayOffset).Add($tod)
             $isStart = ($ln -match "Порог:")          # старт прогона motion_diff
             $isDiff  = ($ln -match "diff=")           # сохранённый diff-кадр
+            $isDrift = ($ln -match "PTS-дрейф")       # дрейф-гард сработал → метка по wall
             # реальная обработка кадра: 'мсек/кадр: min/avg/max' (есть и на diff-, и на пульс-строках)
             $pm = $null
             # приним. и новую метку 'мсек/кадр', и старую 'счёт/кадр' (логи ещё не перевыпущенных машин)
             if ($ln -match '(?:счёт|мсек)/кадр:\s*([\d.,]+)/([\d.,]+)/([\d.,]+)(?:\s*мс)?') {
                 $pm = @([double]($Matches[1] -replace ',','.'), [double]($Matches[2] -replace ',','.'), [double]($Matches[3] -replace ',','.'))
             }
-            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++ }; if ($isStart) { $runs10m++ }; if ($pm) { $procMs10m = $pm } }
-            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++ }; if ($isStart) { $runs60m++ }; if ($pm) { $procMs60m = $pm } }
+            if ($lt -ge $cutoff)   { if ($isDiff) { $count10m++ }; if ($isStart) { $runs10m++ }; if ($isDrift) { $drift10m++ }; if ($pm) { $procMs10m = $pm } }
+            if ($lt -ge $cutoff60) { if ($isDiff) { $count60m++ }; if ($isStart) { $runs60m++ }; if ($isDrift) { $drift60m++ }; if ($pm) { $procMs60m = $pm } }
         }
     }
     # нет стартов в окне, но есть активность → 1 непрерывный прогон; иначе N рестартов
@@ -414,6 +416,13 @@ if ($count10m -gt 0) {
     if ($pf -ne "")            { $extra += $pf }
     if ($motionCpuLine -ne "") { $extra += $motionCpuLine }
     $stats10m = if ($extra.Count -gt 1) { $extra -join "<br>" } else { "--" }
+}
+
+# Дрейф-гард PTS: если срабатывал в окне — показать (сигнал нестабильности субпотока: метки чинятся по wall)
+if ($drift10m -gt 0 -or $drift60m -gt 0) {
+    $dn = if ($drift10m -gt 0) { "$drift10m x (10м)" } else { "$drift60m x (1ч)" }
+    $prefix = if ($stats10m -eq "--") { "" } else { "$stats10m<br>" }
+    $stats10m = $prefix + "[!] PTS-дрейф $dn -> штамп по wall"
 }
 
 # stats для 2_send: 10м с таймингом + CPU (cpu.csv клиента). CPU есть даже без отправок.
