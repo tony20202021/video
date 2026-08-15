@@ -874,9 +874,9 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
             if _zt and len(set(_zt.values())) > 1:
                 for cam, thr in _zt.items():
                     _c = cam_color.get(cam, "red")
+                    _zn = cam.replace("_URL", "").split("_")[-1]   # зона из CAM_..._D_URL → 'D'
                     ax.axhline(thr, color=_c, linestyle="--", linewidth=1.2, alpha=0.9)
-                    ax.text(_x_left, thr * 1.03, f"порог {cam.split('_')[-1]}={thr:g}",
-                            fontsize=8, color=_c)
+                    ax.text(_x_left, thr * 1.03, f"порог {_zn}={thr:g}", fontsize=8, color=_c)
             else:
                 ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0,
                            label=f"порог diff={threshold}")

@@ -484,9 +484,9 @@ def main() -> int:
         "started_at_msk": _ts_iso(),
         "script": "4_motion_diff_low.py",
         "threshold": threshold,
-        # ПО-ЗОННЫЕ пороги (стем зоны → порог) для графика: regen на сервере не знает камерный .env,
-        # поэтому несём их здесь. Если у зон разные пороги — на графике будет линия на каждую зону.
-        "thresholds": {_stem_from_env_var(vn): thr for vn, thr in threshold_by_cam.items()},
+        # ПО-ЗОННЫЕ пороги для графика: regen на сервере не знает камерный .env, несём их здесь.
+        # Ключ — как в diffs.csv/by_cam (ПЕРЕМЕННАЯ CAM_..._URL), иначе линии не сматчатся с данными.
+        "thresholds": dict(threshold_by_cam),
         "heartbeat_sec": heartbeat_sec,
         "tcp": args.tcp,
         "duration_sec": args.duration,
@@ -804,7 +804,7 @@ def main() -> int:
 
         if render_charts:   # по умолчанию ВЫКЛ — графики строит сервер (см. MOTION_RENDER_CHARTS)
             _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir,
-                         thresholds={_stem_from_env_var(vn): thr for vn, thr in threshold_by_cam.items()})
+                         thresholds=dict(threshold_by_cam))
             _save_pts_chart(pts_log, _cpu_cur, meta_dir)
         _save_run_stats(frame_log, pts_log, saves_log, diffs_log, meta_dir)
 
