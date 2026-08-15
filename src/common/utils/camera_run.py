@@ -709,9 +709,10 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     )
     fig, axes = plt.subplots(
         n_rows, 1,
-        figsize=(14, sum(height_ratios) * 1.5),
+        figsize=(14, sum(height_ratios) * 1.05),
         squeeze=False,
         gridspec_kw={"height_ratios": height_ratios},
+        constrained_layout=True,   # авто-подгонка зазоров (меньше пустот, чем голый tight_layout)
     )
     fig.suptitle(f"{title} — кадры и загрузка ЦПУ", fontsize=11)
 
@@ -861,7 +862,9 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
                            marker=_MARKERS[ci % len(_MARKERS)])
             ax.axhline(threshold, color="red", linestyle="--", linewidth=1.0,
                        label=f"порог diff={threshold}")
-            ax.text(0, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
+            # подпись у левого края ОСИ (а не x=0: у per-day файла _x_left велик,
+            # поэтому текст в x=0 улетал за левое поле фигуры)
+            ax.text(_x_left, threshold * 1.03, f"порог {threshold}", fontsize=8, color="red")
             ax.set_ylabel("diff")
             ax.set_xlim(_x_left, t_max * 1.02)
             if ylim is not None:
@@ -938,7 +941,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         _ax.xaxis.set_major_locator(_x_loc)
     axes[-1][0].set_xlabel("время МСК")
 
-    plt.tight_layout(rect=(0, 0, 1, 0.97))   # резерв под suptitle (не налезает)
+    # компоновка — через constrained_layout (см. plt.subplots выше); tight_layout не нужен
     chart_path = out_dir / "charts.png"
     plt.savefig(str(chart_path), dpi=120)
     plt.close()

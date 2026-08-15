@@ -375,7 +375,11 @@ def _render_smoothing_viz(centers: dict, pass_frames: list[dict], files: dict, d
     HH = 40
     midx = [i for i, fr in enumerate(seg) if fr["name"] in mark_names]
     rep = seg[midx[0]]["name"]
-    hdr = f"pass: {len(centers)} fixes, {len(errors)} err vs truth  (all frames shown, max {max_tiles})  {rep}"
+    # merged-конкат из нескольких зон одной камеры (u+d): имя файла получает общий суффикс (…_du_),
+    # а rep — имя одного кадра с одиночной зоной. Помечаем это в заголовке, чтобы не путать.
+    _zones = sorted({z for fr in seg for z in [_split_zone(Path(fr["name"]).stem)[1]] if z})
+    _ztag = f"  [merged zones: {'+'.join(_zones)}]" if len(_zones) > 1 else ""
+    hdr = f"pass: {len(centers)} fixes, {len(errors)} err vs truth  (all frames shown, max {max_tiles})  {rep}{_ztag}"
     legend = "num time | yellow=fixed  magenta=err-vs-truth  red=M>1"
     if prob_window_sec:
         legend += "  green=in-window(w:owners)  |=win-break"
@@ -503,7 +507,7 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
     if viz and (viz_targets or errors):
         vdir = viz_dir or (out_dir / "smooth_viz")
         sig = (f"{len(rows)}:{version}:pw{prob_window_sec}:k{prob_window_kmax}:tri{int(prob_window_tri)}"
-               f":hv{int(hard_vote)}:mz{int(merge_zones)}:zn2:t{len(errors)}")   # mz/zn2 → перерисовать конкаты при смене склейки/именования
+               f":hv{int(hard_vote)}:mz{int(merge_zones)}:zn3:t{len(errors)}")   # mz/znN → перерисовать конкаты при смене склейки/именования/заголовка
         marker = vdir / ".viz_rows"
         prev = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
         if prev == sig and any(vdir.glob("*.jpg")):
