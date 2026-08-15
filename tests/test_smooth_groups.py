@@ -235,6 +235,17 @@ def test_merge_zones_cam_key():
                         merge_zones=True)[0] == "cam_02_9"         # другая физ. камера — отдельный ключ
 
 
+def test_split_zone_merged_concat_name():
+    # имя merged-конката: зона d/u перед датой → общий суффикс из зон прохода (cam_01_9_du)
+    from common.utils.smooth_core import _split_zone
+    n = "cam_01_9_d_20260815_025614_889277_msk_diff4.7_p1of1_conf0.88_b341-1-517-225"
+    pre, z, suf = _split_zone(n)
+    assert pre == ["cam", "01", "9"] and z == "d" and suf[0] == "20260815"
+    zs = sorted({zz for nm in [n, n.replace("_d_", "_u_")] for zz in [_split_zone(nm)[1]] if zz})
+    assert "_".join(pre + ["".join(zs)] + suf).startswith("cam_01_9_du_20260815_025614")
+    assert _split_zone("cam_02_20260815_010101_1_msk")[1] is None   # без суффикса зоны — не ломается
+
+
 def test_smooth_date_viz_writes_concats(tmp_path):
     m = _load()
     dd = _make_dir(tmp_path)

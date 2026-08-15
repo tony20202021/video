@@ -110,6 +110,19 @@ def _parse_cam_t(name: str, merge_zones: bool = False) -> tuple[str, float] | No
     return None
 
 
+def _split_zone(stem: str):
+    """(prefix_parts, zone, suffix_parts): zone = одиночная буква (d/u) ПЕРЕД 8-значной датой.
+    Если суффикса зоны нет — zone=None. Для сборки имени merged-конката с общей зоной (u+d)."""
+    parts = stem.split("_")
+    for i in range(1, len(parts)):
+        if (len(parts[i]) == 8 and parts[i].isdigit()
+                and i + 1 < len(parts) and len(parts[i + 1]) == 6 and parts[i + 1].isdigit()):
+            if len(parts[i - 1]) == 1 and parts[i - 1].isalpha():
+                return parts[:i - 1], parts[i - 1], parts[i:]
+            return parts[:i], None, parts[i:]
+    return None, None, None
+
+
 def _index_files(date_dir: Path, ext: str = "jpg") -> dict[str, Path]:
     idx: dict[str, Path] = {}
     for f in date_dir.rglob(f"*.{ext}"):
@@ -489,7 +502,8 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
 
     if viz and (viz_targets or errors):
         vdir = viz_dir or (out_dir / "smooth_viz")
-        sig = f"{len(rows)}:{version}:pw{prob_window_sec}:k{prob_window_kmax}:tri{int(prob_window_tri)}:hv{int(hard_vote)}:t{len(errors)}"
+        sig = (f"{len(rows)}:{version}:pw{prob_window_sec}:k{prob_window_kmax}:tri{int(prob_window_tri)}"
+               f":hv{int(hard_vote)}:mz{int(merge_zones)}:zn2:t{len(errors)}")   # mz/zn2 → перерисовать конкаты при смене склейки/именования
         marker = vdir / ".viz_rows"
         prev = marker.read_text(encoding="utf-8").strip() if marker.is_file() else ""
         if prev == sig and any(vdir.glob("*.jpg")):
@@ -511,9 +525,16 @@ def smooth_date(date_dir: Path, cfg: SmoothCfg, *, gap: float, p_stay: float, ga
                     errs = {n for n in vis_names if n in errors}
                     pass_frames = [frs[j] for j in vis]
                     rep = min(n for n in vis_names if n in interesting)
+                    rep_stem = Path(rep).stem
+                    if merge_zones:   # merged-конкат: общий суффикс зон (напр. cam_01_9_du), если в проходе обе
+                        _zs = sorted({z for n in vis_names for z in [_split_zone(Path(n).stem)[1]] if z})
+                        if len(_zs) > 1:
+                            _pre, _z, _suf = _split_zone(rep_stem)
+                            if _pre is not None:
+                                rep_stem = "_".join(_pre + ["".join(_zs)] + _suf)
                     try:
                         if _render_smoothing_viz(centers, pass_frames, files, date_dir.name,
-                                                 vdir / f"{Path(rep).stem}.jpg", ctx,
+                                                 vdir / f"{rep_stem}.jpg", ctx,
                                                  prob_window_sec=prob_window_sec, prob_window_kmax=prob_window_kmax,
                                                  prob_window_tri=prob_window_tri, errors=errs, truth=truth):
                             viz_n += 1
