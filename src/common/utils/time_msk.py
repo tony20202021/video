@@ -1,8 +1,26 @@
-"""Вспомогательные функции для московского времени (UTC+3)."""
+"""Вспомогательные функции для времени в именах файлов. По умолчанию МСК (UTC+3);
+смещение настраивается через .env: TZ_OFFSET_HOURS (напр. 3). Суффикс имён — всегда '_msk'."""
 
+import os
 from datetime import datetime, timedelta, timezone
 
-MSK = timezone(timedelta(hours=3))
+
+def _offset_from_env() -> float:
+    try:
+        return float(os.environ.get("TZ_OFFSET_HOURS", "3"))
+    except (ValueError, TypeError):
+        return 3.0
+
+
+# Часовой пояс меток. Серверные .sh сорсят .env в окружение → подхватывается при импорте.
+# motion_diff грузит .env позже (load_dotenv) → вызывает set_tz_offset() после загрузки (см. main).
+MSK = timezone(timedelta(hours=_offset_from_env()))
+
+
+def set_tz_offset(hours: "float | None" = None) -> None:
+    """Переустановить пояс меток (после load_dotenv). None → перечитать TZ_OFFSET_HOURS из окружения."""
+    global MSK
+    MSK = timezone(timedelta(hours=_offset_from_env() if hours is None else float(hours)))
 
 
 def now_msk() -> datetime:

@@ -76,7 +76,7 @@ from common.utils.motion_utils import (
     skip_url as _skip_url,
     stem_from_var as _stem_from_env_var,
 )
-from common.utils.time_msk import ts_cam_for_file, ts_file_from_epoch, ts_for_dir, ts_for_file
+from common.utils.time_msk import set_tz_offset, ts_cam_for_file, ts_file_from_epoch, ts_for_dir, ts_for_file
 import logging
 from common.utils.log_setup import setup_logging, add_file_handler
 
@@ -342,6 +342,7 @@ def main() -> int:
         return 1
 
     load_dotenv(args.env, override=True)
+    set_tz_offset()   # пояс меток из .env (TZ_OFFSET_HOURS, дефолт МСК=3) — .env загружен только сейчас
 
     if args.threshold is not None:
         threshold = float(args.threshold)
