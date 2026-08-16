@@ -254,6 +254,23 @@ def _regen_charts(run_dir: Path) -> None:
     pts_log   = [[_f(r[0]), r[1], r[2], _f(r[3])]
                  for r in _load("pts.csv") if len(r) >= 4]
 
+    # mono_s → СЕКУНДЫ СУТОК (из ts_msk): у каждого прогона mono с нуля, поэтому после рестарта
+    # (день теперь ДОПИСЫВАЕТСЯ) mono немонотонен и ось графика ломается. Секунды суток монотонны
+    # в пределах дня → ось = реальное время суток, стык прогонов даёт корректный разрыв.
+    def _sod(ts: str):
+        try:
+            p = ts.split("_"); t = p[1]
+            mc = int(p[2]) if len(p) > 2 and p[2].isdigit() else 0
+            return int(t[:2]) * 3600 + int(t[2:4]) * 60 + int(t[4:6]) + mc / 1e6
+        except Exception:
+            return None
+    for _lg in (frame_log, saves_log, diffs_log, cpu_log, pts_log):
+        for _r in _lg:
+            _s = _sod(_r[1])
+            if _s is not None:
+                _r[0] = _s
+        _lg.sort(key=lambda r: r[0])
+
     threshold = 10.0
     thresholds = None
     params_path = run_dir / "run_params.json"
@@ -480,23 +497,28 @@ def main() -> int:
 
     import json as _json
     from common.utils.time_msk import ts_iso as _ts_iso
-    (meta_dir / "run_params.json").write_text(_json.dumps({
-        "started_at_msk": _ts_iso(),
-        "script": "4_motion_diff_low.py",
-        "threshold": threshold,
-        # ПО-ЗОННЫЕ пороги для графика: regen на сервере не знает камерный .env, несём их здесь.
-        # Ключ — как в diffs.csv/by_cam (ПЕРЕМЕННАЯ CAM_..._URL), иначе линии не сматчатся с данными.
-        "thresholds": dict(threshold_by_cam),
-        "heartbeat_sec": heartbeat_sec,
-        "tcp": args.tcp,
-        "duration_sec": args.duration,
-        "cam_ts": args.cam_ts,
-        "cpu_interval": args.cpu_interval,
-        "cameras": [vn for vn, _ in opened_vars],
-        "crop_global": list(global_crop) if global_crop else None,
-        "images_dir": str(images_dir),
-        "meta_dir":   str(meta_dir),
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    def _write_run_params(mdir: Path) -> None:
+        # Пишем при старте И на перекате полночи (иначе у перекатившегося дня run_params нет →
+        # regen на сервере берёт дефолт threshold=10 и рисует «порог 10» вместо реального).
+        # ПО-ЗОННЫЕ пороги — для графика (regen не знает камерный .env); ключ как в diffs.csv/by_cam
+        # (ПЕРЕМЕННАЯ CAM_..._URL), иначе линии не сматчатся с данными.
+        (mdir / "run_params.json").write_text(_json.dumps({
+            "started_at_msk": _ts_iso(),
+            "script": "4_motion_diff_low.py",
+            "threshold": threshold,
+            "thresholds": dict(threshold_by_cam),
+            "heartbeat_sec": heartbeat_sec,
+            "tcp": args.tcp,
+            "duration_sec": args.duration,
+            "cam_ts": args.cam_ts,
+            "cpu_interval": args.cpu_interval,
+            "cameras": [vn for vn, _ in opened_vars],
+            "crop_global": list(global_crop) if global_crop else None,
+            "images_dir": str(images_dir),
+            "meta_dir":   str(mdir),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    _write_run_params(meta_dir)
 
     def _cam_now(calib) -> "datetime | None":
         if calib is None:
@@ -592,7 +614,10 @@ def main() -> int:
             _done = _flushed.get(_name, 0)
             _new = _log[_done:]
             if _new:
-                _fresh = _done == 0          # первый сброс прогона → 'w'+заголовок; далее 'a'
+                # 'w'+заголовок ТОЛЬКО если файла дня ещё нет (новый день). Если файл есть —
+                # ДОПИСЫВАЕМ: рестарт прогона (watchdog/краш) больше НЕ перезатирает день,
+                # иначе выживал лишь хвост после последнего рестарта (было: _done==0 → 'w').
+                _fresh = not (day_dir / _name).exists()
                 with open(day_dir / _name, "w" if _fresh else "a", newline="", encoding="utf-8") as _f:
                     _w = csv.writer(_f)
                     if _fresh:
@@ -635,6 +660,7 @@ def main() -> int:
                 _current_date = _today
                 meta_dir = _base / "meta" / _today           # новый каталог дня
                 meta_dir.mkdir(parents=True, exist_ok=True)
+                _write_run_params(meta_dir)                  # порог/пороги и в каталог нового дня (иначе «порог 10»)
                 try:                                         # перенаправить run.log в новый каталог
                     logging.getLogger().removeHandler(_run_log_fh)
                     _run_log_fh.close()
