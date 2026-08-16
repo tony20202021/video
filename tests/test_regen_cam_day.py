@@ -59,3 +59,15 @@ def test_stitch_dedup_identical_rows(tmp_path):
 def test_neighbors():
     assert rcd._neighbors("20260815") == ["20260814", "20260815", "20260816"]
     assert rcd._neighbors("20260101") == ["20251231", "20260101", "20260102"]
+
+
+def test_scp_cmd_throttle():
+    from pathlib import Path as _P
+    # без лимита — нет флага -l; путь источника/назначения на месте
+    cmd = rcd._scp_cmd("u", "h", "/r/f.csv", _P("/dest"), 0)
+    assert "-l" not in cmd
+    assert "u@h:/r/f.csv" in cmd and "/dest" in cmd
+    # с лимитом — scp -l <kbps> (троттл → щадим CPU камеры)
+    cmd = rcd._scp_cmd("u", "h", "/r/f.csv", _P("/dest"), 5000)
+    i = cmd.index("-l")
+    assert cmd[i + 1] == "5000"

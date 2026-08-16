@@ -11,10 +11,15 @@
      (у каждого прогона свой mono с нуля);
   4) рендерим штатным 1_motion_diff.py --regen-from.
 
+scp по умолчанию ТРОТТЛИТСЯ (--limit-kbps, деф. 5000 Кбит/с ≈ 0.6 МБ/с): копирование медленнее,
+но не занимает CPU камеры — оставляем ядра real-time приёму RTSP. `--limit-kbps 0` = без лимита.
+
 Usage:
     python scripts/utils/regen_cam_day.py 20260815
     python scripts/utils/regen_cam_day.py 20260815 --cam CAMERAS_3 \
         --out-cpu /path/cam3_cpu_fps.png --out-pts /path/cam3_pts_drift.png
+    python scripts/utils/regen_cam_day.py 20260815 --limit-kbps 2000   # ещё щадящее
+    python scripts/utils/regen_cam_day.py 20260815 --limit-kbps 0      # без троттла (быстро)
 """
 from __future__ import annotations
 
@@ -97,12 +102,23 @@ def stitch_csvs(in_dirs: list[Path], date: str, names=DAY_CSVS) -> dict[str, lis
     return out
 
 
-def _scp(user: str, host: str, remote: str, dest: Path) -> bool:
-    cmd = ["scp", "-c", "aes128-gcm@openssh.com", "-o", "ConnectTimeout=10",
-           "-o", "BatchMode=yes", f"{user}@{host}:{remote}", str(dest)]
+def _scp_cmd(user: str, host: str, remote: str, dest: Path, limit_kbps: int = 0) -> list[str]:
+    cmd = ["scp", "-c", "aes128-gcm@openssh.com", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]
+    if limit_kbps and limit_kbps > 0:
+        # -l Kbit/с: ТОРМОЗИМ копирование → меньше байт/с шифруется → ниже CPU камеры,
+        # оставляем ядра real-time приёму RTSP (motion_diff). Ценой более долгого трансфера.
+        cmd += ["-l", str(int(limit_kbps))]
+    cmd += [f"{user}@{host}:{remote}", str(dest)]
+    return cmd
+
+
+def _scp(user: str, host: str, remote: str, dest: Path, limit_kbps: int = 0) -> bool:
+    # таймаут растёт при троттлинге: 115 МБ на 5000 Кбит/с ≈ 3 мин; берём с запасом
+    _to = 180 if not limit_kbps else max(180, int(200_000 / max(1, limit_kbps) * 8 + 120))
     try:
-        return subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, timeout=180).returncode == 0
+        return subprocess.run(_scp_cmd(user, host, remote, dest, limit_kbps),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=_to).returncode == 0
     except Exception:
         return False
 
@@ -119,6 +135,9 @@ def main() -> int:
     ap.add_argument("--out-cpu", default=None, help="куда скопировать charts.png (cpu/fps)")
     ap.add_argument("--out-pts", default=None, help="куда скопировать pts_chart.png")
     ap.add_argument("--keep", action="store_true", help="не удалять временный каталог")
+    ap.add_argument("--limit-kbps", type=int, default=5000, metavar="KBIT/S",
+                    help="троттлить scp (scp -l): ниже CPU камеры, оставить ядра real-time приёму "
+                         "(деф. 5000 ≈ 0.6 МБ/с; 0 = без лимита, быстрее, но грузит камеру)")
     args = ap.parse_args()
 
     date = args.date
@@ -133,17 +152,18 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix=f"camday_{date}_"))
     dates = _neighbors(date)
+    lim = args.limit_kbps
     # 1) тянем покадровые CSV за D-1,D,D+1 (best-effort)
     for d in dates:
         dd = tmp / d
         dd.mkdir(parents=True, exist_ok=True)
         for f in DAY_CSVS:
-            _scp(user, host, f"{base}/images/{d}/{f}.csv", dd / f"{f}.csv")
+            _scp(user, host, f"{base}/images/{d}/{f}.csv", dd / f"{f}.csv", lim)
     # cpu.csv тоже сшиваем из соседей (wall-время, но и рестарт-перезапись возможна)
     for d in dates:
-        _scp(user, host, f"{base}/meta/{d}/cpu.csv", tmp / d / "cpu.csv")
+        _scp(user, host, f"{base}/meta/{d}/cpu.csv", tmp / d / "cpu.csv", lim)
     # run_params.json — из целевой даты (пороги для графика)
-    _scp(user, host, f"{base}/meta/{date}/run_params.json", tmp / "run_params.json")
+    _scp(user, host, f"{base}/meta/{date}/run_params.json", tmp / "run_params.json", lim)
 
     # 2-3) сшить покадровые + cpu, переписать mono → секунды суток
     stitched = tmp / "stitched"
