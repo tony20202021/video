@@ -592,6 +592,20 @@ def main() -> int:
     # (ts_msk = 'YYYYMMDD_...') → meta/<день>/cpu.csv содержит только свой день.
     _cpu_for_day = lambda rows, day: [r for r in rows if str(r[1])[:8] == day]
 
+    # cpu.csv ДОПИСЫВАЕТСЯ (как frames): пишем только НОВЫЕ строки дня (снапшот кумулятивный → без
+    # дублей); append=True → дозапись к существующему файлу (или 'w'+заголовок, если файла нет).
+    # Раньше overwrite кумулятивным снапшотом → рестарт перезатирал дневной cpu (выживал только хвост
+    # после последнего рестарта — «загрузка ЦПУ только в конце»). _cpu_written сбрасывается на смене суток.
+    _cpu_written = 0
+
+    def _flush_cpu(mdir: Path, day: str) -> None:
+        nonlocal _cpu_written
+        _snap = _cpu_for_day(cpu_monitor.snapshot(), day)
+        _new = _snap[_cpu_written:]
+        if _new:
+            _save_cpu_csv(_new, mdir, append=True)
+            _cpu_written = len(_snap)
+
     _flushed: dict = {}   # имя.csv → сколько строк лога уже на диске (для инкрементальной дозаписи)
 
     def _flush_day_stats(date_str: str, clear: bool = True) -> None:
@@ -657,13 +671,14 @@ def main() -> int:
                 # день не появлялся), из-за чего статус терял сегодняшние строки.
                 _flush_day_stats(_current_date)              # статистика дня → images/<день>/ (+ очистка логов)
                 try:                                         # дописать cpu.csv закрытого дня в его meta/
-                    _save_cpu_csv(_cpu_for_day(cpu_monitor.snapshot(), _current_date), meta_dir)
+                    _flush_cpu(meta_dir, _current_date)
                 except Exception as _e:
                     logger.warning(f"  [день] cpu.csv закрытого дня не сохранён: {_e}")
                 _current_date = _today
                 meta_dir = _base / "meta" / _today           # новый каталог дня
                 meta_dir.mkdir(parents=True, exist_ok=True)
                 _write_run_params(meta_dir)                  # порог/пороги и в каталог нового дня (иначе «порог 10»)
+                _cpu_written = 0                             # cpu нового дня считаем с нуля (файл ещё пуст)
                 try:                                         # перенаправить run.log в новый каталог
                     logging.getLogger().removeHandler(_run_log_fh)
                     _run_log_fh.close()
@@ -773,7 +788,7 @@ def main() -> int:
             if args.csv_save_interval > 0:
                 _now = time.monotonic()
                 if _now - _last_csv_save >= args.csv_save_interval:
-                    _save_cpu_csv(_cpu_for_day(cpu_monitor.snapshot(), _current_date), meta_dir)
+                    _flush_cpu(meta_dir, _current_date)
                     _last_csv_save = _now
                 if _now - _last_stats_save >= _STATS_SAVE_INTERVAL:
                     _flush_day_stats(_current_date, clear=False)  # без обнуления
@@ -829,7 +844,7 @@ def main() -> int:
             logger.info(f"  pts.csv:    {len(pts_log)} записей")
 
         _cpu_cur = _cpu_for_day(cpu_log, _current_date)   # финальный meta = каталог последнего дня
-        _save_cpu_csv(_cpu_cur, meta_dir)
+        _flush_cpu(meta_dir, _current_date)               # дозаписать хвост cpu (не перезатирая день)
 
         if render_charts:   # по умолчанию ВЫКЛ — графики строит сервер (см. MOTION_RENDER_CHARTS)
             _save_charts(frame_log, _cpu_cur, saves_log, diffs_log, threshold, meta_dir,
