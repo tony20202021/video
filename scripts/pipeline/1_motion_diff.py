@@ -254,9 +254,12 @@ def _regen_charts(run_dir: Path) -> None:
     pts_log   = [[_f(r[0]), r[1], r[2], _f(r[3])]
                  for r in _load("pts.csv") if len(r) >= 4]
 
-    # mono_s → СЕКУНДЫ СУТОК (из ts_msk): у каждого прогона mono с нуля, поэтому после рестарта
-    # (день теперь ДОПИСЫВАЕТСЯ) mono немонотонен и ось графика ломается. Секунды суток монотонны
-    # в пределах дня → ось = реальное время суток, стык прогонов даёт корректный разрыв.
+    # save_pts_chart СРАВНИВАЕТ mono/wall/pts → ему нужен РЕАЛЬНЫЙ mono (не секунды суток, иначе
+    # mono=wall (оба из ts_msk) → «дрейф wall−mono» ≈ 0, зелёная полоса). Копии ДО перезаписи.
+    _cpu_real = [list(r) for r in cpu_log]
+    # mono_s → СЕКУНДЫ СУТОК (из ts_msk) ТОЛЬКО для save_charts: у каждого прогона mono с нуля,
+    # после рестарта (день ДОПИСЫВАЕТСЯ) mono немонотонен и ось ломается. Секунды суток монотонны
+    # в пределах дня → ось = реальное время суток, стык прогонов = корректный разрыв. pts НЕ трогаем.
     def _sod(ts: str):
         try:
             p = ts.split("_"); t = p[1]
@@ -264,7 +267,7 @@ def _regen_charts(run_dir: Path) -> None:
             return int(t[:2]) * 3600 + int(t[2:4]) * 60 + int(t[4:6]) + mc / 1e6
         except Exception:
             return None
-    for _lg in (frame_log, saves_log, diffs_log, cpu_log, pts_log):
+    for _lg in (frame_log, saves_log, diffs_log, cpu_log):
         for _r in _lg:
             _s = _sod(_r[1])
             if _s is not None:
@@ -283,7 +286,7 @@ def _regen_charts(run_dir: Path) -> None:
             pass
 
     _save_charts(frame_log, cpu_log, saves_log, diffs_log, threshold, run_dir, thresholds=thresholds)
-    _save_pts_chart(pts_log, cpu_log, run_dir)
+    _save_pts_chart(pts_log, _cpu_real, run_dir)   # реальный mono (не секунды суток)
     _save_run_stats(frame_log, pts_log, saves_log, diffs_log, run_dir)
     osd_log = _regen_osd_from_images(run_dir)
     if osd_log:

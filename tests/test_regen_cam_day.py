@@ -61,6 +61,17 @@ def test_neighbors():
     assert rcd._neighbors("20260101") == ["20251231", "20260101", "20260102"]
 
 
+def test_stitch_keeps_pts_real_mono(tmp_path):
+    D = "20260815"
+    _w(tmp_path / D, "pts", ["12345.6,20260815_080000_000000_msk,x,50.0"])
+    _w(tmp_path / D, "diffs", ["999.9,20260815_080000_000000_msk,x,4.0"])
+    out = rcd.stitch_csvs([tmp_path / D], D, names=("pts", "diffs"))
+    # pts: mono НЕ переписан (нужен реальный mono для сравнения mono/wall/pts)
+    assert out["pts"][1].split(",")[0] == "12345.6"
+    # diffs: mono переписан в секунды суток (08:00 → 28800)
+    assert float(out["diffs"][1].split(",")[0]) == pytest.approx(28800.0)
+
+
 def test_scp_cmd_throttle():
     from pathlib import Path as _P
     # без лимита — нет флага -l; путь источника/назначения на месте

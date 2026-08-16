@@ -61,11 +61,13 @@ def sod_from_ts(ts: str):
         return None
 
 
-def stitch_csvs(in_dirs: list[Path], date: str, names=DAY_CSVS) -> dict[str, list[str]]:
+def stitch_csvs(in_dirs: list[Path], date: str, names=DAY_CSVS,
+                keep_mono=("pts",)) -> dict[str, list[str]]:
     """Из каталогов in_dirs собрать строки за `date` для каждого CSV.
 
-    Возвращает {name: [header, *rows]} — mono_s (col0) переписан в секунды суток,
-    строки отсортированы по времени, дубли (по всему содержимому) убраны.
+    Возвращает {name: [header, *rows]} — строки отсортированы по времени, дубли убраны.
+    mono_s (col0) переписывается в секунды суток (единая ось графика), КРОМЕ names из keep_mono
+    (pts: pts-график сравнивает mono/wall/pts — ему нужен РЕАЛЬНЫЙ mono, иначе wall−mono≈0).
     """
     out: dict[str, list[str]] = {}
     for name in names:
@@ -88,7 +90,8 @@ def stitch_csvs(in_dirs: list[Path], date: str, names=DAY_CSVS) -> dict[str, lis
                 sod = sod_from_ts(cols[1])
                 if sod is None:
                     continue
-                cols[0] = f"{sod:.4f}"          # mono_s → секунды суток (единая ось)
+                if name not in keep_mono:
+                    cols[0] = f"{sod:.4f}"      # mono_s → секунды суток (единая ось); pts — реальный mono
                 row = ",".join(cols)
                 key = ",".join(cols[1:])         # дубль = та же строка без mono
                 if key in seen:

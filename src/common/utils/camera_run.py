@@ -608,10 +608,14 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
                 offset += (pts_norm[i - 1] + step) - pts_norm[i]
             pts_clean[i] = pts_norm[i] + offset
 
+        # прорядить для отрисовки: за полный день точек сотни тысяч → панель заливается сплошняком
+        _st = max(1, len(mono) // 12000)
+        _mn = mono[::_st]
+
         ax = axes[ax_idx][0]
-        ax.scatter(mono, mono_s,    color="#2255cc", s=1,  marker="o", alpha=0.2, zorder=3, label="mono, с")
-        ax.scatter(mono, wall_s,    color="#228833", s=2,  marker="s", alpha=0.2, zorder=3, label="wall clock, с")
-        ax.scatter(mono, pts_clean, color="#cc5500", s=2,  marker="^", alpha=0.2, zorder=3, label="FFmpeg PTS (норм.), с")
+        ax.scatter(_mn, mono_s[::_st],    color="#2255cc", s=1,  marker="o", alpha=0.3, zorder=3, label="mono, с")
+        ax.scatter(_mn, wall_s[::_st],    color="#228833", s=2,  marker="s", alpha=0.3, zorder=3, label="wall clock, с")
+        ax.scatter(_mn, pts_clean[::_st], color="#cc5500", s=2,  marker="^", alpha=0.3, zorder=3, label="FFmpeg PTS (норм.), с")
         ax.set_ylabel("с от старта")
         ax.set_title(f"{url_id} — три метки времени (все в с от первого кадра)")
         ax.legend(loc="upper left", fontsize=8)
@@ -621,7 +625,7 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
 
         ax = axes[ax_idx][0]
         drift_pts = [p - m for p, m in zip(pts_clean, mono_s)]
-        ax.scatter(mono, drift_pts, color="#cc5500", s=2, marker="^", alpha=0.2,
+        ax.scatter(_mn, drift_pts[::_st], color="#cc5500", s=2, marker="^", alpha=0.3,
                    label="PTS − mono (с): пила ≈ глубина буфера (кадры пачками)")
         ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
         ax.set_ylabel("с")
@@ -633,7 +637,7 @@ def save_pts_chart(pts_log: list, cpu_log: list, out_dir: Path) -> None:
 
         ax = axes[ax_idx][0]
         drift_wall = [w - m for w, m in zip(wall_s, mono_s)]
-        ax.scatter(mono, drift_wall, color="#228833", s=8, marker="s", alpha=0.6,
+        ax.scatter(_mn, drift_wall[::_st], color="#228833", s=6, marker="s", alpha=0.35,
                    label="wall − mono (с): расхождение стенных и mono часов")
         ax.axhline(0, color="gray", linewidth=0.6, linestyle="--")
         ax.set_ylabel("с")
@@ -750,8 +754,10 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     _x_left   = _mono0 - (int(_t0_abs) % 60)   # левый край = первый кадр, выровнен на минуту
 
     _tick_range = t_max * 1.02 - _x_left
-    _tick_step  = next((s for s in [60, 120, 180, 300, 600, 900, 1800]
-                        if _tick_range / s <= 20), 1800)
+    # шаг тика: держим <= ~16 меток. Крупные шаги (час/2ч/3ч/4ч) нужны для ПОЛНОГО дня —
+    # иначе за сутки шаг упирался в 30 мин → до 48 меток → подписи налезали.
+    _tick_step  = next((s for s in [60, 120, 180, 300, 600, 900, 1800, 3600, 7200, 10800, 14400]
+                        if _tick_range / s <= 16), 14400)
     _tick_positions = list(range(int(_x_left), int(t_max * 1.02) + _tick_step, _tick_step))
 
     # Метка даты появляется только на первом тике нового дня
@@ -770,8 +776,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
         _day   = _total // 86400          # 0 = день старта, 1 = следующий, …
         _hh    = (_total % 86400) // 3600
         _mm    = (_total % 3600) // 60
-        _ss    = _total % 60
-        _lbl   = f"{_hh:02d}:{_mm:02d}:{_ss:02d}"
+        _lbl   = f"{_hh:02d}:{_mm:02d}"   # ЧЧ:ММ (без секунд — короче, не налезают)
         if _day > _last_day_label and _day > 0 and _t0_date is not None:
             _lbl = f"{(_t0_date + _tdelta(days=_day)).strftime('%d.%m')}\n{_lbl}"
             _last_day_label = _day
@@ -955,6 +960,7 @@ def save_charts(frame_log: list, cpu_log: list, saves_log: list, diffs_log: list
     for _ax in [axes[i][0] for i in range(len(axes))]:
         _ax.xaxis.set_major_formatter(_x_fmt)
         _ax.xaxis.set_major_locator(_x_loc)
+        _ax.tick_params(axis="x", labelrotation=30)   # наклон — подписи времени не налезают
     axes[-1][0].set_xlabel("время МСК")
 
     # компоновка — через constrained_layout (см. plt.subplots выше); tight_layout не нужен
