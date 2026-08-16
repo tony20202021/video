@@ -227,7 +227,7 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
     # Накопленный за день режим (per-poll сервисы копят cpu.csv/yolo_timing.csv append-ом):
     # ось по ts_msk = «время суток, ч». Иначе (motion_diff/старый формат) — «минуты от старта».
     accum = bool(timing) and any(len(r) > 3 and r[3] for r in timing)
-    _xlabel = "время суток, ч" if accum else "время от старта, мин"
+    _xlabel = "время суток" if accum else "время от старта, мин"
 
     # ── ЦПУ ──
     stats: dict = {"cpu_samples": len(cpu_log), "events": len(durations)}
@@ -326,6 +326,15 @@ def build_charts(cpu_log: list, durations: list, out_path: Path,
         stats["fps_avg"] = fps_avgs
 
     axcol[-1].set_xlabel(_xlabel)
+    if accum:
+        # ось = ВРЕМЯ СУТОК (в часах, float) → подписи ЧЧ:ММ (sharex=True → на все панели)
+        import matplotlib.ticker as _mtick
+
+        def _hhmm(h, _pos):
+            total = int(round(h * 60))
+            return f"{(total // 60) % 24:02d}:{total % 60:02d}"
+
+        axcol[-1].xaxis.set_major_formatter(_mtick.FuncFormatter(_hhmm))
     plt.tight_layout()
     plt.savefig(str(out_path), dpi=110)
     plt.close()
